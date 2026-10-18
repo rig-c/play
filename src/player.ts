@@ -229,10 +229,65 @@ export interface PoseBounds {
   height: number;
 }
 
+/**
+ * Why a slot in `SlotIdentitySnapshot.slots` is not drawn (`reason !== null`),
+ * or `null` when it is drawn in `posedFrame().order`:
+ * - `'set-hide'`: hidden by the active attachment set (`set.hides` or a
+ *   `<base>_still` companion of a slot the active set covers or hides).
+ * - `'timeline-null'`: an attachment timeline (or slider attachment timeline)
+ *   keyed the slot to `null` at the current time.
+ * - `'no-attachment'`: the slot has no drawable attachment at this pose
+ *   (its setup placeholder is `null` with no timeline/set override, its
+ *   placeholder is absent from the active and default skins, or its attachment
+ *   is non-visual such as a clipping polygon, bounding box, or path).
+ * - `'hidden'`: excluded from rendering by the player's `slots` filter or
+ *   because its bone is inactive under the active skin.
+ */
+export type SlotIdentityReason = 'hidden' | 'no-attachment' | 'timeline-null' | 'set-hide';
+
+/** One slot's resolved identity at `z` in the posed draw order (`SlotIdentitySnapshot.slots`). */
+export interface SlotIdentity {
+  /** The slot's name in `skeleton.model.json`. */
+  readonly slot: string;
+  /** Index (`0 .. slots.length - 1`) in the posed draw order. */
+  readonly z: number;
+  /** Resolved attachment key (`string`) when drawn, or `null` when not drawn. */
+  readonly attachment: string | null;
+  /** Owning skin name (`'default'`, named skin, etc.) for `attachment`, or `null` when `attachment === null`. */
+  readonly skin: string | null;
+  /** `null` when drawn in `posedFrame().order`; otherwise why the slot is not drawn. */
+  readonly reason: SlotIdentityReason | null;
+}
+
+/**
+ * Read-only slot identity snapshot coherent with the player's current pose
+ * and `posedFrame()` (#144).
+ */
+export interface SlotIdentitySnapshot {
+  /** Monotonic pose generation counter matching `player.generation` and `player.posedFrame().generation`. */
+  readonly generation: number;
+  /** Currently active attachment set (`player.set`), or `null`. */
+  readonly set: string | null;
+  /** Currently active skin (`player.skin ?? null`), or `null` when only `'default'` is active. */
+  readonly skin: string | null;
+  /** Every slot of the skeleton in the posed draw order (`z = 0 .. slots.length - 1`), hidden/null ones included. */
+  readonly slots: readonly SlotIdentity[];
+}
+
 /** An allow list as a predicate. */
 function predicateOf(names: readonly string[]): (slot: string) => boolean {
   const allowed = new Set(names);
   return (slot) => allowed.has(slot);
+}
+
+/** Whether `slotName` is hidden by `set` (`set.hides` or a `<base>_still` companion of a covered/hidden base slot). */
+function hiddenBySet(slotName: string, set: RigSet): boolean {
+  if (set.hides.includes(slotName)) return true;
+  if (slotName.endsWith('_still') && !(slotName in set.slots)) {
+    const base = slotName.slice(0, -'_still'.length);
+    if (base in set.slots || set.hides.includes(base)) return true;
+  }
+  return false;
 }
 
 /**
@@ -246,7 +301,6 @@ function predicateOf(names: readonly string[]): (slot: string) => boolean {
  */
 function applySetToPose(view: CompiledDocument, raw: RawPose, set: RigSet): RawPose {
   const coveredNames = new Set(Object.keys(set.slots));
-  const hiddenNames = new Set(set.hides);
   const overrideSlots = view.slots.flatMap((slot) => {
     const setup = set.slots[slot.name];
     return setup !== undefined ? [{ ...slot, setup }] : [];
@@ -277,14 +331,7 @@ function applySetToPose(view: CompiledDocument, raw: RawPose, set: RigSet): RawP
   const rawShownBySlot = new Map(raw.shown.map((s) => [s.slot, s]));
   const rawDrawnBySlot = new Map(raw.drawn.map((d) => [d.slot, d]));
   const rawClipBySlot = new Map(raw.clips.map((c) => [c[0], c]));
-  const hiddenSlot = (slotName: string): boolean => {
-    if (hiddenNames.has(slotName)) return true;
-    if (slotName.endsWith('_still') && !coveredNames.has(slotName)) {
-      const base = slotName.slice(0, -'_still'.length);
-      if (coveredNames.has(base) || hiddenNames.has(base)) return true;
-    }
-    return false;
-  };
+  const hiddenSlot = (slotName: string): boolean => hiddenBySet(slotName, set);
   const slots: CoreSlotRow[] = raw.slots.map((rawRow): CoreSlotRow => {
     const slotName = rawRow[0];
     if (hiddenSlot(slotName)) {
@@ -650,6 +697,9 @@ export class RigPlayer {
   private rawPose: RawPose | null = null;
   private setup: RawPose | null = null;
   private seekCache: SeekCache | null = null;
+  private poseGeneration = 0;
+  private cachedIdentity: SlotIdentitySnapshot | null = null;
+  private cachedIdentityGen = -1;
   private readonly setList: readonly RigSet[];
   private readonly setsByName: ReadonlyMap<string, RigSet>;
   private activeSet: RigSet | null = null;
@@ -682,6 +732,8 @@ export class RigPlayer {
     this.meshBackend = options.meshBackend;
     this.adjustFn = options.adjust ?? null;
     if (options.slots !== undefined && options.slots !== null) this.slots = options.slots;
+    this.poseGeneration = 0;
+    this.cachedIdentity = null;
     this.active = this.create(options.mode ?? 'dom');
   }
 
@@ -889,6 +941,8 @@ export class RigPlayer {
   private setRawPose(raw: RawPose): void {
     this.rawPose = raw;
     this.pose = this.activeSet === null ? raw : applySetToPose(this.view, raw, this.activeSet);
+    this.poseGeneration++;
+    this.cachedIdentity = null;
   }
 
   /**
@@ -973,6 +1027,8 @@ export class RigPlayer {
       restoreStepperState(stepper, exactHit.state);
       this.rawPose = exactHit.rawPose;
       this.pose = exactHit.pose;
+      this.poseGeneration++;
+      this.cachedIdentity = null;
       return;
     }
     const steps = Math.floor(time / this.seekStep);
@@ -1172,6 +1228,9 @@ export class RigPlayer {
     } else if (this.rawPose !== null) {
       this.setup = poseRawSetup(this.view);
       this.setRawPose(this.setup);
+    } else {
+      this.poseGeneration++;
+      this.cachedIdentity = null;
     }
   }
 
@@ -1214,6 +1273,8 @@ export class RigPlayer {
       const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
       this.rawPose = base;
       this.pose = base;
+      this.poseGeneration++;
+      this.cachedIdentity = null;
       return;
     }
     const found = this.setsByName.get(name);
@@ -1227,6 +1288,8 @@ export class RigPlayer {
     const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
     this.rawPose = base;
     this.pose = applySetToPose(this.view, base, found);
+    this.poseGeneration++;
+    this.cachedIdentity = null;
   }
 
   /**
@@ -1244,11 +1307,15 @@ export class RigPlayer {
     if (filter === null) {
       this.slotFilter = null;
       this.draws = () => true;
+      this.poseGeneration++;
+      this.cachedIdentity = null;
       return;
     }
     if (typeof filter === 'function') {
       this.slotFilter = filter;
       this.draws = filter;
+      this.poseGeneration++;
+      this.cachedIdentity = null;
       return;
     }
     if (!Array.isArray(filter)) throw new Error(`slots must be an array of slot names, a function, or null, got ${typeof filter}`);
@@ -1260,6 +1327,8 @@ export class RigPlayer {
     const allowed = new Set(filter);
     this.slotFilter = [...filter];
     this.draws = (slot) => allowed.has(slot);
+    this.poseGeneration++;
+    this.cachedIdentity = null;
   }
 
   /**
@@ -1368,6 +1437,11 @@ export class RigPlayer {
     return this.activeSet === null ? this.setup : applySetToPose(this.view, this.setup, this.activeSet);
   }
 
+  /** Monotonic pose generation counter matching `posedFrame().generation` and `slotIdentity().generation`. */
+  get generation(): number {
+    return this.poseGeneration;
+  }
+
   /**
    * The pose the player holds, as the frame record the renderer draws — under
    * this player's `slots` filter, or under `slots` given here instead (a
@@ -1376,15 +1450,145 @@ export class RigPlayer {
    * posed once).
    */
   posedFrame(slots?: SlotFilter | null): PosedFrame {
-    if (this.pose === null) return { order: [] };
     const draws = slots === undefined ? this.draws : slots === null ? () => true : typeof slots === 'function' ? slots : predicateOf(slots);
-    return frameOf(this.source, this.pose, this.color, draws);
+    const frame: PosedFrame = this.pose === null ? { order: [] } : frameOf(this.source, this.pose, this.color, draws);
+    Object.defineProperty(frame, 'generation', {
+      value: this.poseGeneration,
+      enumerable: false,
+      configurable: true,
+    });
+    return frame;
+  }
+
+  /**
+   * A read-only slot identity snapshot coherent with `posedFrame()` (#144):
+   * for every slot in the posed draw order (`z = 0 .. slots.length - 1`, hidden
+   * and null slots included), its resolved attachment key (`string | null`),
+   * the skin that owns that attachment (`string | null`), and `reason` (`null`
+   * when drawn in `posedFrame().order`, or `'hidden' | 'no-attachment' | 'timeline-null' | 'set-hide'`
+   * when not drawn), together with the active `set`, active `skin`, and frame
+   * `generation`. Read off the held pose without `seek`, `repose`, or physics
+   * restart.
+   */
+  slotIdentity(): SlotIdentitySnapshot {
+    if (this.cachedIdentity !== null && this.cachedIdentityGen === this.poseGeneration) {
+      return this.cachedIdentity;
+    }
+    const setupPose = this.setup ?? (this.setup = poseRawSetup(this.view));
+    const pose = this.posed();
+    const raw = this.rawPose ?? setupPose;
+    const shownBySlot = new Map(pose.shown.map((s) => [s.slot, s]));
+    const setupShownSlots = new Set(setupPose.shown.map((s) => s.slot));
+    const rawRowBySlot = new Map(raw.slots.map((r) => [r[0], r]));
+    const slots: SlotIdentity[] = [];
+    for (let z = 0; z < pose.drawOrder.length; z++) {
+      const slotName = pose.drawOrder[z];
+      if (this.activeSet !== null && hiddenBySet(slotName, this.activeSet)) {
+        slots.push(Object.freeze({
+          slot: slotName,
+          z,
+          attachment: null,
+          skin: null,
+          reason: 'set-hide' as const,
+        }));
+        continue;
+      }
+      const shown = shownBySlot.get(slotName);
+      const isDrawableKind =
+        shown !== undefined &&
+        (shown.geometry.kind === 'region' || shown.geometry.kind === 'mesh' || shown.geometry.kind === 'linkedmesh');
+      if (shown !== undefined && isDrawableKind) {
+        const bone = this.source.boneOf.get(slotName);
+        const boneActive = bone !== undefined && this.source.active.has(bone);
+        if (this.draws(slotName) && boneActive) {
+          slots.push(Object.freeze({
+            slot: slotName,
+            z,
+            attachment: shown.name,
+            skin: shown.skin,
+            reason: null,
+          }));
+        } else {
+          slots.push(Object.freeze({
+            slot: slotName,
+            z,
+            attachment: null,
+            skin: null,
+            reason: 'hidden' as const,
+          }));
+        }
+        continue;
+      }
+      const rawRow = rawRowBySlot.get(slotName);
+      const overriddenBySet = this.activeSet !== null && slotName in this.activeSet.slots;
+      const setupHadAttachment = setupShownSlots.has(slotName);
+      const isTimelineNull =
+        !overriddenBySet &&
+        ((setupHadAttachment && rawRow?.[1] === null) ||
+          this.isSlotKeyedNullByTimeline(slotName, raw.animationTime));
+      slots.push(Object.freeze({
+        slot: slotName,
+        z,
+        attachment: null,
+        skin: null,
+        reason: isTimelineNull ? ('timeline-null' as const) : ('no-attachment' as const),
+      }));
+    }
+    const snapshot: SlotIdentitySnapshot = Object.freeze({
+      generation: this.poseGeneration,
+      set: this.activeSet?.name ?? null,
+      skin: this.skinName ?? null,
+      slots: Object.freeze(slots),
+    });
+    this.cachedIdentity = snapshot;
+    this.cachedIdentityGen = this.poseGeneration;
+    return snapshot;
+  }
+
+  /** Whether an active animation's attachment timeline explicitly keyed `null` on `slotName` at `animationTime`. */
+  private isSlotKeyedNullByTimeline(slotName: string, animationTime: number): boolean {
+    const checkAnimation = (animName: string | null, time: number): boolean | undefined => {
+      if (animName === null) return undefined;
+      const anim = this.view.animations.find((a) => a.name === animName);
+      if (anim === undefined) return undefined;
+      const target = anim.timelines.slots.find((s) => s.name === slotName);
+      if (target === undefined) return undefined;
+      let keyed: boolean | undefined;
+      for (const tl of target.timelines) {
+        if (tl.kind !== 'attachment') continue;
+        let activeKey: { time: number; name?: string | null } | null = null;
+        for (const k of tl.keys) {
+          if (k.time <= time) activeKey = k;
+          else break;
+        }
+        if (activeKey !== null) {
+          keyed = activeKey.name === null || activeKey.name === undefined;
+        }
+      }
+      return keyed;
+    };
+    if (this.tracks !== null) {
+      let result = false;
+      for (let t = 0; t < this.trackCount; t++) {
+        const cur = this.tracks.current(t);
+        if (cur !== null && cur.animation !== null) {
+          const k = checkAnimation(cur.animation, cur.animationTime);
+          if (k !== undefined) result = k;
+        }
+      }
+      return result;
+    }
+    if (this.track !== null && this.animation !== null) {
+      return checkAnimation(this.animation, animationTime) === true;
+    }
+    return false;
   }
 
   /** Removes the renderer's elements and hands its GPU pages back. The assets stay the caller's. */
   dispose(): void {
     this.renderer.dispose();
     this.clearSeekCache();
+    this.cachedIdentity = null;
     this.tracks = null;
     this.track = null;
     this.pose = null;

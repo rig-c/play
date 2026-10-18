@@ -520,6 +520,52 @@ active (`null`), track evaluation runs with zero extra work and produces
 byte-identical poses. An unknown set name throws by name; on a build without
 `sets.json`, `sets()` is empty (`[]`) and `setSet` throws.
 
+### Slot identity snapshot (`slotIdentity()`)
+
+To inspect which attachment key, owning skin and visibility state each slot
+holds on the current frame — for a parts explorer or review overlay — without
+`seek`, `repose`, or restarting physics (#144):
+
+```ts
+const snap = player.slotIdentity();
+// {
+//   generation: number,              // matches player.generation and player.posedFrame().generation
+//   set: string | null,              // active set name (player.set)
+//   skin: string | null,             // active skin name (player.skin ?? null)
+//   slots: readonly [                // every slot in posed draw order (z = 0 .. slots.length - 1)
+//     {
+//       slot: string,
+//       z: number,
+//       attachment: string | null,   // resolved attachment key when drawn, null when not drawn
+//       skin: string | null,         // skin owning the resolved attachment ('default' or named skin), or null
+//       reason: 'hidden' | 'no-attachment' | 'timeline-null' | 'set-hide' | null,
+//     },
+//     ...
+//   ],
+// }
+```
+
+Every slot in the posed draw order (`z = 0 .. slots.length - 1`, hidden and null
+ones included) appears in `snap.slots`:
+
+- Drawn slots (`reason: null`) appear in the same `z` order as
+  `player.posedFrame().order`, naming the resolved attachment key (`attachment`)
+  and the skin that owns it (`skin`).
+- Non-drawn slots report `attachment: null`, `skin: null`, and why they are
+  absent from `posedFrame().order`:
+  - `'set-hide'` — hidden by the active attachment set (`set.hides` or a
+    `<base>_still` companion of a slot the set covers or hides).
+  - `'timeline-null'` — cleared by an active attachment timeline key (`null`).
+  - `'no-attachment'` — no attachment in the setup pose or under the active skin
+    (or a non-drawable attachment kind such as clipping/boundingbox/path/point).
+  - `'hidden'` — filtered out by `player.slots` or on an inactive bone under the
+    current skin.
+- `snap.generation` ticks monotonically with `player.generation` and
+  `player.posedFrame().generation` whenever the held pose, active set, active
+  skin or slot filter changes. The returned snapshot is frozen and cached per
+  generation, so reading it repeatedly on a held pose is allocation-free and
+  mutates no pixel or physics state.
+
 ### Several tracks
 
 A base on track 0, a layer over it, a one-shot played once and mixed back out —

@@ -182,3 +182,155 @@ test('snapshot-backed seek matches cold replay at tolerance 0 across forward, ba
   expect(probe.invalidation.validAdjustSwitchDiffs).toBe(0);
 });
 
+test('slotIdentity() is coherent with posedFrame() across sets, timeline keys, skins and filters, mutates no pixel or physics word over 1000 held reads, and fails by slot name on stale setup attachments (#144)', async ({ page }) => {
+  const probe = await page.evaluate(() => window.rigPlayHarness.slotIdentityProbe());
+
+  // Bar 1: public two-set fixture (`sets` and `sets-packed`) across setSet(null / 'smile' / 'wink') and dance at t = 0.5
+  expect(probe.setsFixtures).toHaveLength(2);
+  for (const fx of probe.setsFixtures) {
+    expect(fx.coherenceDiffs, `${fx.rig} coherenceDiffs`).toEqual([]);
+    expect(fx.generationsStrictlyIncreasing, `${fx.rig} generationsStrictlyIncreasing (${fx.generations.join(',')})`).toBe(true);
+
+    expect(fx.setupBase.set).toBeNull();
+    expect(fx.setupBase.skin).toBeNull();
+    expect(fx.setupBase.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_base', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_neutral', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: 'face_still', skin: 'default', reason: null },
+      { slot: 'prop', z: 3, attachment: 'prop_wand', skin: 'default', reason: null },
+    ]);
+
+    expect(fx.setupSmile.set).toBe('smile');
+    expect(fx.setupSmile.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_base', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_smile', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: null, skin: null, reason: 'set-hide' },
+      { slot: 'prop', z: 3, attachment: 'prop_star', skin: 'default', reason: null },
+    ]);
+
+    expect(fx.setupWink.set).toBe('wink');
+    expect(fx.setupWink.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_base', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_wink', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: null, skin: null, reason: 'set-hide' },
+      { slot: 'prop', z: 3, attachment: null, skin: null, reason: 'set-hide' },
+    ]);
+
+    expect(fx.setupRestored.set).toBeNull();
+    expect(fx.setupRestored.slots).toEqual(fx.setupBase.slots);
+
+    expect(fx.danceBase.set).toBeNull();
+    expect(fx.danceBase.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_track', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_track', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: 'face_still', skin: 'default', reason: null },
+      { slot: 'prop', z: 3, attachment: 'prop_wand', skin: 'default', reason: null },
+    ]);
+
+    expect(fx.danceSmile.set).toBe('smile');
+    expect(fx.danceSmile.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_track', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_smile', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: null, skin: null, reason: 'set-hide' },
+      { slot: 'prop', z: 3, attachment: 'prop_star', skin: 'default', reason: null },
+    ]);
+
+    expect(fx.danceWink.set).toBe('wink');
+    expect(fx.danceWink.slots).toEqual([
+      { slot: 'body', z: 0, attachment: 'body_track', skin: 'default', reason: null },
+      { slot: 'face', z: 1, attachment: 'face_wink', skin: 'default', reason: null },
+      { slot: 'face_still', z: 2, attachment: null, skin: null, reason: 'set-hide' },
+      { slot: 'prop', z: 3, attachment: null, skin: null, reason: 'set-hide' },
+    ]);
+
+    expect(fx.danceRestored.set).toBeNull();
+    expect(fx.danceRestored.slots).toEqual(fx.danceBase.slots);
+    expect(fx.tracksDanceSmile.slots).toEqual(fx.danceSmile.slots);
+    expect(fx.tracksDanceWink.slots).toEqual(fx.danceWink.slots);
+  }
+
+  // Skin ownership and reasons ('no-attachment', 'hidden', 'timeline-null')
+  expect(probe.reasonsAndSkins.coherenceDiffs).toEqual([]);
+  expect(probe.reasonsAndSkins.noSkinEmblem).toEqual({
+    slot: 'emblem',
+    z: probe.reasonsAndSkins.noSkinEmblem.z,
+    attachment: null,
+    skin: null,
+    reason: 'no-attachment',
+  });
+  expect(probe.reasonsAndSkins.altSkinEmblem).toEqual({
+    slot: 'emblem',
+    z: probe.reasonsAndSkins.altSkinEmblem.z,
+    attachment: 'emblem',
+    skin: 'alt',
+    reason: null,
+  });
+  expect(probe.reasonsAndSkins.altSkinTorso).toEqual({
+    slot: 'torso',
+    z: probe.reasonsAndSkins.altSkinTorso.z,
+    attachment: 'torso',
+    skin: 'default',
+    reason: null,
+  });
+  expect(probe.reasonsAndSkins.filteredTorso.reason).toBeNull();
+  expect(probe.reasonsAndSkins.filteredHead.reason).toBeNull();
+  expect(probe.reasonsAndSkins.filteredArmBack).toEqual({
+    slot: 'arm_b_up',
+    z: probe.reasonsAndSkins.filteredArmBack.z,
+    attachment: null,
+    skin: null,
+    reason: 'hidden',
+  });
+  expect(probe.reasonsAndSkins.filteredEmblemNoSkin.reason).toBe('no-attachment');
+  expect(probe.reasonsAndSkins.timelineNullBefore).toEqual({
+    slot: 'head',
+    z: probe.reasonsAndSkins.timelineNullBefore.z,
+    attachment: 'head',
+    skin: 'default',
+    reason: null,
+  });
+  expect(probe.reasonsAndSkins.timelineNullAt).toEqual({
+    slot: 'head',
+    z: probe.reasonsAndSkins.timelineNullAt.z,
+    attachment: null,
+    skin: null,
+    reason: 'timeline-null',
+  });
+  expect(probe.reasonsAndSkins.squashOpenEyes).toEqual({
+    slot: 'eyes',
+    z: probe.reasonsAndSkins.squashOpenEyes.z,
+    attachment: 'eyes',
+    skin: 'default',
+    reason: null,
+  });
+  expect(probe.reasonsAndSkins.squashShutEyes).toEqual({
+    slot: 'eyes',
+    z: probe.reasonsAndSkins.squashShutEyes.z,
+    attachment: 'eyes_shut',
+    skin: 'default',
+    reason: null,
+  });
+
+  // Bar 2: Reading 1000x on a held pose changes no pixel and no physics word
+  expect(probe.heldRead1000.pixelDiffs).toBe(0);
+  expect(probe.heldRead1000.physicsDiffs).toEqual([]);
+  expect(probe.heldRead1000.boneDiffs).toBe(0);
+  expect(probe.heldRead1000.extraPoses).toBe(0);
+  expect(probe.heldRead1000.generationChanged).toBe(false);
+  expect(probe.heldRead1000.allSameRef).toBe(true);
+  expect(probe.heldRead1000.isFrozen).toBe(true);
+
+  // Bar 3: Mutant — timeline attachment key applied, but snapshot still naming setup attachment -> fails by slot name
+  expect(probe.mutants.realSetsDanceDiffs).toEqual([]);
+  expect(probe.mutants.staleSetsDanceDiffs).toEqual([
+    'sets:dance: slot "body" snap.attachment=body_base != frame.region=body_track',
+    'sets:dance: slot "face" snap.attachment=face_neutral != frame.region=face_track',
+  ]);
+  expect(probe.mutants.realSquashBounceDiffs).toEqual([]);
+  expect(probe.mutants.staleSquashBounceDiffs).toEqual([
+    'squash:bounce: slot "eyes" attachment=eyes != expected=eyes_shut',
+    'squash:bounce: slot "eyes" snap.attachment=eyes != frame.region=eyes_shut',
+  ]);
+});
+
+
