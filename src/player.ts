@@ -326,6 +326,274 @@ function applySetToPose(view: CompiledDocument, raw: RawPose, set: RigSet): RawP
   };
 }
 
+/** Up to 4,096 steps (~68.3 s at 60 Hz) are kept at stride 1; beyond that, every 8th step is kept. */
+const SEEK_FINE_STEP_LIMIT = 4096;
+const SEEK_COARSE_STRIDE = 8;
+/** Maximum number of exact target-time snapshots retained per player. */
+const SEEK_EXACT_LIMIT = 1024;
+
+interface PhysicsStateInternal {
+  pending: boolean;
+  lastTime: number;
+  remaining: number;
+  ux: number;
+  uy: number;
+  cx: number;
+  cy: number;
+  tx: number;
+  ty: number;
+  xOffset: number;
+  xLag: number;
+  xVelocity: number;
+  yOffset: number;
+  yLag: number;
+  yVelocity: number;
+  rotateOffset: number;
+  rotateLag: number;
+  rotateVelocity: number;
+  scaleOffset: number;
+  scaleLag: number;
+  scaleVelocity: number;
+}
+
+interface PhysicsContextInternal {
+  phase: 'reset' | 'update';
+  time: number;
+  states: Map<string, PhysicsStateInternal>;
+  last: number;
+  loop?: boolean;
+  env?: RigEnvironment;
+}
+
+interface TrackInternal {
+  readonly first: RawPose;
+  readonly track: {
+    trackTime: number;
+    last: number;
+    readonly ctx: PhysicsContextInternal;
+  };
+  steps: number;
+  latest: number;
+  refused: string | null;
+}
+
+interface MixerEntryInternal {
+  delay: number;
+  trackTime: number;
+  trackLast: number;
+  nextTrackLast: number;
+  trackEnd: number;
+  animationLast: number;
+  nextAnimationLast: number;
+  mixTime: number;
+  mixDuration: number;
+  totalAlpha: number;
+  alpha: number;
+  additive: boolean;
+  keepHold: boolean;
+  timelineMode: number[];
+  timelineHoldMix: unknown[];
+  timelinesRotation: number[];
+}
+
+interface TracksInternal {
+  started: boolean;
+  steps: number;
+  time: number;
+  refused: string | null;
+  readonly path: {
+    readonly ctx: PhysicsContextInternal;
+  };
+  readonly mixer: {
+    readonly tracks: Array<MixerEntryInternal | null>;
+    animationsChanged: boolean;
+    readonly propertyIds: Map<string, number>;
+  };
+}
+
+interface PhysicsContextSnapshot {
+  readonly phase: 'reset' | 'update';
+  readonly time: number;
+  readonly last: number;
+  readonly loop: boolean | undefined;
+  readonly env: RigEnvironment | undefined;
+  readonly states: ReadonlyMap<string, PhysicsStateInternal>;
+}
+
+interface TrackStateSnapshot {
+  readonly kind: 'track';
+  readonly steps: number;
+  readonly latest: number;
+  readonly refused: string | null;
+  readonly trackTime: number;
+  readonly last: number;
+  readonly ctx: PhysicsContextSnapshot;
+}
+
+interface TracksStateSnapshot {
+  readonly kind: 'tracks';
+  readonly started: boolean;
+  readonly steps: number;
+  readonly time: number;
+  readonly refused: string | null;
+  readonly animationsChanged: boolean;
+  readonly propertyIds: ReadonlyMap<string, number>;
+  readonly entry: {
+    readonly delay: number;
+    readonly trackTime: number;
+    readonly trackLast: number;
+    readonly nextTrackLast: number;
+    readonly trackEnd: number;
+    readonly animationLast: number;
+    readonly nextAnimationLast: number;
+    readonly mixTime: number;
+    readonly mixDuration: number;
+    readonly totalAlpha: number;
+    readonly alpha: number;
+    readonly additive: boolean;
+    readonly keepHold: boolean;
+    readonly timelineMode: readonly number[];
+    readonly timelineHoldMix: readonly unknown[];
+    readonly timelinesRotation: readonly number[];
+  } | null;
+  readonly ctx: PhysicsContextSnapshot;
+}
+
+type StepperStateSnapshot = TrackStateSnapshot | TracksStateSnapshot;
+
+interface SeekGridEntry {
+  readonly state: StepperStateSnapshot;
+  readonly rawPose: RawPose;
+}
+
+interface SeekExactEntry {
+  readonly state: StepperStateSnapshot;
+  readonly rawPose: RawPose;
+  readonly pose: RawPose;
+}
+
+interface SeekCache {
+  readonly mode: 'track' | 'tracks';
+  readonly frontier: LiveTrack | LiveTracks;
+  frontierSteps: number;
+  readonly grid: Map<number, SeekGridEntry>;
+  readonly exact: Map<number, SeekExactEntry>;
+}
+
+function capturePhysicsContext(ctx: PhysicsContextInternal): PhysicsContextSnapshot {
+  const states = new Map<string, PhysicsStateInternal>();
+  for (const [name, s] of ctx.states) states.set(name, { ...s });
+  return {
+    phase: ctx.phase,
+    time: ctx.time,
+    last: ctx.last,
+    loop: ctx.loop,
+    env: ctx.env,
+    states,
+  };
+}
+
+function restorePhysicsContext(ctx: PhysicsContextInternal, snap: PhysicsContextSnapshot): void {
+  ctx.phase = snap.phase;
+  ctx.time = snap.time;
+  ctx.last = snap.last;
+  if (snap.loop === undefined) delete ctx.loop;
+  else ctx.loop = snap.loop;
+  if (snap.env === undefined) delete ctx.env;
+  else ctx.env = snap.env;
+  ctx.states.clear();
+  for (const [name, s] of snap.states) ctx.states.set(name, { ...s });
+}
+
+function captureStepperState(stepper: LiveTrack | LiveTracks): StepperStateSnapshot {
+  if ('first' in stepper) {
+    const internal = stepper as unknown as TrackInternal;
+    return {
+      kind: 'track',
+      steps: internal.steps,
+      latest: internal.latest,
+      refused: internal.refused,
+      trackTime: internal.track.trackTime,
+      last: internal.track.last,
+      ctx: capturePhysicsContext(internal.track.ctx),
+    };
+  }
+  const internal = stepper as unknown as TracksInternal;
+  const entry = internal.mixer.tracks[0] ?? null;
+  return {
+    kind: 'tracks',
+    started: internal.started,
+    steps: internal.steps,
+    time: internal.time,
+    refused: internal.refused,
+    animationsChanged: internal.mixer.animationsChanged,
+    propertyIds: new Map(internal.mixer.propertyIds),
+    entry:
+      entry === null
+        ? null
+        : {
+            delay: entry.delay,
+            trackTime: entry.trackTime,
+            trackLast: entry.trackLast,
+            nextTrackLast: entry.nextTrackLast,
+            trackEnd: entry.trackEnd,
+            animationLast: entry.animationLast,
+            nextAnimationLast: entry.nextAnimationLast,
+            mixTime: entry.mixTime,
+            mixDuration: entry.mixDuration,
+            totalAlpha: entry.totalAlpha,
+            alpha: entry.alpha,
+            additive: entry.additive,
+            keepHold: entry.keepHold,
+            timelineMode: [...entry.timelineMode],
+            timelineHoldMix: [...entry.timelineHoldMix],
+            timelinesRotation: [...entry.timelinesRotation],
+          },
+    ctx: capturePhysicsContext(internal.path.ctx),
+  };
+}
+
+function restoreStepperState(stepper: LiveTrack | LiveTracks, snap: StepperStateSnapshot): void {
+  if (snap.kind === 'track') {
+    const internal = stepper as unknown as TrackInternal;
+    internal.steps = snap.steps;
+    internal.latest = snap.latest;
+    internal.refused = snap.refused;
+    internal.track.trackTime = snap.trackTime;
+    internal.track.last = snap.last;
+    restorePhysicsContext(internal.track.ctx, snap.ctx);
+    return;
+  }
+  const internal = stepper as unknown as TracksInternal;
+  internal.started = snap.started;
+  internal.steps = snap.steps;
+  internal.time = snap.time;
+  internal.refused = snap.refused;
+  internal.mixer.animationsChanged = snap.animationsChanged;
+  internal.mixer.propertyIds.clear();
+  for (const [k, v] of snap.propertyIds) internal.mixer.propertyIds.set(k, v);
+  const entry = internal.mixer.tracks[0] ?? null;
+  if (entry !== null && snap.entry !== null) {
+    entry.delay = snap.entry.delay;
+    entry.trackTime = snap.entry.trackTime;
+    entry.trackLast = snap.entry.trackLast;
+    entry.nextTrackLast = snap.entry.nextTrackLast;
+    entry.trackEnd = snap.entry.trackEnd;
+    entry.animationLast = snap.entry.animationLast;
+    entry.nextAnimationLast = snap.entry.nextAnimationLast;
+    entry.mixTime = snap.entry.mixTime;
+    entry.mixDuration = snap.entry.mixDuration;
+    entry.totalAlpha = snap.entry.totalAlpha;
+    entry.alpha = snap.entry.alpha;
+    entry.additive = snap.entry.additive;
+    entry.keepHold = snap.entry.keepHold;
+    entry.timelineMode = [...snap.entry.timelineMode];
+    entry.timelineHoldMix = [...snap.entry.timelineHoldMix];
+    entry.timelinesRotation = [...snap.entry.timelinesRotation];
+  }
+  restorePhysicsContext(internal.path.ctx, snap.ctx);
+}
+
 export class RigPlayer {
   /**
    * The renderer this player draws through — its knobs and counters are the
@@ -381,6 +649,7 @@ export class RigPlayer {
   /** The un-overridden pose from the track/tracks (or setup pose when `setSet` is called before `play`). */
   private rawPose: RawPose | null = null;
   private setup: RawPose | null = null;
+  private seekCache: SeekCache | null = null;
   private readonly setList: readonly RigSet[];
   private readonly setsByName: ReadonlyMap<string, RigSet>;
   private activeSet: RigSet | null = null;
@@ -487,6 +756,7 @@ export class RigPlayer {
     const alpha = options.alpha ?? 1;
     const additive = options.additive ?? false;
     this.paused = false;
+    this.clearSeekCache();
     const plain = track === 0 && mix === 0 && alpha === 1 && !additive;
     if (!plain) this.beyondBase = true;
     if (this.tracks === null && plain && !this.trackMode) {
@@ -518,6 +788,7 @@ export class RigPlayer {
   queue(name: string, options: QueueOptions = {}): void {
     const track = options.track ?? 0;
     this.beyondBase = true;
+    this.clearSeekCache();
     const tracks = this.compose();
     tracks.addAnimation(track, name, { loop: options.loop ?? true, mixDuration: options.mix ?? 0, delay: options.delay ?? 0, alpha: options.alpha ?? 1, additive: options.additive ?? false });
     this.trackCount = Math.max(this.trackCount, track + 1);
@@ -531,6 +802,7 @@ export class RigPlayer {
    */
   clear(track = 0, options: { mix?: number } = {}): void {
     this.beyondBase = true;
+    this.clearSeekCache();
     const tracks = this.compose();
     tracks.setEmptyAnimation(track, options.mix ?? 0);
     this.trackCount = Math.max(this.trackCount, track + 1);
@@ -545,6 +817,7 @@ export class RigPlayer {
    */
   queueClear(track = 0, options: { mix?: number; delay?: number } = {}): void {
     this.beyondBase = true;
+    this.clearSeekCache();
     const tracks = this.compose();
     tracks.addEmptyAnimation(track, options.mix ?? 0, options.delay ?? 0);
     this.trackCount = Math.max(this.trackCount, track + 1);
@@ -560,6 +833,7 @@ export class RigPlayer {
    */
   setAlpha(track: number, alpha: number): void {
     this.beyondBase = true;
+    this.clearSeekCache();
     const tracks = this.compose();
     tracks.setAlpha(track, alpha);
     this.setRawPose(tracks.step(0));
@@ -595,6 +869,7 @@ export class RigPlayer {
    */
   private compose(): LiveTracks {
     if (this.tracks !== null) return this.tracks;
+    this.clearSeekCache();
     const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
     const single = this.track;
     const time = single?.trackTime ?? 0;
@@ -633,8 +908,10 @@ export class RigPlayer {
   environment(environment?: Partial<RigEnvironment> | null): RigEnvironment {
     if (environment === null) {
       this.env = null;
+      this.clearSeekCache();
       this.stepper()?.setEnvironment(DEFAULT_ENVIRONMENT);
     } else if (environment !== undefined) {
+      this.clearSeekCache();
       const live = this.stepper();
       if (live) {
         live.setEnvironment(environment);
@@ -677,20 +954,101 @@ export class RigPlayer {
   }
 
   /**
-   * Moves a single animation on track 0 to `time`: the tracks are reopened
-   * with that animation and stepped forward in `seekStep` increments (the
-   * last one shorter) until the time is reached. Events and completes crossed
-   * on the way are not fired. It has a meaning for one animation on one
-   * track only — the player cannot replay when a mix, a second track or a
-   * queue was asked for — so after any of those it refuses by name; step the
-   * player forward instead.
+   * Moves a single animation on track 0 to `time`: snapshot-backed deterministic
+   * seek (#141) that produces the exact pose and physics state of reopening at 0
+   * and stepping forward in `seekStep` increments (the last one shorter) until
+   * `time` is reached. Events and completes crossed on the way are not fired.
+   * It has a meaning for one animation on one track only — the player cannot
+   * replay when a mix, a second track or a queue was asked for — so after any
+   * of those it refuses by name; step the player forward instead.
    */
   seek(time: number): void {
     if (this.animation === null) throw new Error('seek before play: no animation is open');
     if (!(time >= 0) || !Number.isFinite(time)) throw new Error(`seek time must be a finite time at or above 0, got ${String(time)}`);
     if (this.beyondBase) throw new Error('seek is defined for a single animation on track 0; after a mix, another track, a queue or a clear the player cannot replay to a time — step it forward with frame/advance instead');
-    this.reopen();
-    this.stepTo(time);
+    const cache = this.ensureSeekCache();
+    const stepper = this.tracks ?? (this.track as LiveTrack);
+    const exactHit = cache.exact.get(time);
+    if (exactHit !== undefined) {
+      restoreStepperState(stepper, exactHit.state);
+      this.rawPose = exactHit.rawPose;
+      this.pose = exactHit.pose;
+      return;
+    }
+    const steps = Math.floor(time / this.seekStep);
+    while (cache.frontierSteps < steps) {
+      const raw = cache.frontier.step(this.seekStep);
+      cache.frontierSteps++;
+      if (cache.frontierSteps <= SEEK_FINE_STEP_LIMIT || cache.frontierSteps % SEEK_COARSE_STRIDE === 0) {
+        cache.grid.set(cache.frontierSteps, {
+          state: captureStepperState(cache.frontier),
+          rawPose: raw,
+        });
+      }
+    }
+    const gridHit = cache.grid.get(steps);
+    if (gridHit !== undefined) {
+      restoreStepperState(stepper, gridHit.state);
+      this.rawPose = gridHit.rawPose;
+    } else {
+      const baseStep = steps - (steps % SEEK_COARSE_STRIDE);
+      const baseSnap = cache.grid.get(baseStep) as SeekGridEntry;
+      restoreStepperState(stepper, baseSnap.state);
+      this.rawPose = baseSnap.rawPose;
+      for (let i = baseStep; i < steps; i++) this.rawPose = stepper.step(this.seekStep);
+    }
+    const rest = time - stepper.trackTime;
+    if (rest > 0) this.rawPose = stepper.step(rest);
+    if (this.rawPose !== null) this.setRawPose(this.rawPose);
+    if (this.rawPose !== null && this.pose !== null) {
+      if (cache.exact.size >= SEEK_EXACT_LIMIT) {
+        const oldest = cache.exact.keys().next().value;
+        if (oldest !== undefined) cache.exact.delete(oldest);
+      }
+      cache.exact.set(time, {
+        state: captureStepperState(stepper),
+        rawPose: this.rawPose,
+        pose: this.pose,
+      });
+    }
+  }
+
+  private clearSeekCache(): void {
+    this.seekCache = null;
+  }
+
+  private ensureSeekCache(): SeekCache {
+    const mode = this.tracks !== null ? 'tracks' : 'track';
+    if (this.seekCache !== null && this.seekCache.mode === mode) {
+      return this.seekCache;
+    }
+    if (this.tracks === null && this.track === null) {
+      this.reopen();
+    }
+    let frontier: LiveTrack | LiveTracks;
+    let firstPose: RawPose;
+    if (mode === 'tracks') {
+      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
+      firstPose = tracks.start();
+      this.applyEnvironment(tracks);
+      frontier = tracks;
+    } else {
+      const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      firstPose = track.first;
+      this.applyEnvironment(track);
+      frontier = track;
+    }
+    const grid = new Map<number, SeekGridEntry>();
+    grid.set(0, { state: captureStepperState(frontier), rawPose: firstPose });
+    this.seekCache = {
+      mode,
+      frontier,
+      frontierSteps: 0,
+      grid,
+      exact: new Map<number, SeekExactEntry>(),
+    };
+    return this.seekCache;
   }
 
   /** Whatever is open, opened again with track 0's animation as `play` last set it, at pose 0: the single track, or the tracks under `tracks: true`. */
@@ -806,6 +1164,7 @@ export class RigPlayer {
     this.source = frameSource(view, this.read.parsed);
     this.skinName = name;
     this.setup = null;
+    this.clearSeekCache();
     if (this.animation !== null && (this.track !== null || this.tracks !== null)) {
       const time = this.time;
       this.reopen();
@@ -851,6 +1210,7 @@ export class RigPlayer {
     }
     if (name === null) {
       this.activeSet = null;
+      this.clearSeekCache();
       const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
       this.rawPose = base;
       this.pose = base;
@@ -863,6 +1223,7 @@ export class RigPlayer {
       );
     }
     this.activeSet = found;
+    this.clearSeekCache();
     const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
     this.rawPose = base;
     this.pose = applySetToPose(this.view, base, found);
@@ -916,6 +1277,7 @@ export class RigPlayer {
   set adjust(fn: BoneAdjust | null) {
     if (fn !== null && typeof fn !== 'function') throw new Error(`adjust must be a function or null, got ${typeof fn}`);
     this.adjustFn = fn;
+    this.clearSeekCache();
     this.repose();
   }
 
@@ -927,6 +1289,7 @@ export class RigPlayer {
    * changed, then `draw`. Nothing before `play`.
    */
   repose(): void {
+    this.clearSeekCache();
     const stepper = this.tracks ?? this.track;
     if (stepper === null || this.pose === null) return;
     this.setRawPose(stepper.step(0));
@@ -1021,6 +1384,7 @@ export class RigPlayer {
   /** Removes the renderer's elements and hands its GPU pages back. The assets stay the caller's. */
   dispose(): void {
     this.renderer.dispose();
+    this.clearSeekCache();
     this.tracks = null;
     this.track = null;
     this.pose = null;

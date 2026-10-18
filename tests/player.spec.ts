@@ -123,3 +123,55 @@ test('sets() reads sets.json and setSet(name | null) switches attachment sets at
   expect(probe.inactiveSetZeroPoseDiffs).toBe(0);
 });
 
+test('snapshot-backed seek matches cold replay at tolerance 0 across forward, backward, random, repeated, and off-grid seeks, in O(1) warm time, and invalidates on setSet (#141)', async ({ page }) => {
+  const probe = await page.evaluate(() => window.rigPlayHarness.seekSnapshotProbe());
+
+  expect(probe.rigs).toHaveLength(4);
+  for (const run of probe.rigs) {
+    expect(run.forwardBoneDiffs, `${run.rig} tracks=${run.tracks} forwardBoneDiffs`).toBe(0);
+    expect(run.forwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} forwardPhysicsDiffs`).toBe(0);
+    expect(run.forwardFrameDiffs, `${run.rig} tracks=${run.tracks} forwardFrameDiffs`).toBe(0);
+    expect(run.warmBackwardBoneDiffs, `${run.rig} tracks=${run.tracks} warmBackwardBoneDiffs`).toBe(0);
+    expect(run.warmBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmBackwardPhysicsDiffs`).toBe(0);
+    expect(run.coldBackwardBoneDiffs, `${run.rig} tracks=${run.tracks} coldBackwardBoneDiffs`).toBe(0);
+    expect(run.coldBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldBackwardPhysicsDiffs`).toBe(0);
+    expect(run.warmRandomBoneDiffs, `${run.rig} tracks=${run.tracks} warmRandomBoneDiffs`).toBe(0);
+    expect(run.warmRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmRandomPhysicsDiffs`).toBe(0);
+    expect(run.coldRandomBoneDiffs, `${run.rig} tracks=${run.tracks} coldRandomBoneDiffs`).toBe(0);
+    expect(run.coldRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldRandomPhysicsDiffs`).toBe(0);
+    expect(run.repeatedDiffs, `${run.rig} tracks=${run.tracks} repeatedDiffs`).toBe(0);
+    expect(run.offGridDiffs, `${run.rig} tracks=${run.tracks} offGridDiffs`).toBe(0);
+
+    // Warm seeks never replay from 0: at most 1 step from the nearest grid snapshot.
+    expect(run.maxWarmPosesPerSeek).toBeLessThanOrEqual(1);
+    expect(run.warmP95Ms).toBeLessThanOrEqual(10);
+
+    for (const row of run.costTable) {
+      expect(row.warmGridPoses).toBeLessThanOrEqual(1);
+      expect(row.warmExactPoses).toBe(0);
+    }
+    expect(run.costTable[run.costTable.length - 1].coldPoses).toBeGreaterThanOrEqual(179);
+    console.log(
+      `[seek #141] ${run.rig} (tracks=${run.tracks}) warmP95=${run.warmP95Ms}ms costVsT=` +
+      run.costTable.map((r) => `t=${r.time}s:cold=${r.coldReplayMs}ms(${r.coldPoses}p)/warmGrid=${r.warmGridStepMs}ms(${r.warmGridPoses}p)/warmExact=${r.warmExactMs}ms(${r.warmExactPoses}p)`).join(' | '),
+    );
+  }
+  console.log(
+    `[seek #141] twoRigClip frames=${probe.twoRigClip.frames} p50=${probe.twoRigClip.p50Ms}ms p95=${probe.twoRigClip.p95Ms}ms max=${probe.twoRigClip.maxMs}ms missPct=${probe.twoRigClip.deadlineMissPct}%`,
+  );
+
+  // Bar 3: two-rig pose p95 <= 20 ms, deadline misses <= 1% over the clip.
+  expect(probe.twoRigClip.p95Ms).toBeLessThanOrEqual(20);
+  expect(probe.twoRigClip.deadlineMissPct).toBeLessThanOrEqual(1);
+
+  // Bar 4: valid setSet invalidates cache (0 diffs); mutant with stale cache differs by name.
+  expect(probe.invalidation.validSetSwitchDiffs).toEqual([]);
+  expect(probe.invalidation.mutantStaleSetCacheDiffs).toEqual([
+    'face=mesh:skeleton.png (expected face=face_wink)',
+    'prop=prop_star (expected prop=hidden)',
+  ]);
+  expect(probe.invalidation.validEnvSwitchDiffs).toBe(0);
+  expect(probe.invalidation.validSkinSwitchDiffs).toBe(0);
+  expect(probe.invalidation.validAdjustSwitchDiffs).toBe(0);
+});
+
