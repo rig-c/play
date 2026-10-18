@@ -49,3 +49,24 @@ test('context lost mid-play: the next frame draws on canvas2d, every mesh re-ras
   expect(r.afterMeshesDrawn).toBeGreaterThan(0);
   expect(r.afterPixels).toBeGreaterThan(1000);
 });
+
+test('flush fallback (flush → false): meshBackendActive reports canvas2d for that frame and webgl after recovery (#138)', async ({ page }) => {
+  const r = await page.evaluate(() => window.rigPlayHarness.glFlushFallbackProbe());
+  test.skip(!r.webglAvailable, 'no WebGL available');
+  expect(r.initialActive).toBe('webgl');
+  expect(r.fallbackActive).toBe('canvas2d');
+  expect(r.fallbackMeshesDrawn).toBeGreaterThan(0);
+  expect(r.fallbackPixels).toBeGreaterThan(1000);
+  expect(r.recoveredActive).toBe('webgl');
+  expect(r.recoveredMeshesDrawn).toBeGreaterThan(0);
+  expect(r.recoveredPixels).toBeGreaterThan(1000);
+});
+
+test('negative control: with the fallback never taken, meshBackendActive stays webgl across 120 frames (#138)', async ({ page }) => {
+  const r = await page.evaluate(() => window.rigPlayHarness.glFlushFallbackProbe());
+  test.skip(!r.webglAvailable, 'no WebGL available');
+  expect(r.steadyFrames).toBe(120);
+  expect(r.steadyAllWebgl).toBe(true);
+  expect(r.steadyUniqueBackends).toEqual(['webgl']);
+});
+
