@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/rig-c/play/compare/v1.11.0...v1.11.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* report canvas2d on DomRenderer.meshBackendActive after flush fallback ([#138](https://github.com/rig-c/play/issues/138)) ([#139](https://github.com/rig-c/play/issues/139)) ([3022a29](https://github.com/rig-c/play/commit/3022a2959669493998351b738561c3e272d65ad1))
+
 ## [1.11.0](https://github.com/rig-c/play/compare/v1.10.1...v1.11.0) (2026-10-17)
 
 
