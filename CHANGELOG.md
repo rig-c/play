@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/rig-c/play/compare/v1.11.2...v1.12.0) (2026-10-18)
+
+
+### Features
+
+* add read-only slotIdentity() snapshot coherent with posedFrame ([#144](https://github.com/rig-c/play/issues/144)) ([#145](https://github.com/rig-c/play/issues/145)) ([3666f4f](https://github.com/rig-c/play/commit/3666f4f7ba56ed790b4fe8dc26394907655ea905))
+
 ## [1.11.2](https://github.com/rig-c/play/compare/v1.11.1...v1.11.2) (2026-10-18)
 
 
