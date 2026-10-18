@@ -1,4 +1,4 @@
-import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin } from 'rig-c/core';
+import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
 
 import {
   type AdjustableBones,
@@ -260,6 +260,57 @@ export interface RigPlayHarness {
   darkTintProbe(): Promise<DarkTintProbeResult>;
   darkDomPose(time: number): Promise<number>;
   setsProbe(): Promise<SetsProbeResult>;
+  seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
+}
+
+export interface SeekSnapshotProbeResult {
+  rigs: Array<{
+    rig: string;
+    tracks: boolean;
+    frames: number;
+    physicsConstraintCount: number;
+    physicsWordsPerFrame: number;
+    forwardBoneDiffs: number;
+    forwardPhysicsDiffs: string[];
+    forwardFrameDiffs: number;
+    warmBackwardBoneDiffs: number;
+    warmBackwardPhysicsDiffs: string[];
+    coldBackwardBoneDiffs: number;
+    coldBackwardPhysicsDiffs: string[];
+    warmRandomBoneDiffs: number;
+    warmRandomPhysicsDiffs: string[];
+    coldRandomBoneDiffs: number;
+    coldRandomPhysicsDiffs: string[];
+    repeatedDiffs: number;
+    offGridDiffs: number;
+    mutantPhysicsPerturbDiffs: string[];
+    maxWarmPosesPerSeek: number;
+    warmP95Ms: number;
+    costTable: Array<{
+      frame: number;
+      time: number;
+      coldReplayMs: number;
+      warmGridStepMs: number;
+      warmExactMs: number;
+      coldPoses: number;
+      warmGridPoses: number;
+      warmExactPoses: number;
+    }>;
+  }>;
+  twoRigClip: {
+    frames: number;
+    p50Ms: number;
+    p95Ms: number;
+    maxMs: number;
+    deadlineMissPct: number;
+  };
+  invalidation: {
+    validSetSwitchDiffs: string[];
+    mutantStaleSetCacheDiffs: string[];
+    validEnvSwitchDiffs: number;
+    validSkinSwitchDiffs: number;
+    validAdjustSwitchDiffs: number;
+  };
 }
 
 export interface SetsProbeResult {
@@ -7530,6 +7581,612 @@ async function setsProbe(): Promise<SetsProbeResult> {
   }
 }
 
+/**
+ * Snapshot-backed deterministic seek (#141):
+ * 1. Oracle: seek in forward, backward (warm and cold), random (warm and cold),
+ *    repeated, and off-grid order equals the 1.11.1 cold-replay reference
+ *    (openTrack / openTracks reopened at 0 + stepTo in 1/60 increments) at
+ *    tolerance 0 on bone transforms, all 21 physics state fields per constraint,
+ *    and posed frames.
+ * 2. Positive control on physics comparator: perturbing a physics state field
+ *    in a cached snapshot fails by constraint and field name.
+ * 3. Cost: independent of t after warm-up (<= 1 step for warm-grid, 0 for
+ *    warm-exact, p95 <= 10 ms).
+ * 4. Two-rig pose per frame over the clip: p95 <= 20 ms, deadline misses <= 1%.
+ * 5. Mutant: snapshot taken after an attachment-set switch (setSet) not
+ *    invalidated -> oracle differs by slot/attachment name.
+ */
+async function seekSnapshotProbe(): Promise<SeekSnapshotProbeResult> {
+  const cloth = await loadRig('cloth', { regions: 'none' });
+  const look = await loadRig('look', { regions: 'none' });
+  const setsAssets = await loadRig('sets-packed', { regions: 'none' });
+  const figure = await loadRig('figure', { regions: 'none' });
+  const root = makeGlRoot();
+
+  interface InternalPhysicsState {
+    pending: boolean;
+    lastTime: number;
+    remaining: number;
+    ux: number;
+    uy: number;
+    cx: number;
+    cy: number;
+    tx: number;
+    ty: number;
+    xOffset: number;
+    xLag: number;
+    xVelocity: number;
+    yOffset: number;
+    yLag: number;
+    yVelocity: number;
+    rotateOffset: number;
+    rotateLag: number;
+    rotateVelocity: number;
+    scaleOffset: number;
+    scaleLag: number;
+    scaleVelocity: number;
+  }
+
+  const PHYSICS_STATE_KEYS: ReadonlyArray<keyof InternalPhysicsState> = [
+    'pending', 'lastTime', 'remaining', 'ux', 'uy', 'cx', 'cy', 'tx', 'ty',
+    'xOffset', 'xLag', 'xVelocity', 'yOffset', 'yLag', 'yVelocity',
+    'rotateOffset', 'rotateLag', 'rotateVelocity', 'scaleOffset', 'scaleLag', 'scaleVelocity',
+  ];
+
+  interface InternalPhysicsCtx {
+    phase: 'reset' | 'update';
+    time: number;
+    last: number;
+    states: Map<string, InternalPhysicsState>;
+  }
+
+  interface InternalTrackObj {
+    track: {
+      trackTime: number;
+      last: number;
+      ctx: InternalPhysicsCtx;
+    };
+  }
+
+  interface InternalTracksObj {
+    path: {
+      ctx: InternalPhysicsCtx;
+    };
+  }
+
+  interface InternalPlayerObj {
+    track: InternalTrackObj | null;
+    tracks: InternalTracksObj | null;
+    seekCache: {
+      grid: Map<number, { state: { ctx: { states: Map<string, InternalPhysicsState> } } }>;
+      exact: Map<number, { state: { ctx: { states: Map<string, InternalPhysicsState> } } }>;
+    } | null;
+  }
+
+  interface PhysicsSnapshot {
+    phase: 'reset' | 'update';
+    time: number;
+    last: number;
+    states: Map<string, InternalPhysicsState>;
+  }
+
+  const clonePhysicsCtx = (ctx: InternalPhysicsCtx): PhysicsSnapshot => {
+    const states = new Map<string, InternalPhysicsState>();
+    for (const [k, v] of ctx.states) states.set(k, { ...v });
+    return {
+      phase: ctx.phase,
+      time: ctx.time,
+      last: ctx.last,
+      states,
+    };
+  };
+
+  const readPlayerPhysics = (p: RigPlayer): PhysicsSnapshot => {
+    const internal = p as unknown as InternalPlayerObj;
+    const ctx = internal.tracks ? internal.tracks.path.ctx : internal.track?.track.ctx;
+    if (!ctx) throw new Error('RigPlayer has no active track/tracks physics context');
+    return clonePhysicsCtx(ctx);
+  };
+
+  const physicsWordCount = (snap: PhysicsSnapshot): number =>
+    3 + snap.states.size * PHYSICS_STATE_KEYS.length;
+
+  const diffPhysicsSnapshots = (actual: PhysicsSnapshot, expected: PhysicsSnapshot): string[] => {
+    const diffs: string[] = [];
+    if (actual.phase !== expected.phase) {
+      diffs.push(`ctx.phase=${actual.phase} (expected ${expected.phase})`);
+    }
+    if (!Object.is(actual.time, expected.time)) {
+      diffs.push(`ctx.time=${actual.time} (expected ${expected.time})`);
+    }
+    if (!Object.is(actual.last, expected.last)) {
+      diffs.push(`ctx.last=${actual.last} (expected ${expected.last})`);
+    }
+    if (actual.states.size !== expected.states.size) {
+      diffs.push(`ctx.states.size=${actual.states.size} (expected ${expected.states.size})`);
+    }
+    for (const [name, expState] of expected.states) {
+      const actState = actual.states.get(name);
+      if (!actState) {
+        diffs.push(`${name}=missing`);
+        continue;
+      }
+      for (const key of PHYSICS_STATE_KEYS) {
+        if (!Object.is(actState[key], expState[key])) {
+          diffs.push(`${name}.${key}=${String(actState[key])} (expected ${String(expState[key])})`);
+        }
+      }
+    }
+    return diffs;
+  };
+
+  /**
+   * 1.11.1 reference implementation of `reopen()` + `stepTo(time)`:
+   * Opens a fresh `openTrack` (or `openTracks` when `tracks === true`) at 0,
+   * steps `Math.floor(time / seekStep)` times by `seekStep`, and steps any
+   * remaining `rest = time - stepper.trackTime` > 0.
+   */
+  const coldReplay111 = (
+    assets: ModelAssets,
+    anim: string,
+    tracksMode: boolean,
+    time: number,
+    options: {
+      seekStep?: number;
+      skin?: string;
+      adjust?: (bones: AdjustableBones) => void;
+      env?: { wind?: readonly [number, number]; gravity?: readonly [number, number] };
+    } = {},
+  ): {
+    bones: number[];
+    physics: PhysicsSnapshot;
+    frameJson: string;
+    poses: number;
+    elapsedMs: number;
+  } => {
+    const read = assets.document as ReadDocument;
+    const view = options.skin === undefined ? underNoSkin(read.doc) : underSkin(read.doc, options.skin);
+    const src = frameSource(view, read.parsed);
+    const seekStep = options.seekStep ?? 1 / 60;
+    let poses = 0;
+    const adjustHook = (bones: AdjustableBones): void => {
+      poses++;
+      options.adjust?.(bones);
+    };
+    const t0 = performance.now();
+    const target = Math.max(0, time);
+    if (tracksMode) {
+      const tracks = openTracks(view, { reset: 'animation', adjust: adjustHook, clock: physicsClockStep });
+      tracks.setAnimation(0, anim, { loop: true, mixDuration: 0 });
+      let rawPose = tracks.start();
+      if (options.env) tracks.setEnvironment(options.env);
+      const steps = Math.floor(target / seekStep);
+      for (let i = 0; i < steps; i++) rawPose = tracks.step(seekStep);
+      const rest = target - tracks.trackTime;
+      if (rest > 0) rawPose = tracks.step(rest);
+      const elapsedMs = performance.now() - t0;
+      const ctx = (tracks as unknown as InternalTracksObj).path.ctx;
+      const bones = rawPose.bones.flatMap((b) => [
+        b.worldX, b.worldY, b.a, b.b, b.c, b.d, b.rotationX, b.rotationY, b.scaleX, b.scaleY,
+      ]);
+      return {
+        bones,
+        physics: clonePhysicsCtx(ctx),
+        frameJson: JSON.stringify(frameOf(src, rawPose)),
+        poses,
+        elapsedMs,
+      };
+    }
+    const track = openTrack(view, anim, { loop: true, reset: 'animation', adjust: adjustHook, clock: physicsClockStep });
+    let rawPose = track.first;
+    if (options.env) track.setEnvironment(options.env);
+    const steps = Math.floor(target / seekStep);
+    for (let i = 0; i < steps; i++) rawPose = track.step(seekStep);
+    const rest = target - track.trackTime;
+    if (rest > 0) rawPose = track.step(rest);
+    const elapsedMs = performance.now() - t0;
+    const ctx = (track as unknown as InternalTrackObj).track.ctx;
+    const bones = rawPose.bones.flatMap((b) => [
+      b.worldX, b.worldY, b.a, b.b, b.c, b.d, b.rotationX, b.rotationY, b.scaleX, b.scaleY,
+    ]);
+    return {
+      bones,
+      physics: clonePhysicsCtx(ctx),
+      frameJson: JSON.stringify(frameOf(src, rawPose)),
+      poses,
+      elapsedMs,
+    };
+  };
+
+  const readBoneWords = (p: RigPlayer, boneNames: readonly string[]): number[] => {
+    const out: number[] = [];
+    for (const name of boneNames) {
+      const b = p.bone(name);
+      out.push(b.x, b.y, b.a, b.b, b.c, b.d, b.rotationX, b.rotationY, b.scaleX, b.scaleY);
+    }
+    return out;
+  };
+
+  const sameWords = (a: readonly number[], b: readonly number[]): boolean => {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!Object.is(a[i], b[i])) return false;
+    }
+    return true;
+  };
+
+  try {
+    const rigs: SeekSnapshotProbeResult['rigs'] = [];
+    const N = 180;
+    const dt = 1 / 60;
+
+    for (const [rigName, assets, anim] of [
+      ['cloth', cloth, 'hang'],
+      ['look', look, 'tilt'],
+    ] as const) {
+      const boneNames = (assets.document as ReadDocument).doc.bones.map((b) => b.name);
+
+      for (const tracks of [false, true]) {
+        // Compute 1.11.1 reference cold-replay oracle for each frame i = 0..N-1
+        const oracleBones: number[][] = [];
+        const oraclePhysics: PhysicsSnapshot[] = [];
+        const oracleFrames: string[] = [];
+
+        for (let i = 0; i < N; i++) {
+          const ref = coldReplay111(assets, anim, tracks, i * dt);
+          oracleBones.push(ref.bones);
+          oraclePhysics.push(ref.physics);
+          oracleFrames.push(ref.frameJson);
+        }
+
+        const physicsConstraintCount = oraclePhysics[1].states.size;
+        const physicsWordsPerFrame = physicsWordCount(oraclePhysics[1]);
+
+        let poses = 0;
+        const player = new RigPlayer(root, assets, {
+          mode: 'canvas',
+          tracks,
+          adjust: () => { poses++; },
+        });
+        player.play(anim);
+
+        // 1. Forward pass (warming up cache)
+        let forwardBoneDiffs = 0;
+        const forwardPhysicsDiffs: string[] = [];
+        let forwardFrameDiffs = 0;
+        for (let i = 0; i < N; i++) {
+          player.seek(i * dt);
+          if (!sameWords(readBoneWords(player, boneNames), oracleBones[i])) forwardBoneDiffs++;
+          const pDiffs = diffPhysicsSnapshots(readPlayerPhysics(player), oraclePhysics[i]);
+          if (pDiffs.length > 0 && forwardPhysicsDiffs.length < 5) {
+            forwardPhysicsDiffs.push(`f${i}: ${pDiffs.join(', ')}`);
+          }
+          if (JSON.stringify(player.posedFrame()) !== oracleFrames[i]) forwardFrameDiffs++;
+        }
+
+        // 2. Warm backward pass
+        let warmBackwardBoneDiffs = 0;
+        const warmBackwardPhysicsDiffs: string[] = [];
+        let maxWarmPosesPerSeek = 0;
+        const warmTimesMs: number[] = [];
+        for (let i = N - 1; i >= 0; i--) {
+          poses = 0;
+          const t0 = performance.now();
+          player.seek(i * dt);
+          warmTimesMs.push(performance.now() - t0);
+          maxWarmPosesPerSeek = Math.max(maxWarmPosesPerSeek, poses);
+          if (!sameWords(readBoneWords(player, boneNames), oracleBones[i])) warmBackwardBoneDiffs++;
+          const pDiffs = diffPhysicsSnapshots(readPlayerPhysics(player), oraclePhysics[i]);
+          if (pDiffs.length > 0 && warmBackwardPhysicsDiffs.length < 5) {
+            warmBackwardPhysicsDiffs.push(`f${i}: ${pDiffs.join(', ')}`);
+          }
+        }
+
+        // 3. Seeded random permutation
+        const perm = Array.from({ length: N }, (_, i) => i);
+        let seed = 0x9e3779b9;
+        for (let i = N - 1; i > 0; i--) {
+          seed ^= seed << 13;
+          seed ^= seed >>> 17;
+          seed ^= seed << 5;
+          const j = (seed >>> 0) % (i + 1);
+          const tmp = perm[i];
+          perm[i] = perm[j];
+          perm[j] = tmp;
+        }
+
+        // Warm random pass
+        let warmRandomBoneDiffs = 0;
+        const warmRandomPhysicsDiffs: string[] = [];
+        for (const idx of perm) {
+          poses = 0;
+          const t0 = performance.now();
+          player.seek(idx * dt);
+          warmTimesMs.push(performance.now() - t0);
+          maxWarmPosesPerSeek = Math.max(maxWarmPosesPerSeek, poses);
+          if (!sameWords(readBoneWords(player, boneNames), oracleBones[idx])) warmRandomBoneDiffs++;
+          const pDiffs = diffPhysicsSnapshots(readPlayerPhysics(player), oraclePhysics[idx]);
+          if (pDiffs.length > 0 && warmRandomPhysicsDiffs.length < 5) {
+            warmRandomPhysicsDiffs.push(`f${idx}: ${pDiffs.join(', ')}`);
+          }
+        }
+
+        // 4. Repeated seeks
+        let repeatedDiffs = 0;
+        for (const idx of [0, 37, 99, 142, N - 1]) {
+          for (let r = 0; r < 3; r++) {
+            poses = 0;
+            player.seek(idx * dt);
+            maxWarmPosesPerSeek = Math.max(maxWarmPosesPerSeek, poses);
+            if (!sameWords(readBoneWords(player, boneNames), oracleBones[idx])) repeatedDiffs++;
+            if (diffPhysicsSnapshots(readPlayerPhysics(player), oraclePhysics[idx]).length > 0) repeatedDiffs++;
+          }
+        }
+
+        // 5. Off-grid unvisited fractional times (warm grid + 1 remainder step)
+        let offGridDiffs = 0;
+        for (const idx of [12, 65, 118, 171]) {
+          const tOff = (idx + 0.37) * dt;
+          const ref = coldReplay111(assets, anim, tracks, tOff);
+          poses = 0;
+          player.seek(tOff);
+          maxWarmPosesPerSeek = Math.max(maxWarmPosesPerSeek, poses);
+          if (!sameWords(readBoneWords(player, boneNames), ref.bones)) offGridDiffs++;
+          if (diffPhysicsSnapshots(readPlayerPhysics(player), ref.physics).length > 0) offGridDiffs++;
+        }
+
+        // 6. Cold backward pass on a brand-new player
+        const coldBackPlayer = new RigPlayer(root, assets, { mode: 'canvas', tracks });
+        coldBackPlayer.play(anim);
+        let coldBackwardBoneDiffs = 0;
+        const coldBackwardPhysicsDiffs: string[] = [];
+        for (let i = N - 1; i >= 0; i--) {
+          coldBackPlayer.seek(i * dt);
+          if (!sameWords(readBoneWords(coldBackPlayer, boneNames), oracleBones[i])) coldBackwardBoneDiffs++;
+          const pDiffs = diffPhysicsSnapshots(readPlayerPhysics(coldBackPlayer), oraclePhysics[i]);
+          if (pDiffs.length > 0 && coldBackwardPhysicsDiffs.length < 5) {
+            coldBackwardPhysicsDiffs.push(`f${i}: ${pDiffs.join(', ')}`);
+          }
+        }
+        coldBackPlayer.dispose();
+
+        // 7. Cold random pass on a brand-new player
+        const coldRandPlayer = new RigPlayer(root, assets, { mode: 'canvas', tracks });
+        coldRandPlayer.play(anim);
+        let coldRandomBoneDiffs = 0;
+        const coldRandomPhysicsDiffs: string[] = [];
+        for (const idx of perm) {
+          coldRandPlayer.seek(idx * dt);
+          if (!sameWords(readBoneWords(coldRandPlayer, boneNames), oracleBones[idx])) coldRandomBoneDiffs++;
+          const pDiffs = diffPhysicsSnapshots(readPlayerPhysics(coldRandPlayer), oraclePhysics[idx]);
+          if (pDiffs.length > 0 && coldRandomPhysicsDiffs.length < 5) {
+            coldRandomPhysicsDiffs.push(`f${idx}: ${pDiffs.join(', ')}`);
+          }
+        }
+        coldRandPlayer.dispose();
+
+        // 8. Cost vs t table (1.11.1 cold replay from 0 vs warm grid 1-step vs warm exact)
+        const costTable: SeekSnapshotProbeResult['rigs'][number]['costTable'] = [];
+        for (const frame of [0, 45, 90, 135, 179]) {
+          const t = frame * dt;
+          const coldRef = coldReplay111(assets, anim, tracks, t);
+
+          // Warm grid 1-step (unvisited fractional offset from grid point)
+          const tGrid = (frame + 0.25) * dt;
+          poses = 0;
+          const tGrid0 = performance.now();
+          player.seek(tGrid);
+          const warmGridStepMs = performance.now() - tGrid0;
+          const warmGridPoses = poses;
+
+          // Warm exact hit
+          poses = 0;
+          const tExact0 = performance.now();
+          player.seek(t);
+          const warmExactMs = performance.now() - tExact0;
+          const warmExactPoses = poses;
+
+          costTable.push({
+            frame,
+            time: Number(t.toFixed(4)),
+            coldReplayMs: Number(coldRef.elapsedMs.toFixed(4)),
+            warmGridStepMs: Number(warmGridStepMs.toFixed(4)),
+            warmExactMs: Number(warmExactMs.toFixed(4)),
+            coldPoses: coldRef.poses,
+            warmGridPoses,
+            warmExactPoses,
+          });
+        }
+
+        // 9. Positive control on physics comparator: perturb a single physics field
+        // (`rotateVelocity`) in the cached snapshot for frame 45 and verify that
+        // seeking to frame 45 fails by constraint and field name.
+        const perturbFrame = 45;
+        const perturbTime = perturbFrame * dt;
+        const internalHolder = player as unknown as InternalPlayerObj;
+        internalHolder.seekCache?.exact.delete(perturbTime);
+        const gridSnap = internalHolder.seekCache?.grid.get(perturbFrame);
+        if (!gridSnap) throw new Error(`missing grid snapshot at frame ${perturbFrame}`);
+        const firstConstraint = gridSnap.state.ctx.states.keys().next().value as string;
+        const savedState = { ...(gridSnap.state.ctx.states.get(firstConstraint) as InternalPhysicsState) };
+        (gridSnap.state.ctx.states.get(firstConstraint) as InternalPhysicsState).rotateVelocity =
+          savedState.rotateVelocity + 0.125;
+        player.seek(perturbTime);
+        const mutantPhysicsPerturbDiffs = diffPhysicsSnapshots(
+          readPlayerPhysics(player),
+          oraclePhysics[perturbFrame],
+        );
+        // Restore unperturbed state
+        gridSnap.state.ctx.states.set(firstConstraint, savedState);
+        internalHolder.seekCache?.exact.delete(perturbTime);
+
+        const sortedWarm = [...warmTimesMs].sort((a, b) => a - b);
+        const warmP95Ms = sortedWarm[Math.min(sortedWarm.length - 1, Math.floor(sortedWarm.length * 0.95))];
+
+        rigs.push({
+          rig: rigName,
+          tracks,
+          frames: N,
+          physicsConstraintCount,
+          physicsWordsPerFrame,
+          forwardBoneDiffs,
+          forwardPhysicsDiffs,
+          forwardFrameDiffs,
+          warmBackwardBoneDiffs,
+          warmBackwardPhysicsDiffs,
+          coldBackwardBoneDiffs,
+          coldBackwardPhysicsDiffs,
+          warmRandomBoneDiffs,
+          warmRandomPhysicsDiffs,
+          coldRandomBoneDiffs,
+          coldRandomPhysicsDiffs,
+          repeatedDiffs,
+          offGridDiffs,
+          mutantPhysicsPerturbDiffs,
+          maxWarmPosesPerSeek,
+          warmP95Ms: Number(warmP95Ms.toFixed(4)),
+          costTable,
+        });
+
+        player.dispose();
+      }
+    }
+
+    // Bar 3: Two-rig pose per frame over the clip (forward + backward scrub)
+    const p1 = new RigPlayer(root, look, { mode: 'canvas' });
+    const p2 = new RigPlayer(root, cloth, { mode: 'canvas' });
+    p1.play('tilt');
+    p2.play('hang');
+    const clipFrames = 240;
+    const twoRigSamples: number[] = [];
+    for (let i = 0; i < clipFrames; i++) {
+      const t = i * dt;
+      const t0 = performance.now();
+      p1.seek(t);
+      p2.seek(t);
+      twoRigSamples.push(performance.now() - t0);
+    }
+    for (let i = clipFrames - 1; i >= 0; i--) {
+      const t = i * dt;
+      const t0 = performance.now();
+      p1.seek(t);
+      p2.seek(t);
+      twoRigSamples.push(performance.now() - t0);
+    }
+    p1.dispose();
+    p2.dispose();
+    const sortedTwoRig = [...twoRigSamples].sort((a, b) => a - b);
+    const twoRigP50 = sortedTwoRig[Math.floor(sortedTwoRig.length * 0.5)];
+    const twoRigP95 = sortedTwoRig[Math.min(sortedTwoRig.length - 1, Math.floor(sortedTwoRig.length * 0.95))];
+    const twoRigMax = sortedTwoRig[sortedTwoRig.length - 1];
+    const deadlineMisses = twoRigSamples.filter((ms) => ms > 20).length;
+
+    // Bar 4: Mutant — snapshot taken after an attachment-set switch (setSet)
+    // not invalidated -> oracle differs by name.
+    const describeSlots = (frame: PosedFrame): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const s of frame.order) {
+        out[s.slot] = s.kind === 'region' ? s.region : `mesh:${s.page}`;
+      }
+      return out;
+    };
+    const diffSlotMaps = (actual: Record<string, string>, expected: Record<string, string>): string[] => {
+      const keys = new Set([...Object.keys(actual), ...Object.keys(expected)]);
+      const diffs: string[] = [];
+      for (const k of [...keys].sort()) {
+        const a = actual[k] ?? 'hidden';
+        const e = expected[k] ?? 'hidden';
+        if (a !== e) diffs.push(`${k}=${a} (expected ${k}=${e})`);
+      }
+      return diffs;
+    };
+
+    // Independent advance-stepped oracle for 'wink' at t = 0.25 (15 steps of 1/60, never calling seek):
+    const setOracle = new RigPlayer(root, setsAssets, { mode: 'canvas' });
+    setOracle.play('dance');
+    setOracle.setSet('wink');
+    for (let i = 0; i < 15; i++) setOracle.advance(dt);
+    const expectedWinkSlots = describeSlots(setOracle.posedFrame());
+    setOracle.dispose();
+
+    // Valid player: seek under 'smile', switch to 'wink', seek again
+    const validSetPlayer = new RigPlayer(root, setsAssets, { mode: 'canvas' });
+    validSetPlayer.play('dance');
+    validSetPlayer.setSet('smile');
+    validSetPlayer.seek(0.25);
+    const staleSmileCache = (validSetPlayer as unknown as InternalPlayerObj).seekCache;
+    validSetPlayer.setSet('wink');
+    validSetPlayer.seek(0.25);
+    const validSetSwitchDiffs = diffSlotMaps(describeSlots(validSetPlayer.posedFrame()), expectedWinkSlots);
+
+    // Mutant: restore the pre-setSet cache so setSet fails to invalidate snapshots
+    (validSetPlayer as unknown as InternalPlayerObj).seekCache = staleSmileCache;
+    validSetPlayer.seek(0.25);
+    const mutantStaleSetCacheDiffs = diffSlotMaps(describeSlots(validSetPlayer.posedFrame()), expectedWinkSlots);
+    validSetPlayer.dispose();
+
+    // Also verify invalidation on environment, skin, and adjust switches against 1.11.1 oracle:
+    const envPlayer = new RigPlayer(root, cloth, { mode: 'canvas' });
+    envPlayer.play('hang');
+    envPlayer.environment({ wind: [0, 0] });
+    envPlayer.seek(1.0);
+    envPlayer.environment({ wind: [2, 0] });
+    envPlayer.seek(1.0);
+    const envRef = coldReplay111(cloth, 'hang', false, 1.0, { env: { wind: [2, 0] } });
+    const clothBones = (cloth.document as ReadDocument).doc.bones.map((b) => b.name);
+    const validEnvSwitchDiffs =
+      sameWords(readBoneWords(envPlayer, clothBones), envRef.bones) &&
+      diffPhysicsSnapshots(readPlayerPhysics(envPlayer), envRef.physics).length === 0
+        ? 0
+        : 1;
+    envPlayer.dispose();
+
+    const skinPlayer = new RigPlayer(root, figure, { mode: 'canvas' });
+    skinPlayer.play('walk');
+    skinPlayer.seek(0.5);
+    skinPlayer.skin = 'alt';
+    skinPlayer.seek(0.5);
+    const skinRef = coldReplay111(figure, 'walk', false, 0.5, { skin: 'alt' });
+    const validSkinSwitchDiffs = JSON.stringify(skinPlayer.posedFrame()) === skinRef.frameJson ? 0 : 1;
+    skinPlayer.dispose();
+
+    const adjPlayer = new RigPlayer(root, figure, { mode: 'canvas' });
+    adjPlayer.play('walk');
+    adjPlayer.seek(0.5);
+    adjPlayer.adjust = (bones) => { bones.bone('hip').x += 15; };
+    adjPlayer.seek(0.5);
+    const adjRef = coldReplay111(figure, 'walk', false, 0.5, {
+      adjust: (bones) => { bones.bone('hip').x += 15; },
+    });
+    const validAdjustSwitchDiffs = JSON.stringify(adjPlayer.posedFrame()) === adjRef.frameJson ? 0 : 1;
+    adjPlayer.dispose();
+
+    return {
+      rigs,
+      twoRigClip: {
+        frames: twoRigSamples.length,
+        p50Ms: Number(twoRigP50.toFixed(4)),
+        p95Ms: Number(twoRigP95.toFixed(4)),
+        maxMs: Number(twoRigMax.toFixed(4)),
+        deadlineMissPct: Number(((deadlineMisses / twoRigSamples.length) * 100).toFixed(2)),
+      },
+      invalidation: {
+        validSetSwitchDiffs,
+        mutantStaleSetCacheDiffs,
+        validEnvSwitchDiffs,
+        validSkinSwitchDiffs,
+        validAdjustSwitchDiffs,
+      },
+    };
+  } finally {
+    root.remove();
+    cloth.dispose();
+    look.dispose();
+    setsAssets.dispose();
+    figure.dispose();
+  }
+}
+
 window.rigPlayHarness = {
   drawContractStage,
   drawContractDispose,
@@ -7588,4 +8245,5 @@ window.rigPlayHarness = {
   pmaDerivationProbe,
   pmaStage,
   setsProbe,
+  seekSnapshotProbe,
 };
