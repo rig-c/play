@@ -128,19 +128,26 @@ test('snapshot-backed seek matches cold replay at tolerance 0 across forward, ba
 
   expect(probe.rigs).toHaveLength(4);
   for (const run of probe.rigs) {
+    expect(run.physicsConstraintCount, `${run.rig} physicsConstraintCount`).toBeGreaterThan(0);
+    expect(run.physicsWordsPerFrame, `${run.rig} physicsWordsPerFrame`).toBe(3 + 21 * run.physicsConstraintCount);
+
     expect(run.forwardBoneDiffs, `${run.rig} tracks=${run.tracks} forwardBoneDiffs`).toBe(0);
-    expect(run.forwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} forwardPhysicsDiffs`).toBe(0);
+    expect(run.forwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} forwardPhysicsDiffs`).toEqual([]);
     expect(run.forwardFrameDiffs, `${run.rig} tracks=${run.tracks} forwardFrameDiffs`).toBe(0);
     expect(run.warmBackwardBoneDiffs, `${run.rig} tracks=${run.tracks} warmBackwardBoneDiffs`).toBe(0);
-    expect(run.warmBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmBackwardPhysicsDiffs`).toBe(0);
+    expect(run.warmBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmBackwardPhysicsDiffs`).toEqual([]);
     expect(run.coldBackwardBoneDiffs, `${run.rig} tracks=${run.tracks} coldBackwardBoneDiffs`).toBe(0);
-    expect(run.coldBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldBackwardPhysicsDiffs`).toBe(0);
+    expect(run.coldBackwardPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldBackwardPhysicsDiffs`).toEqual([]);
     expect(run.warmRandomBoneDiffs, `${run.rig} tracks=${run.tracks} warmRandomBoneDiffs`).toBe(0);
-    expect(run.warmRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmRandomPhysicsDiffs`).toBe(0);
+    expect(run.warmRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} warmRandomPhysicsDiffs`).toEqual([]);
     expect(run.coldRandomBoneDiffs, `${run.rig} tracks=${run.tracks} coldRandomBoneDiffs`).toBe(0);
-    expect(run.coldRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldRandomPhysicsDiffs`).toBe(0);
+    expect(run.coldRandomPhysicsDiffs, `${run.rig} tracks=${run.tracks} coldRandomPhysicsDiffs`).toEqual([]);
     expect(run.repeatedDiffs, `${run.rig} tracks=${run.tracks} repeatedDiffs`).toBe(0);
     expect(run.offGridDiffs, `${run.rig} tracks=${run.tracks} offGridDiffs`).toBe(0);
+
+    // Positive control on physics comparator: perturbing rotateVelocity in cached snapshot fails by name.
+    expect(run.mutantPhysicsPerturbDiffs).toHaveLength(1);
+    expect(run.mutantPhysicsPerturbDiffs[0]).toMatch(/\.rotateVelocity=.* \(expected .*\)/);
 
     // Warm seeks never replay from 0: at most 1 step from the nearest grid snapshot.
     expect(run.maxWarmPosesPerSeek).toBeLessThanOrEqual(1);
@@ -152,7 +159,7 @@ test('snapshot-backed seek matches cold replay at tolerance 0 across forward, ba
     }
     expect(run.costTable[run.costTable.length - 1].coldPoses).toBeGreaterThanOrEqual(179);
     console.log(
-      `[seek #141] ${run.rig} (tracks=${run.tracks}) warmP95=${run.warmP95Ms}ms costVsT=` +
+      `[seek #141] ${run.rig} (tracks=${run.tracks}) constraints=${run.physicsConstraintCount} words=${run.physicsWordsPerFrame} perturb=${run.mutantPhysicsPerturbDiffs[0]} warmP95=${run.warmP95Ms}ms costVsT=` +
       run.costTable.map((r) => `t=${r.time}s:cold=${r.coldReplayMs}ms(${r.coldPoses}p)/warmGrid=${r.warmGridStepMs}ms(${r.warmGridPoses}p)/warmExact=${r.warmExactMs}ms(${r.warmExactPoses}p)`).join(' | '),
     );
   }
