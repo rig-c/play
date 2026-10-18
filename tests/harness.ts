@@ -253,6 +253,7 @@ export interface RigPlayHarness {
   trackModeProbe(): Promise<TrackModeProbeResult>;
   alphaAdditiveProbe(): Promise<AlphaAdditiveProbeResult>;
   glFallbackProbe(loseContext: boolean): Promise<GlFallbackProbeResult>;
+  glFlushFallbackProbe(): Promise<GlFlushFallbackProbeResult>;
   playerBasicsProbe(): Promise<PlayerBasicsProbeResult>;
   physicsClockProbe(): Promise<PhysicsClockProbeResult>;
   environmentProbe(): Promise<EnvironmentProbeResult>;
@@ -453,6 +454,20 @@ export interface GlFallbackProbeResult {
   afterPixels: number;
   /** Meshes the frame after the loss re-rastered (the backend signature re-dirties them). */
   afterMeshesDrawn: number;
+}
+
+export interface GlFlushFallbackProbeResult {
+  webglAvailable: boolean;
+  initialActive: string;
+  fallbackActive: string;
+  fallbackPixels: number;
+  fallbackMeshesDrawn: number;
+  recoveredActive: string;
+  recoveredPixels: number;
+  recoveredMeshesDrawn: number;
+  steadyFrames: number;
+  steadyAllWebgl: boolean;
+  steadyUniqueBackends: string[];
 }
 
 export interface DarkTintProbeResult {
@@ -6157,6 +6172,84 @@ async function glFallbackProbe(loseContext: boolean): Promise<GlFallbackProbeRes
 }
 
 /**
+ * When `MeshGlBlitter.flush` returns `false` mid-frame (#138), `DomRenderer`
+ * rasterizes the queued meshes through Canvas2D and sets `meshBackendActive`
+ * to `'canvas2d'` for that frame; once `flush` succeeds again on a later frame,
+ * the backend signature re-dirties the meshes and `meshBackendActive` returns
+ * to `'webgl'`. With the fallback never taken, `meshBackendActive` stays
+ * `'webgl'` across 120 frames.
+ */
+async function glFlushFallbackProbe(): Promise<GlFlushFallbackProbeResult> {
+  const assets = await loadRig('glow');
+  const root = makeGlRoot();
+  const player = new RigPlayer(root, assets);
+  const renderer = player.renderer as DomRenderer;
+  renderer.pixelRatio = 0.5;
+  player.play('burn');
+  player.seek(0.2);
+  player.draw();
+  const initialActive = renderer.meshBackendActive;
+  const blitter = getMeshGlBlitter();
+  const webglAvailable = blitter !== null && initialActive === 'webgl';
+  let fallbackActive = initialActive;
+  let fallbackPixels = 0;
+  let fallbackMeshesDrawn = 0;
+  let recoveredActive = initialActive;
+  let recoveredPixels = 0;
+  let recoveredMeshesDrawn = 0;
+  if (blitter) {
+    const origFlush = blitter.flush.bind(blitter);
+    blitter.flush = () => false;
+    try {
+      player.frame(0.1);
+      fallbackActive = renderer.meshBackendActive;
+      fallbackPixels = meshPixels(root);
+      fallbackMeshesDrawn = renderer.meshCount;
+    } finally {
+      blitter.flush = origFlush;
+    }
+    // Even with dt = 0, the `'canvas2d'` drawn signature re-dirties the meshes
+    // when `meshBackendActive` returns to `'webgl'`.
+    player.frame(0);
+    recoveredActive = renderer.meshBackendActive;
+    recoveredPixels = meshPixels(root);
+    recoveredMeshesDrawn = renderer.meshCount;
+  }
+  player.dispose();
+  root.remove();
+
+  // Negative control: 120 frames with the fallback never taken.
+  const steadyRoot = makeGlRoot();
+  const steadyPlayer = new RigPlayer(steadyRoot, assets);
+  const steadyRenderer = steadyPlayer.renderer as DomRenderer;
+  steadyRenderer.pixelRatio = 0.5;
+  steadyPlayer.play('burn');
+  const steadyBackends: string[] = [];
+  for (let i = 0; i < 120; i++) {
+    steadyPlayer.frame(1 / 60);
+    steadyBackends.push(steadyRenderer.meshBackendActive);
+  }
+  steadyPlayer.dispose();
+  steadyRoot.remove();
+  assets.dispose();
+
+  const steadyUniqueBackends = Array.from(new Set(steadyBackends));
+  return {
+    webglAvailable,
+    initialActive,
+    fallbackActive,
+    fallbackPixels,
+    fallbackMeshesDrawn,
+    recoveredActive,
+    recoveredPixels,
+    recoveredMeshesDrawn,
+    steadyFrames: steadyBackends.length,
+    steadyAllWebgl: steadyBackends.every((b) => b === 'webgl'),
+    steadyUniqueBackends,
+  };
+}
+
+/**
  * Two-colour (dark) tint in the canvas mode (#106). The `duo` test rig keys
  * only the dark half of each slot's tint, so its oracle is the formula and
  * the canvas mode's own alpha-only fallback: on an opaque grey ramp with a
@@ -7453,6 +7546,7 @@ window.rigPlayHarness = {
   darkTintProbe,
   darkDomPose,
   glFallbackProbe,
+  glFlushFallbackProbe,
   alphaAdditiveProbe,
   trackModeProbe,
   slotFilterProbe,

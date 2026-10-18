@@ -496,6 +496,7 @@ export class DomRenderer {
       if (!blitter || !blitter.flush(this.pendingJobs)) {
         // Context lost mid-frame: rasterize this batch on the 2d path so the
         // frame stays complete; the next render() re-selects the backend.
+        this.meshBackendActive = 'canvas2d';
         for (let i = 0; i < this.pendingJobs.length; i++) {
           const job = this.pendingJobs[i];
           this.pendingViews[i].meshBackendDrawn = 'canvas2d';
