@@ -33,6 +33,11 @@ import {
 export interface PosedFrame {
   /** Every slot that draws, in draw order. */
   order: PosedSlot[];
+  /**
+   * Monotonic pose generation counter when read off a `RigPlayer`
+   * (`player.posedFrame()`), matching `player.slotIdentity().generation`.
+   */
+  generation?: number;
 }
 
 /** The four blend modes, spelled as the runtime's enum names them. */

@@ -594,11 +594,12 @@ test('the bundle imports nothing: rig-c/core is inside it, and no node built-in 
  */
 const CONSUMER_SOURCE = [
   "import { CanvasRenderer, DomRenderer, loadModel, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
-  "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions } from '@rig-c/play';",
+  "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions, SlotIdentity, SlotIdentityReason, SlotIdentitySnapshot } from '@rig-c/play';",
   'export const surface = [CanvasRenderer, DomRenderer, RigPlayer, loadModel, unpackRegions, revokeRegions];',
   'export function drawCanvas(renderer: CanvasRenderer, frame: PosedFrame): number { renderer.render(frame); return renderer.drawCalls; }',
   'export function draw(renderer: DomRenderer, frame: PosedFrame): PosedSlot[] { renderer.render(frame); return frame.order; }',
   'export function play(root: HTMLElement, assets: ModelAssets, options: RigPlayerOptions): RigPlayer { const p = new RigPlayer(root, assets, options); p.play(assets.animations[0].name, { loop: true }); return p; }',
+  'export function inspectSlots(player: RigPlayer): { snap: SlotIdentitySnapshot; first: SlotIdentity | undefined; reason: SlotIdentityReason | null | undefined } { const snap = player.slotIdentity(); return { snap, first: snap.slots[0], reason: snap.slots[0]?.reason }; }',
   '',
 ].join('\n');
 

@@ -8,6 +8,9 @@ import {
   type RegionImage,
   revokeRegions,
   RigPlayer,
+  type SlotIdentity,
+  type SlotIdentityReason,
+  type SlotIdentitySnapshot,
   unpackRegions,
 } from '../src/index';
 import { CanvasRenderer } from '../src/CanvasRenderer';
@@ -261,6 +264,55 @@ export interface RigPlayHarness {
   darkDomPose(time: number): Promise<number>;
   setsProbe(): Promise<SetsProbeResult>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
+  slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
+}
+
+export interface SlotIdentityProbeResult {
+  setsFixtures: Array<{
+    rig: string;
+    setupBase: SlotIdentitySnapshot;
+    setupSmile: SlotIdentitySnapshot;
+    setupWink: SlotIdentitySnapshot;
+    setupRestored: SlotIdentitySnapshot;
+    danceBase: SlotIdentitySnapshot;
+    danceSmile: SlotIdentitySnapshot;
+    danceWink: SlotIdentitySnapshot;
+    danceRestored: SlotIdentitySnapshot;
+    tracksDanceSmile: SlotIdentitySnapshot;
+    tracksDanceWink: SlotIdentitySnapshot;
+    coherenceDiffs: string[];
+    generations: number[];
+    generationsStrictlyIncreasing: boolean;
+  }>;
+  reasonsAndSkins: {
+    noSkinEmblem: SlotIdentity;
+    altSkinEmblem: SlotIdentity;
+    altSkinTorso: SlotIdentity;
+    filteredTorso: SlotIdentity;
+    filteredHead: SlotIdentity;
+    filteredArmBack: SlotIdentity;
+    filteredEmblemNoSkin: SlotIdentity;
+    timelineNullBefore: SlotIdentity;
+    timelineNullAt: SlotIdentity;
+    squashOpenEyes: SlotIdentity;
+    squashShutEyes: SlotIdentity;
+    coherenceDiffs: string[];
+  };
+  heldRead1000: {
+    pixelDiffs: number;
+    physicsDiffs: string[];
+    boneDiffs: number;
+    extraPoses: number;
+    generationChanged: boolean;
+    allSameRef: boolean;
+    isFrozen: boolean;
+  };
+  mutants: {
+    realSetsDanceDiffs: string[];
+    staleSetsDanceDiffs: string[];
+    realSquashBounceDiffs: string[];
+    staleSquashBounceDiffs: string[];
+  };
 }
 
 export interface SeekSnapshotProbeResult {
@@ -8187,6 +8239,505 @@ async function seekSnapshotProbe(): Promise<SeekSnapshotProbeResult> {
   }
 }
 
+async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
+  const setsUnpacked = await loadRig('sets');
+  const setsPacked = await loadRig('sets-packed');
+  const figure = await loadRig('figure');
+  const squash = await loadRig('squash');
+  const cloth = await loadRig('cloth');
+  const root = makeGlRoot();
+
+  const checkCoherence = (
+    label: string,
+    player: RigPlayer,
+    snap: SlotIdentitySnapshot,
+    frame: PosedFrame,
+    expectedAttachments?: Readonly<Record<string, { attachment: string | null; reason: SlotIdentityReason | null }>>,
+  ): string[] => {
+    const diffs: string[] = [];
+    if (snap.generation !== player.generation) {
+      diffs.push(`${label}: snap.generation=${snap.generation} != player.generation=${player.generation}`);
+    }
+    if (frame.generation !== snap.generation) {
+      diffs.push(`${label}: frame.generation=${String(frame.generation)} != snap.generation=${snap.generation}`);
+    }
+    if (snap.set !== player.set) {
+      diffs.push(`${label}: snap.set=${String(snap.set)} != player.set=${String(player.set)}`);
+    }
+    if (snap.skin !== (player.skin ?? null)) {
+      diffs.push(`${label}: snap.skin=${String(snap.skin)} != player.skin=${String(player.skin ?? null)}`);
+    }
+    for (let i = 0; i < snap.slots.length; i++) {
+      const s = snap.slots[i];
+      if (s.z !== i) {
+        diffs.push(`${label}: slot "${s.slot}" z=${s.z} != index ${i}`);
+      }
+      if (s.reason === null) {
+        if (s.attachment === null || s.skin === null) {
+          diffs.push(`${label}: drawn slot "${s.slot}" has null attachment/skin`);
+        }
+      } else {
+        if (s.attachment !== null || s.skin !== null) {
+          diffs.push(`${label}: hidden slot "${s.slot}" (${s.reason}) has non-null attachment=${String(s.attachment)} skin=${String(s.skin)}`);
+        }
+      }
+      if (expectedAttachments && s.slot in expectedAttachments) {
+        const exp = expectedAttachments[s.slot];
+        if (s.attachment !== exp.attachment) {
+          diffs.push(`${label}: slot "${s.slot}" attachment=${String(s.attachment)} != expected=${String(exp.attachment)}`);
+        }
+        if (s.reason !== exp.reason) {
+          diffs.push(`${label}: slot "${s.slot}" reason=${String(s.reason)} != expected=${String(exp.reason)}`);
+        }
+      }
+    }
+    const drawnInSnap = snap.slots.filter((s) => s.reason === null);
+    if (drawnInSnap.length !== frame.order.length) {
+      diffs.push(`${label}: drawnInSnap.length=${drawnInSnap.length} != frame.order.length=${frame.order.length}`);
+    } else {
+      const doc = (player as unknown as { view: { skins: ReadonlyArray<{ name: string; attachments: Record<string, Record<string, { path?: string }>> }> } }).view;
+      for (let i = 0; i < drawnInSnap.length; i++) {
+        const s = drawnInSnap[i];
+        const f = frame.order[i];
+        if (s.slot !== f.slot || s.z !== f.z) {
+          diffs.push(`${label}: drawn[${i}] snap=(${s.slot}, z=${s.z}) != frame=(${f.slot}, z=${f.z})`);
+        }
+        const attEntry = s.skin && s.attachment ? doc.skins.find((sk) => sk.name === s.skin)?.attachments[s.slot]?.[s.attachment] : undefined;
+        const expectedRegion = attEntry?.path ?? s.attachment;
+        if (f.kind === 'region' && expectedRegion !== f.region) {
+          diffs.push(`${label}: slot "${s.slot}" snap.attachment=${String(s.attachment)} != frame.region=${f.region}`);
+        }
+      }
+    }
+    return diffs;
+  };
+
+  const cloneSnap = (s: SlotIdentitySnapshot): SlotIdentitySnapshot => ({
+    generation: s.generation,
+    set: s.set,
+    skin: s.skin,
+    slots: s.slots.map((entry) => ({ ...entry })),
+  });
+
+  try {
+    // 1. Bar 1: public two-set fixture (`sets` and `sets-packed`) across setSet(null / 'smile' / 'wink') and dance at t = 0.5
+    const setsFixtures: SlotIdentityProbeResult['setsFixtures'] = [];
+    for (const [rigName, assets] of [
+      ['sets', setsUnpacked],
+      ['sets-packed', setsPacked],
+    ] as const) {
+      const p = new RigPlayer(root, assets, { mode: 'canvas' });
+      const coherenceDiffs: string[] = [];
+      const generations: number[] = [];
+
+      p.setSet(null);
+      const setupBase = cloneSnap(p.slotIdentity());
+      generations.push(setupBase.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:setupBase`, p, setupBase, p.posedFrame(), {
+          body: { attachment: 'body_base', reason: null },
+          face: { attachment: 'face_neutral', reason: null },
+          face_still: { attachment: 'face_still', reason: null },
+          prop: { attachment: 'prop_wand', reason: null },
+        }),
+      );
+
+      p.setSet('smile');
+      const setupSmile = cloneSnap(p.slotIdentity());
+      generations.push(setupSmile.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:setupSmile`, p, setupSmile, p.posedFrame(), {
+          body: { attachment: 'body_base', reason: null },
+          face: { attachment: 'face_smile', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: 'prop_star', reason: null },
+        }),
+      );
+
+      p.setSet('wink');
+      const setupWink = cloneSnap(p.slotIdentity());
+      generations.push(setupWink.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:setupWink`, p, setupWink, p.posedFrame(), {
+          body: { attachment: 'body_base', reason: null },
+          face: { attachment: 'face_wink', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: null, reason: 'set-hide' },
+        }),
+      );
+
+      p.setSet(null);
+      const setupRestored = cloneSnap(p.slotIdentity());
+      generations.push(setupRestored.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:setupRestored`, p, setupRestored, p.posedFrame(), {
+          body: { attachment: 'body_base', reason: null },
+          face: { attachment: 'face_neutral', reason: null },
+          face_still: { attachment: 'face_still', reason: null },
+          prop: { attachment: 'prop_wand', reason: null },
+        }),
+      );
+
+      p.play('dance');
+      generations.push(p.slotIdentity().generation);
+      p.advance(0.5);
+      const danceBase = cloneSnap(p.slotIdentity());
+      generations.push(danceBase.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:danceBase`, p, danceBase, p.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_track', reason: null },
+          face_still: { attachment: 'face_still', reason: null },
+          prop: { attachment: 'prop_wand', reason: null },
+        }),
+      );
+
+      p.setSet('smile');
+      const danceSmile = cloneSnap(p.slotIdentity());
+      generations.push(danceSmile.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:danceSmile`, p, danceSmile, p.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_smile', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: 'prop_star', reason: null },
+        }),
+      );
+
+      p.setSet('wink');
+      const danceWink = cloneSnap(p.slotIdentity());
+      generations.push(danceWink.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:danceWink`, p, danceWink, p.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_wink', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: null, reason: 'set-hide' },
+        }),
+      );
+
+      p.setSet(null);
+      const danceRestored = cloneSnap(p.slotIdentity());
+      generations.push(danceRestored.generation);
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:danceRestored`, p, danceRestored, p.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_track', reason: null },
+          face_still: { attachment: 'face_still', reason: null },
+          prop: { attachment: 'prop_wand', reason: null },
+        }),
+      );
+      p.dispose();
+
+      // Multi-track mode (`tracks: true`)
+      const pt = new RigPlayer(root, assets, { mode: 'canvas', tracks: true });
+      pt.play('dance');
+      pt.advance(0.5);
+      pt.setSet('smile');
+      const tracksDanceSmile = cloneSnap(pt.slotIdentity());
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:tracksDanceSmile`, pt, tracksDanceSmile, pt.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_smile', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: 'prop_star', reason: null },
+        }),
+      );
+      pt.setSet('wink');
+      const tracksDanceWink = cloneSnap(pt.slotIdentity());
+      coherenceDiffs.push(
+        ...checkCoherence(`${rigName}:tracksDanceWink`, pt, tracksDanceWink, pt.posedFrame(), {
+          body: { attachment: 'body_track', reason: null },
+          face: { attachment: 'face_wink', reason: null },
+          face_still: { attachment: null, reason: 'set-hide' },
+          prop: { attachment: null, reason: 'set-hide' },
+        }),
+      );
+      pt.dispose();
+
+      let generationsStrictlyIncreasing = true;
+      for (let i = 1; i < generations.length; i++) {
+        if (!(generations[i] > generations[i - 1])) {
+          generationsStrictlyIncreasing = false;
+        }
+      }
+
+      setsFixtures.push({
+        rig: rigName,
+        setupBase,
+        setupSmile,
+        setupWink,
+        setupRestored,
+        danceBase,
+        danceSmile,
+        danceWink,
+        danceRestored,
+        tracksDanceSmile,
+        tracksDanceWink,
+        coherenceDiffs,
+        generations,
+        generationsStrictlyIncreasing,
+      });
+    }
+
+    // 2. Reasons ('no-attachment', 'hidden', 'timeline-null') and skin ownership ('default' vs 'alt') + squash timeline switch
+    const reasonDiffs: string[] = [];
+    const figPlayer = new RigPlayer(root, figure, { mode: 'canvas' });
+    figPlayer.play('walk');
+    const noSkinSnap = figPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('figure:noSkin', figPlayer, noSkinSnap, figPlayer.posedFrame()));
+    const noSkinEmblem = { ...(noSkinSnap.slots.find((s) => s.slot === 'emblem') as SlotIdentity) };
+
+    figPlayer.skin = 'alt';
+    const altSkinSnap = figPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('figure:altSkin', figPlayer, altSkinSnap, figPlayer.posedFrame()));
+    const altSkinEmblem = { ...(altSkinSnap.slots.find((s) => s.slot === 'emblem') as SlotIdentity) };
+    const altSkinTorso = { ...(altSkinSnap.slots.find((s) => s.slot === 'torso') as SlotIdentity) };
+
+    figPlayer.skin = undefined;
+    figPlayer.slots = ['torso', 'head'];
+    const filteredSnap = figPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('figure:filtered', figPlayer, filteredSnap, figPlayer.posedFrame()));
+    const filteredTorso = { ...(filteredSnap.slots.find((s) => s.slot === 'torso') as SlotIdentity) };
+    const filteredHead = { ...(filteredSnap.slots.find((s) => s.slot === 'head') as SlotIdentity) };
+    const filteredArmBack = { ...(filteredSnap.slots.find((s) => s.slot === 'arm_b_up') as SlotIdentity) };
+    const filteredEmblemNoSkin = { ...(filteredSnap.slots.find((s) => s.slot === 'emblem') as SlotIdentity) };
+    figPlayer.dispose();
+
+    // Timeline-null test on a synthetic clone of `figure` where `walk` keys `head` attachment to `null` at t = 0.25
+    const figRead = figure.document as ReadDocument;
+    const nullKeyedDoc = {
+      ...figRead.doc,
+      animations: figRead.doc.animations.map((a) =>
+        a.name !== 'walk'
+          ? a
+          : {
+              ...a,
+              timelines: {
+                ...a.timelines,
+                slots: [
+                  ...a.timelines.slots,
+                  {
+                    name: 'head',
+                    timelines: [
+                      {
+                        kind: 'attachment' as const,
+                        keys: [
+                          { time: 0, name: 'head' },
+                          { time: 0.25, name: null },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+      ),
+    };
+    const nullKeyedAssets: ModelAssets = {
+      ...figure,
+      document: { doc: nullKeyedDoc, parsed: figRead.parsed } as unknown as ModelAssets['document'],
+    };
+    const tlNullPlayer = new RigPlayer(root, nullKeyedAssets, { mode: 'canvas' });
+    tlNullPlayer.play('walk');
+    const timelineNullBefore = { ...(tlNullPlayer.slotIdentity().slots.find((s) => s.slot === 'head') as SlotIdentity) };
+    tlNullPlayer.seek(0.25);
+    const tlNullSnap = tlNullPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('figure:timelineNull', tlNullPlayer, tlNullSnap, tlNullPlayer.posedFrame()));
+    const timelineNullAt = { ...(tlNullSnap.slots.find((s) => s.slot === 'head') as SlotIdentity) };
+    tlNullPlayer.dispose();
+
+    const squashPlayer = new RigPlayer(root, squash, { mode: 'canvas' });
+    squashPlayer.play('bounce');
+    const squashOpenSnap = squashPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('squash:t0', squashPlayer, squashOpenSnap, squashPlayer.posedFrame()));
+    const squashOpenEyes = { ...(squashOpenSnap.slots.find((s) => s.slot === 'eyes') as SlotIdentity) };
+    squashPlayer.seek(0.42);
+    const squashShutSnap = squashPlayer.slotIdentity();
+    reasonDiffs.push(...checkCoherence('squash:t0.42', squashPlayer, squashShutSnap, squashPlayer.posedFrame()));
+    const squashShutEyes = { ...(squashShutSnap.slots.find((s) => s.slot === 'eyes') as SlotIdentity) };
+
+    // 3. Bar 2: Reading slotIdentity() 1000x on a held pose changes no pixel and no physics word
+    let heldPoses = 0;
+    const heldPlayer = new RigPlayer(root, cloth, {
+      mode: 'canvas',
+      adjust: () => {
+        heldPoses++;
+      },
+    });
+    const heldRenderer = heldPlayer.renderer as CanvasRenderer;
+    heldRenderer.backend = 'canvas2d';
+    heldRenderer.pixelRatio = 1;
+    heldRenderer.viewport = { x: -120, y: -220, width: 240, height: 260 };
+    heldPlayer.play('hang');
+    heldPlayer.advance(0.5);
+    heldPlayer.draw();
+
+    const readCanvasBytes = (r: CanvasRenderer): Uint8ClampedArray => {
+      const ctx = r.canvas.getContext('2d');
+      if (!ctx) throw new Error('no 2d context');
+      return new Uint8ClampedArray(ctx.getImageData(0, 0, r.canvas.width, r.canvas.height).data);
+    };
+
+    const PHYSICS_KEYS = [
+      'pending', 'lastTime', 'remaining', 'ux', 'uy', 'cx', 'cy', 'tx', 'ty',
+      'xOffset', 'xLag', 'xVelocity', 'yOffset', 'yLag', 'yVelocity',
+      'rotateOffset', 'rotateLag', 'rotateVelocity', 'scaleOffset', 'scaleLag', 'scaleVelocity',
+    ] as const;
+    type PhysState = Record<(typeof PHYSICS_KEYS)[number], number | boolean>;
+    interface PhysCtx {
+      phase: string;
+      time: number;
+      last: number;
+      states: Map<string, PhysState>;
+    }
+    const readPhys = (p: RigPlayer): PhysCtx => {
+      const internal = p as unknown as { track: { track: { ctx: PhysCtx } } | null };
+      const ctx = internal.track?.track.ctx;
+      if (!ctx) throw new Error('missing physics ctx');
+      const states = new Map<string, PhysState>();
+      for (const [k, v] of ctx.states) states.set(k, { ...v });
+      return { phase: ctx.phase, time: ctx.time, last: ctx.last, states };
+    };
+    const clothBoneNames = (cloth.document as ReadDocument).doc.bones.map((b) => b.name);
+    const readBones = (p: RigPlayer): number[] =>
+      clothBoneNames.flatMap((name) => {
+        const b = p.bone(name);
+        return [b.x, b.y, b.a, b.b, b.c, b.d, b.rotationX, b.rotationY, b.scaleX, b.scaleY];
+      });
+
+    const pixelsBefore = readCanvasBytes(heldRenderer);
+    const physBefore = readPhys(heldPlayer);
+    const bonesBefore = readBones(heldPlayer);
+    const genBefore = heldPlayer.generation;
+    heldPoses = 0;
+
+    const firstSnap = heldPlayer.slotIdentity();
+    let allSameRef = true;
+    for (let i = 0; i < 1000; i++) {
+      const s = heldPlayer.slotIdentity();
+      if (s !== firstSnap) allSameRef = false;
+    }
+
+    const extraPoses = heldPoses;
+    const generationChanged = heldPlayer.generation !== genBefore;
+    const isFrozen =
+      Object.isFrozen(firstSnap) &&
+      Object.isFrozen(firstSnap.slots) &&
+      firstSnap.slots.every((s) => Object.isFrozen(s));
+
+    // Re-draw after 1000 reads to verify pixels on canvas are untouched
+    heldPlayer.draw();
+    const pixelsAfter = readCanvasBytes(heldRenderer);
+    let pixelDiffs = 0;
+    for (let i = 0; i < pixelsBefore.length; i++) {
+      if (pixelsBefore[i] !== pixelsAfter[i]) pixelDiffs++;
+    }
+
+    const physAfter = readPhys(heldPlayer);
+    const physicsDiffs: string[] = [];
+    if (physAfter.phase !== physBefore.phase) physicsDiffs.push(`phase=${physAfter.phase}`);
+    if (!Object.is(physAfter.time, physBefore.time)) physicsDiffs.push(`time=${physAfter.time}`);
+    if (!Object.is(physAfter.last, physBefore.last)) physicsDiffs.push(`last=${physAfter.last}`);
+    for (const [name, exp] of physBefore.states) {
+      const act = physAfter.states.get(name);
+      if (!act) {
+        physicsDiffs.push(`${name}=missing`);
+        continue;
+      }
+      for (const key of PHYSICS_KEYS) {
+        if (!Object.is(act[key], exp[key])) {
+          physicsDiffs.push(`${name}.${key}=${String(act[key])} != ${String(exp[key])}`);
+        }
+      }
+    }
+
+    const bonesAfter = readBones(heldPlayer);
+    let boneDiffs = 0;
+    for (let i = 0; i < bonesBefore.length; i++) {
+      if (!Object.is(bonesBefore[i], bonesAfter[i])) boneDiffs++;
+    }
+    heldPlayer.dispose();
+
+    // 4. Bar 3: Mutant — timeline attachment key applied (`dance` at t = 0.5 on `sets-packed`, and `bounce` at t = 0.25 on `squash` where `eyes -> eyes_shut`),
+    //    but snapshot still naming the setup attachment -> fails by slot name
+    const mutSetsPlayer = new RigPlayer(root, setsPacked, { mode: 'canvas' });
+    const mutSetsSetupSnap = cloneSnap(mutSetsPlayer.slotIdentity());
+    mutSetsPlayer.play('dance');
+    mutSetsPlayer.advance(0.5);
+    const realSetsDanceSnap = mutSetsPlayer.slotIdentity();
+    const setsDanceFrame = mutSetsPlayer.posedFrame();
+    const realSetsDanceDiffs = checkCoherence('sets:dance', mutSetsPlayer, realSetsDanceSnap, setsDanceFrame);
+    const staleSetsDanceSnap: SlotIdentitySnapshot = {
+      ...realSetsDanceSnap,
+      slots: mutSetsSetupSnap.slots,
+    };
+    const staleSetsDanceDiffs = checkCoherence('sets:dance', mutSetsPlayer, staleSetsDanceSnap, setsDanceFrame);
+    mutSetsPlayer.dispose();
+
+    const squashBounceFrame = squashPlayer.posedFrame();
+    const realSquashBounceDiffs = checkCoherence(
+      'squash:bounce',
+      squashPlayer,
+      squashShutSnap,
+      squashBounceFrame,
+      { eyes: { attachment: 'eyes_shut', reason: null } },
+    );
+    const staleSquashBounceSnap: SlotIdentitySnapshot = {
+      ...squashShutSnap,
+      slots: squashOpenSnap.slots,
+    };
+    const staleSquashBounceDiffs = checkCoherence(
+      'squash:bounce',
+      squashPlayer,
+      staleSquashBounceSnap,
+      squashBounceFrame,
+      { eyes: { attachment: 'eyes_shut', reason: null } },
+    );
+    squashPlayer.dispose();
+
+    return {
+      setsFixtures,
+      reasonsAndSkins: {
+        noSkinEmblem,
+        altSkinEmblem,
+        altSkinTorso,
+        filteredTorso,
+        filteredHead,
+        filteredArmBack,
+        filteredEmblemNoSkin,
+        timelineNullBefore,
+        timelineNullAt,
+        squashOpenEyes,
+        squashShutEyes,
+        coherenceDiffs: reasonDiffs,
+      },
+      heldRead1000: {
+        pixelDiffs,
+        physicsDiffs,
+        boneDiffs,
+        extraPoses,
+        generationChanged,
+        allSameRef,
+        isFrozen,
+      },
+      mutants: {
+        realSetsDanceDiffs,
+        staleSetsDanceDiffs,
+        realSquashBounceDiffs,
+        staleSquashBounceDiffs,
+      },
+    };
+  } finally {
+    root.remove();
+    setsUnpacked.dispose();
+    setsPacked.dispose();
+    figure.dispose();
+    squash.dispose();
+    cloth.dispose();
+  }
+}
+
 window.rigPlayHarness = {
   drawContractStage,
   drawContractDispose,
@@ -8246,4 +8797,6 @@ window.rigPlayHarness = {
   pmaStage,
   setsProbe,
   seekSnapshotProbe,
+  slotIdentityProbe,
 };
+
