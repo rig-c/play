@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/rig-c/play/compare/v1.11.1...v1.11.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* snapshot-backed deterministic seek ([#141](https://github.com/rig-c/play/issues/141)) ([#142](https://github.com/rig-c/play/issues/142)) ([55cba45](https://github.com/rig-c/play/commit/55cba455128424dfadd8887b03060c21751aa930))
+
 ## [1.11.1](https://github.com/rig-c/play/compare/v1.11.0...v1.11.1) (2026-10-18)
 
 
