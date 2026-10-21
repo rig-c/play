@@ -1,3 +1,4 @@
+import { liveCoreProbe } from './liveCoreProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
 import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
@@ -208,6 +209,7 @@ export interface RegionGeometryProbeResult {
 }
 
 export interface RigPlayHarness {
+  liveCoreProbe: typeof liveCoreProbe;
   setupMeshLookDiagnosisProbe: typeof setupMeshLookDiagnosisProbe;
   setupMeshLiteralProbe: typeof setupMeshLiteralProbe;
   setupMeshGalleryProbe: typeof setupMeshGalleryProbe;
@@ -8745,6 +8747,7 @@ async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
 }
 
 window.rigPlayHarness = {
+  liveCoreProbe,
   setupMeshLookDiagnosisProbe,
   setupMeshLiteralProbe,
   setupMeshGalleryProbe,

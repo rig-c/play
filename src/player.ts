@@ -180,6 +180,16 @@ export interface AdjustableBones {
   bone(name: string): BoneLocals;
 }
 
+/** The evaluation identity supplied by the core, independent of the displayed player clock. */
+export interface BoneAdjustContext {
+  /** Current track-0 entry's unwrapped seconds; null when there is no entry. */
+  readonly trackTime: number | null;
+  /** Current entry's animation; null also for an explicit empty entry (whose time is numeric). */
+  readonly animation: string | null;
+  /** Running sum of core steps in seconds, independent of the physics clock. */
+  readonly globalTime: number;
+}
+
 /**
  * A caller's adjustment of a pose's bone locals — a breath's scale, a look's
  * rotation, a mouth's `scaleY` — called once per pose after the animation's
@@ -190,7 +200,26 @@ export interface AdjustableBones {
  * and nothing compounds. A non-finite value, an unknown bone, or an error the
  * function throws refuses that step in the core's words.
  */
-export type BoneAdjust = (bones: AdjustableBones) => void;
+export type BoneAdjust = (bones: AdjustableBones, ctx: BoneAdjustContext) => void;
+
+/** Runtime scalar responses; the core performs no unit conversion or clamping. */
+export interface PhysicsParameters {
+  readonly strength: number;
+  readonly damping: number;
+  readonly inertia: number;
+  readonly wind: number;
+  readonly gravity: number;
+  readonly mix: number;
+}
+
+/** Omitted fields retain their pending override. */
+export type PhysicsParameterPatch = Partial<PhysicsParameters>;
+
+/** Detached pending patch and last active evaluation (null until evaluated). */
+export interface PhysicsParameterRead {
+  readonly override: PhysicsParameterPatch | null;
+  readonly effective: PhysicsParameters | null;
+}
 
 /**
  * Where a bone is in the pose the player holds — world units, Y up, the
@@ -511,11 +540,10 @@ type StepperStateSnapshot = TrackStateSnapshot | TracksStateSnapshot;
 interface SeekGridEntry {
   readonly state: StepperStateSnapshot;
   readonly rawPose: RawPose;
+  readonly parameters: ReadonlyMap<string, PhysicsParameterRead>;
 }
 
-interface SeekExactEntry {
-  readonly state: StepperStateSnapshot;
-  readonly rawPose: RawPose;
+interface SeekExactEntry extends SeekGridEntry {
   readonly pose: RawPose;
 }
 
@@ -704,12 +732,16 @@ export class RigPlayer {
   private readonly setsByName: ReadonlyMap<string, RigSet>;
   private activeSet: RigSet | null = null;
   private adjustFn: BoneAdjust | null = null;
+  /** Current preview patches, reapplied through the public core API on replay; no edit history. */
+  private readonly physicsPatches = new Map<string, PhysicsParameterPatch>();
+  /** Public read snapshots belonging to a restored seek pose, not the core's private evaluation cache. */
+  private heldParameters: ReadonlyMap<string, PhysicsParameterRead> | null = null;
   private slotFilter: SlotFilter | null = null;
   /** `slotFilter` as a predicate; every slot when null. */
   private draws: (slot: string) => boolean = () => true;
   /** Handed to every track the player opens; reads the current `adjust` so setting it later needs no reopen. */
-  private readonly adjustHook: CoreLocalAdjust = (locals) => {
-    if (this.adjustFn !== null) this.adjustFn(locals);
+  private readonly adjustHook: CoreLocalAdjust = (locals, ctx) => {
+    if (this.adjustFn !== null) this.adjustFn(locals, ctx);
   };
   private readonly listeners = {
     event: new Set<Listener<RigEvent>>(),
@@ -817,7 +849,7 @@ export class RigPlayer {
       this.animation = name;
       this.loop = loop;
       this.track = openTrack(this.view, name, { loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
-      this.setRawPose(this.track.first);
+      this.setRawPose(this.initializeSingle(this.track));
       this.applyEnvironment(this.track);
       return;
     }
@@ -932,6 +964,7 @@ export class RigPlayer {
     this.tracks = tracks;
     this.track = null;
     this.setRawPose(tracks.start());
+    this.applyPhysicsParameters(tracks);
     this.applyEnvironment(tracks);
     if (time > 0) this.stepTo(time);
     return tracks;
@@ -940,9 +973,61 @@ export class RigPlayer {
   /** Stores `raw` and applies `activeSet` when one is active. Zero work when `activeSet === null`. */
   private setRawPose(raw: RawPose): void {
     this.rawPose = raw;
+    this.heldParameters = null;
     this.pose = this.activeSet === null ? raw : applySetToPose(this.view, raw, this.activeSet);
     this.poseGeneration++;
     this.cachedIdentity = null;
+  }
+
+  /**
+   * Sets a named physics constraint's pending patch, after keyed/slider values
+   * and before the integrator on the next evaluation. No pose or clock change.
+   * Unknown names/kinds/fields and non-finite values are refused atomically by
+   * the core. Requires a live track (call play/queue first).
+   */
+  setPhysicsParameters(name: string, patch: PhysicsParameterPatch): void {
+    const live = this.requirePhysicsTrack('setPhysicsParameters', name);
+    live.setPhysicsParameters(name, patch);
+    const standing = live.readPhysicsParameters(name).override;
+    if (standing !== null) this.physicsPatches.set(name, standing);
+    this.clearSeekCache();
+  }
+
+  /** Pending override and the held pose's last active evaluation, detached. Does not evaluate a pose. */
+  readPhysicsParameters(name: string): PhysicsParameterRead {
+    const read = this.requirePhysicsTrack('readPhysicsParameters', name).readPhysicsParameters(name);
+    if (this.heldParameters === null) return read;
+    const effective = this.heldParameters.get(name)?.effective ?? null;
+    return { override: read.override, effective: effective === null ? null : { ...effective } };
+  }
+
+  /** Removes only the patch; authored values resume next evaluation. Physics history is retained. */
+  clearPhysicsParameters(name: string): void {
+    this.requirePhysicsTrack('clearPhysicsParameters', name).clearPhysicsParameters(name);
+    this.physicsPatches.delete(name);
+    this.clearSeekCache();
+  }
+
+  private requirePhysicsTrack(operation: string, name: string): LiveTrack | LiveTracks {
+    const live = this.stepper();
+    if (live === null) throw new Error(`${operation}(${JSON.stringify(name)}) before play: no live track`);
+    return live;
+  }
+
+  /** No private parameter state is copied into the core's seek snapshots. */
+  private readParameters(live: LiveTrack | LiveTracks): ReadonlyMap<string, PhysicsParameterRead> {
+    return new Map(this.view.constraints.filter((c) => c.kind === 'physics')
+      .map((c) => [c.name, live.readPhysicsParameters(c.name)]));
+  }
+
+  private applyPhysicsParameters(live: LiveTrack | LiveTracks): void {
+    for (const [name, patch] of this.physicsPatches) live.setPhysicsParameters(name, patch);
+  }
+
+  /** Like the environment, standing patches are pending after the ordinary first pose; no extra evaluation. */
+  private initializeSingle(live: LiveTrack): RawPose {
+    this.applyPhysicsParameters(live);
+    return live.first;
   }
 
   /**
@@ -1027,6 +1112,7 @@ export class RigPlayer {
       restoreStepperState(stepper, exactHit.state);
       this.rawPose = exactHit.rawPose;
       this.pose = exactHit.pose;
+      this.heldParameters = exactHit.parameters;
       this.poseGeneration++;
       this.cachedIdentity = null;
       return;
@@ -1039,23 +1125,31 @@ export class RigPlayer {
         cache.grid.set(cache.frontierSteps, {
           state: captureStepperState(cache.frontier),
           rawPose: raw,
+          parameters: this.readParameters(cache.frontier),
         });
       }
     }
+    let parameters: ReadonlyMap<string, PhysicsParameterRead>;
     const gridHit = cache.grid.get(steps);
     if (gridHit !== undefined) {
       restoreStepperState(stepper, gridHit.state);
       this.rawPose = gridHit.rawPose;
+      parameters = gridHit.parameters;
     } else {
       const baseStep = steps - (steps % SEEK_COARSE_STRIDE);
       const baseSnap = cache.grid.get(baseStep) as SeekGridEntry;
       restoreStepperState(stepper, baseSnap.state);
       this.rawPose = baseSnap.rawPose;
       for (let i = baseStep; i < steps; i++) this.rawPose = stepper.step(this.seekStep);
+      parameters = this.readParameters(stepper);
     }
     const rest = time - stepper.trackTime;
-    if (rest > 0) this.rawPose = stepper.step(rest);
+    if (rest > 0) {
+      this.rawPose = stepper.step(rest);
+      parameters = this.readParameters(stepper);
+    }
     if (this.rawPose !== null) this.setRawPose(this.rawPose);
+    this.heldParameters = parameters;
     if (this.rawPose !== null && this.pose !== null) {
       if (cache.exact.size >= SEEK_EXACT_LIMIT) {
         const oldest = cache.exact.keys().next().value;
@@ -1065,6 +1159,7 @@ export class RigPlayer {
         state: captureStepperState(stepper),
         rawPose: this.rawPose,
         pose: this.pose,
+        parameters,
       });
     }
   }
@@ -1087,16 +1182,17 @@ export class RigPlayer {
       const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
       tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
       firstPose = tracks.start();
+      this.applyPhysicsParameters(tracks);
       this.applyEnvironment(tracks);
       frontier = tracks;
     } else {
       const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
-      firstPose = track.first;
+      firstPose = this.initializeSingle(track);
       this.applyEnvironment(track);
       frontier = track;
     }
     const grid = new Map<number, SeekGridEntry>();
-    grid.set(0, { state: captureStepperState(frontier), rawPose: firstPose });
+    grid.set(0, { state: captureStepperState(frontier), rawPose: firstPose, parameters: this.readParameters(frontier) });
     this.seekCache = {
       mode,
       frontier,
@@ -1115,11 +1211,12 @@ export class RigPlayer {
       this.trackCount = 1;
       this.tracks = tracks;
       this.setRawPose(tracks.start());
+      this.applyPhysicsParameters(tracks);
       this.applyEnvironment(tracks);
       return;
     }
     this.track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
-    this.setRawPose(this.track.first);
+    this.setRawPose(this.initializeSingle(this.track));
     this.applyEnvironment(this.track);
   }
 

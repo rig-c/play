@@ -685,6 +685,77 @@ firing events or drawing. A non-finite value, a bone the document does not have,
 or an error the function throws refuses that step in the core's words, and the
 track is reopened by the next `play` or `seek`.
 
+The callback also receives a `BoneAdjustContext` from the core:
+
+```ts
+player.adjust = (bones, ctx) => {
+  bones.bone('head').rotation = 12 * (ctx.trackTime ?? 0);
+};
+```
+
+`ctx.trackTime` is the **current track-0 entry's unwrapped seconds**, starting at
+0 for each new entry. Loops do not wrap it, and a nonlooping entry keeps counting
+past its duration. `ctx.animation` names that entry. Without a track-0 entry both
+are null; an explicit empty entry has **numeric trackTime and null animation**.
+Upper tracks supply no fallback. `ctx.globalTime` is the core walk's running sum
+of steps in seconds, so it can differ from a new entry's time. Neither clock is
+wall time, wrapped animation time, nor the physics clock's small lead. Unary
+callbacks remain compatible. The hook runs once after composition, including a
+crossfade, rather than once for each contributing entry.
+
+Seek evaluates its replay times (`seekStep` plus any final remainder), independent
+of the currently displayed player time. Exact cache hits may reuse a pose without
+calling the hook. A continuous walk and seek are bit-identical for an **unchanged
+patch and matched history**: the same animation, environment, adjustment, reset
+and step partition. Closed-over callback state still needs `repose()` or the
+adjust setter to invalidate cached poses. Pause, zero advance and renderer mode
+changes add no evaluations; explicit `repose()` keeps the same context time.
+
+### Live physics parameters
+
+```ts
+player.play('hang');
+player.setPhysicsParameters('link_1_phys', { damping: 0.4, wind: 8 });
+player.readPhysicsParameters('link_1_phys'); // { override, effective }
+player.clearPhysicsParameters('link_1_phys');
+```
+
+`setPhysicsParameters(name, patch)` forwards a per-player patch of `strength`,
+`damping`, `inertia`, `wind`, `gravity`, and `mix` to the core. Omitted fields keep
+their standing override. Values are runtime scalars with no clamping, conversion,
+new clock or solver. The core applies them **after authored/keyed values and
+sliders, before the integrator**. Unknown constraints, a non-physics constraint,
+unknown fields and non-finite/non-number values are refused atomically by name.
+These methods require a live track: before `play`/`queue`, set, read and clear
+refuse with `no live track` instead of creating one. The model and other players
+sharing its assets are untouched.
+
+`PhysicsParameterRead` contains detached readonly snapshots: `override` is the
+pending patch or null; `effective` is the six values from the last active
+evaluation, or null until evaluated. An inactive constraint can retain its last
+active values within that live core instance. Setting or clearing changes no
+pose, time or physics state, and **does not evaluate**: effective keeps the last
+values until a normal evaluation (or an explicitly requested `repose()`). Clear
+removes the patch; authored keys resume at the next evaluation. It preserves
+integrated history and does not instantly undo the motion caused by old values.
+
+The player retains the **current standing patch** across new play, seek, skin
+replay and promotion to composed tracks. Like `environment()`, it records no
+historical changes. **After a mid-run patch change, a backward seek recomputes the
+past interval with the patch standing now**, under the current environment; it
+does not reproduce the old trajectory across that change. New single tracks and
+new composed tracks first evaluate their ordinary authored first pose, then
+receive the standing patch as pending, with no extra adjustment callback. At
+seek time 0, effective can therefore still be the initial authored value while
+override already reports the patch. The next normal core evaluation uses it.
+Changing entries on existing composed tracks follows that core instance's
+lifetime. Existing seek/skin restrictions after composition remain unchanged.
+
+Set/clear invalidate seek caches without re-posing. Seek snapshots retain the
+public effective read alongside their held pose, so backward and exact cache
+hits report that pose's evaluation rather than the frontier's latest evaluation.
+Readback itself never advances, evaluates or resets physics.
+
 ### One load, several players
 
 One `loadModel` backs any number of players: the regions are cut once, and
@@ -1043,8 +1114,9 @@ name, and unloading is still elements first, bitmaps second.
 | dark (two-colour) tint: unsupported | `DomRenderer`: unsupported. `CanvasRenderer`: drawn | Carried as `dark` on a `PosedSlot`. The canvas mode's canvas2d fallback draws alpha only. |
 | `renderer.dispose()` | `player.dispose()` | Then `assets.dispose()`, as before. `DomRenderer.dispose()` and `CanvasRenderer.dispose()` exist for a renderer you constructed yourself. |
 | `skeleton.findBone('head').worldX`, `.worldY`, `.a` … `.d` | `player.bone('head')` | `{ x, y, a, b, c, d, rotationX, rotationY, scaleX, scaleY, active }`, the core's world transform for the pose the player holds (the setup pose before `play`). An unknown name is refused by name. Since 1.1.0. |
-| `bone.scaleY = …` on a `Skeleton` between `state.apply` and `updateWorldTransform` | `RigPlayerOptions.adjust`, `player.adjust`, `player.repose()` | A function called once per pose with the pose's bone locals (`bones.bone('mouth').scaleY = v`). A write lasts one pose: the core poses every step from the setup pose, so write the value you want, every pose — nothing compounds. See *Adjusting bones*. Since 1.2.0. |
+| `bone.scaleY = …` on a `Skeleton` between `state.apply` and `updateWorldTransform` | `RigPlayerOptions.adjust`, `player.adjust`, `player.repose()` | A function `(bones, ctx)` called once per pose with the pose's bone locals and current-entry context (unary callbacks remain valid) (`bones.bone('mouth').scaleY = v`). A write lasts one pose: the core poses every step from the setup pose, so write the value you want, every pose — nothing compounds. See *Adjusting bones*. Since 1.2.0. |
 | `skeleton.getBounds(offset, size)` | `player.bounds()` | `{ x, y, width, height }` or null, world units, Y up: the box of every drawn region's corners and mesh's vertices, a slot under a clip counted inside the clip's own box. `ModelAssets.stage` remains the declared framing, not this box. Since 1.1.0. |
+| live named physics constraint tuning | `player.setPhysicsParameters(name, patch)`, `readPhysicsParameters(name)`, `clearPhysicsParameters(name)` | Six scalar fields, per-player pending patch plus last evaluated effective values. Clear resumes authored values without resetting history. Replay uses the current standing patch, with no historical journal. See *Live physics parameters*. |
 | named setup mesh geometry | `readSetupMesh(assets, { slot, attachment, skin? })` | Detached full-double world x/y (Y up), triangles and hull for any named mesh/linked mesh, including non-setup selections; no player/time mutation. Selected geometry includes setup-slider deform; unselected geometry is stored geometry through unchanged setup matrices. See the measured official-runtime distinction under *Reading the pose*. |
 
 ### No counterpart in 1.0.0
