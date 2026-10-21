@@ -71,8 +71,9 @@ URLs (`firejune/spine-html`, `firejune/rig-play`); nothing redirects an npm page
 - **An alias never has its own version.** No version of `rig-play` or
   `spine-html` is made by hand: it is `@rig-c/play`'s files at its version, or
   nothing. The one step that publishes aliases alone is the `alias` job of
-  `release.yml`, run by hand (**Actions → release → Run workflow**, with the
-  version and the aliases still missing) when a cut published `@rig-c/play` and
+  `release.yml`, run by hand (**Actions → release → Run workflow**, on the
+  version's tag with the version and the aliases still missing; see the source
+  checks below) when a cut published `@rig-c/play` and
   an alias publish after it failed — the first `rig-play` cut, v1.0.0, did
   exactly that, on a `spine-html` trusted-publisher form that still named the
   repository's old path. The release job cannot be re-run for it (its first
@@ -97,9 +98,15 @@ If release-please created the tag and GitHub release but the first
 `@rig-c/play` publish failed (for example, a signing-service outage), rerunning
 the push job cannot recover it: release-please no longer reports a new release.
 With the owner's release approval, use **Actions → release → Run workflow**
-on **main**, set **tag** to the existing `vX.Y.Z`, and leave **alias_version**
+on the existing **vX.Y.Z tag**, set **tag** to that tag, and leave **alias_version**
 empty. The default **alias_names** belongs to alias repair and is ignored here.
 Do not create another tag or publish locally.
+
+The CLI equivalent is `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
+Only tags carrying the source-context guard described below can be retried this
+way. A tag cut before the fix carries its older workflow: dispatching on it does
+not run the current main workflow and cannot retroactively gain this safeguard.
+Do not use this recovery procedure for those old tags.
 
 The workflow requires exactly one of **tag** and **alias_version**. Tag retry
 refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
@@ -117,17 +124,25 @@ same steps then publish both aliases with provenance and confirm all three
 names from registry tarballs. There is no separate typecheck/smoke gate in this
 workflow beyond the build that `prepublishOnly` runs.
 
-Checkout source and workflow execution context are distinct. On a dispatch from
-main, checking out the tag does not change the event's `GITHUB_REF` or
-`GITHUB_SHA`. The existing `--provenance` flag is preserved; it alone does not
-establish that the attestation identifies the checked-out tag commit. Inspect
-that relationship in a separately authorized live provenance verification.
+Checkout source and workflow execution context are distinct. For **both** tag
+retry and alias-only repair, the workflow compares the run's `github.sha` context
+(the source `GITHUB_SHA` npm provenance records) with the actual checked-out
+`HEAD` commit before installing anything or publishing. A missing or unequal run
+SHA refuses with `PROVENANCE_SHA_MISMATCH`, naming the run SHA (or `<missing>`)
+and checkout SHA; a failed HEAD lookup refuses with `PROVENANCE_SHA_LOOKUP`.
+Checking out a tag from a main-ref dispatch does not change `GITHUB_SHA`, so
+that dispatch fails when main and the tag name different commits. No GitHub
+metadata is overridden. Live OIDC issuance and the registry's resulting
+attestation still require separately authorized verification.
 See GitHub's [`workflow_dispatch` context table](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 and the [npm CLI provenance implementation](https://github.com/npm/cli/blob/latest/workspaces/libnpmpublish/lib/provenance.js#L44-L49).
 
 If `@rig-c/play` already exists and an alias is missing, leave **tag** empty
-and use **alias_version** and **alias_names** as described above. That path
-continues to derive aliases from the canonical registry tarball, never a rebuild.
+and use **alias_version** and **alias_names** as described above, dispatching on
+that version's tag: `gh workflow run release.yml --ref vX.Y.Z -f alias_version=X.Y.Z -f 'alias_names=rig-play spine-html'`
+(name only the missing aliases). The same old-tag limitation applies. That path
+continues to derive aliases from the canonical registry tarball, never a rebuild;
+the source guard binds its execution context to the checkout used by that path.
 Tag retry does not republish canonical or skip arbitrary aliases.
 
 The isolated decision checks run with `bun test scripts/release-workflow.test.ts`.

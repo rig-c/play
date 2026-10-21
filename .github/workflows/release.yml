@@ -92,7 +92,6 @@ jobs:
           ALIAS_VERSION: ${{ inputs.alias_version }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = push ]; then
@@ -121,10 +120,6 @@ jobs:
           fi
           if ! [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::RELEASE_TAG_FORM: tag must be vX.Y.Z"
-            exit 1
-          fi
-          if [ "$WORKFLOW_REF" != refs/heads/main ]; then
-            echo "::error::RELEASE_WORKFLOW_REF: retry from main with the tag input"
             exit 1
           fi
           release_result="$RUNNER_TEMP/release-response.txt"
@@ -196,6 +191,24 @@ jobs:
             else
               echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: cannot verify checked-out tag ancestry"
             fi
+            exit 1
+          fi
+
+      # npm provenance names the run's SHA, not the checkout. Dispatch on the
+      # tag; only tags carrying this guard can safely use this recovery path.
+      - name: Verify the dispatched source commit
+        if: ${{ steps.target.outputs.mode == 'tag' }}
+        env:
+          RUN_SHA: ${{ github.sha }}
+          TAG_NAME: ${{ steps.target.outputs.tag }}
+        run: &provenance_source_guard |
+          set -euo pipefail
+          if ! checkout_sha="$(git rev-parse --verify 'HEAD^{commit}')" || [ -z "$checkout_sha" ]; then
+            echo "::error::PROVENANCE_SHA_LOOKUP: cannot resolve the checked-out HEAD commit"
+            exit 1
+          fi
+          if [ -z "${RUN_SHA:-}" ] || [ "$RUN_SHA" != "$checkout_sha" ]; then
+            echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA ${RUN_SHA:-<missing>} is not $TAG_NAME's checked-out HEAD $checkout_sha, and npm provenance would name the former; dispatch with --ref $TAG_NAME"
             exit 1
           fi
 
@@ -316,6 +329,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: v${{ inputs.alias_version }}
+
+      - name: Verify the dispatched source commit
+        env:
+          RUN_SHA: ${{ github.sha }}
+          TAG_NAME: v${{ inputs.alias_version }}
+        run: *provenance_source_guard
 
       - uses: actions/setup-node@v4
         with:
