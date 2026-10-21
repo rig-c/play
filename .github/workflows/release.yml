@@ -168,6 +168,37 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.checkout_ref }}
 
+      # A public release alone cannot authorize a tag from an off-main commit.
+      - name: Verify the retry tag is on main
+        if: ${{ steps.target.outputs.mode == 'tag' }}
+        run: |
+          set -euo pipefail
+          if ! shallow="$(git rev-parse --is-shallow-repository)"; then
+            echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: cannot determine checkout history depth"
+            exit 1
+          fi
+          fetch_args=(--no-tags)
+          case "$shallow" in
+            true) fetch_args+=(--unshallow) ;;
+            false) ;;
+            *) echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: unknown checkout history depth"; exit 1 ;;
+          esac
+          if ! git fetch "${fetch_args[@]}" origin refs/heads/main:refs/remotes/origin/main; then
+            echo "::error::RELEASE_TAG_MAIN_FETCH: cannot fetch complete main history"
+            exit 1
+          fi
+          if git merge-base --is-ancestor HEAD origin/main; then
+            :
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "::error::RELEASE_TAG_NOT_ON_MAIN: checked-out tag commit is not on main"
+            else
+              echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: cannot verify checked-out tag ancestry"
+            fi
+            exit 1
+          fi
+
       # Refuse a moved/mistyped tag before prepublishOnly can build or publish.
       - name: Verify the retry tag matches the package
         if: ${{ steps.target.outputs.mode == 'tag' }}

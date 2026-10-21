@@ -14,9 +14,9 @@ const source = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8')
 const workflow = Bun.YAML.parse(source) as any;
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const resolver = workflow.jobs.release.steps.find((s: Step) => s.id === 'target') as Step;
-const originalSteps = workflow.jobs.release.steps.filter((s: Step) => s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package');
+const originalSteps = workflow.jobs.release.steps.filter((s: Step) => s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
 
-// The mock never delegates npm/gh/bun to the host. Only node's local JSON checks
+// The mock never delegates npm/gh/bun/git to the host. Only node's local JSON checks
 // reach a real interpreter; alias pack/compare are recorded stand-ins here.
 const mock = String.raw`
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
@@ -36,6 +36,23 @@ if (command === 'gh') {
   if (status === 0) { console.error('mock connection failure'); process.exit(1); }
   console.log('HTTP/2.0 ' + status + '\r\nx-mock: true\r\n\r\n' + JSON.stringify({tag_name:'v1.12.0', draft:config.draft ?? false, published_at:config.unpublished ? null : '2026-10-21T00:00:00Z'}));
   process.exit(status === 200 ? 0 : 1);
+}
+if (command === 'git') {
+  if (args.join(' ') === 'rev-parse --is-shallow-repository') {
+    if (config.gitQueryFails) process.exit(128);
+    console.log(config.shallow ?? 'true'); process.exit(0);
+  }
+  if (args[0] === 'fetch') {
+    const expected = ['fetch','--no-tags', ...(config.shallow === 'false' ? [] : ['--unshallow']), 'origin','refs/heads/main:refs/remotes/origin/main'];
+    if (JSON.stringify(args) !== JSON.stringify(expected)) fail('unexpected fetch or incomplete main history');
+    state.mainFetched = !config.gitFetchFails; save();
+    process.exit(config.gitFetchFails ? 128 : 0);
+  }
+  if (args.join(' ') === 'merge-base --is-ancestor HEAD origin/main') {
+    if (!state.mainFetched) fail('ancestry before full main fetch');
+    process.exit(config.ancestryStatus ?? 0);
+  }
+  fail('unexpected git query');
 }
 if (command === 'npm') {
   if (args[0] === 'view') {
@@ -104,14 +121,15 @@ type Scenario = {
   event?: string; created?: string; cutTag?: string; tag?: string; aliasVersion?: string;
   aliasNames?: string; ref?: string; served?: string[]; ghStatus?: number; draft?: boolean;
   unpublished?: boolean; registryError?: string; registryMalformed?: boolean; packageVersion?: string;
-  packageName?: string; buildFails?: boolean;
+  packageName?: string; buildFails?: boolean; shallow?: string; gitQueryFails?: boolean;
+  gitFetchFails?: boolean; ancestryStatus?: number;
 };
 function exercise(config: Scenario = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'play-release-mock-'));
   try {
     const bin = join(dir, 'bin'); mkdirSync(bin);
     const home = join(dir, 'home'); mkdirSync(home);
-    for (const cli of ['npm','gh','node','bun'])
+    for (const cli of ['npm','gh','node','bun','git'])
       writeFileSync(join(bin, cli), '#!' + process.execPath + '\n' + mock, {mode:0o755});
     const log = join(dir, 'calls.jsonl'); writeFileSync(log, '');
     const state = join(dir, 'state.json'); writeFileSync(state, JSON.stringify({served:config.served ?? []}));
@@ -229,6 +247,28 @@ describe('release workflow contract', () => {
   test('malformed registry failure fails closed', () => { refused({registryMalformed:true}, 'RELEASE_REGISTRY_LOOKUP'); });
   test.each([{tag:'',aliasVersion:''},{tag:'v1.12.0',aliasVersion:'1.12.0'},{tag:'',aliasVersion:'1.12.0;bad'}])('rejects ambiguous/empty/invalid mode %j', scenario => { refused(scenario, 'RELEASE_MODE'); });
   test('tag retry must run workflow from main', () => { refused({ref:'refs/heads/other'}, 'RELEASE_WORKFLOW_REF'); });
+  test.each(['true','false'])('tag ancestry fetch handles shallow=%s before checking exact HEAD/main ancestry', shallow => {
+    const r = exercise({shallow}); expect(r.status).toBe(0);
+    expect(r.calls.filter(c=>c.command === 'git').map(c=>c.args)).toEqual([
+      ['rev-parse','--is-shallow-repository'],
+      ['fetch','--no-tags', ...(shallow === 'true' ? ['--unshallow'] : []), 'origin','refs/heads/main:refs/remotes/origin/main'],
+      ['merge-base','--is-ancestor','HEAD','origin/main'],
+    ]);
+    expect(r.ran.indexOf('Verify the retry tag is on main')).toBeLessThan(r.ran.indexOf('Verify the retry tag matches the package'));
+  });
+  test.each([
+    {scenario:{ancestryStatus:1},code:'RELEASE_TAG_NOT_ON_MAIN',calls:3},
+    {scenario:{ancestryStatus:128},code:'RELEASE_TAG_ANCESTRY_LOOKUP',calls:3},
+    {scenario:{gitQueryFails:true},code:'RELEASE_TAG_ANCESTRY_LOOKUP',calls:1},
+    {scenario:{shallow:'unknown'},code:'RELEASE_TAG_ANCESTRY_LOOKUP',calls:1},
+    {scenario:{gitFetchFails:true},code:'RELEASE_TAG_MAIN_FETCH',calls:2},
+  ])('tag ancestry fails closed for %j', ({scenario,code,calls}) => {
+    const r = refused(scenario, code);
+    expect(r.calls.filter(c=>c.command === 'git')).toHaveLength(calls);
+    expect(r.calls.some(c=>c.command === 'npm' && ['install','publish'].includes(c.args[0]) || c.command === 'bun')).toBe(false);
+    expect(r.ran).not.toContain('Verify the retry tag matches the package');
+    if (code !== 'RELEASE_TAG_NOT_ON_MAIN') expect(r.output).not.toContain('RELEASE_TAG_NOT_ON_MAIN');
+  });
   test.each([{packageVersion:'1.11.0'},{packageName:'rig-play'}])('checks tagged manifest before installs/publish %j', scenario => {
     const r = refused(scenario, 'RELEASE_TAG_VERSION'); expect(r.calls.some(c=>c.command === 'npm' && c.args[0] === 'install')).toBe(false);
   });
@@ -244,6 +284,7 @@ describe('release workflow contract', () => {
     expect(r.actions[0].uses).toBe('googleapis/release-please-action@v4');
     expect(r.calls.some(c=>c.command === 'gh' || c.args.includes('--json'))).toBe(false);
     expect(r.ran).not.toContain('Verify the retry tag matches the package');
+    expect(r.calls.some(c=>c.command === 'git')).toBe(false);
   });
   test('push without a release remains a no-op', () => {
     const r = exercise({event:'push',created:'false'}); expect(r.status).toBe(0);
@@ -254,7 +295,7 @@ describe('release workflow contract', () => {
     const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames:'spine-html',served:['@rig-c/play','rig-play']});
     expect(r.status).toBe(0); expect(r.aliasRan).toBe(true); expect(published(r)).toEqual(['spine-html']);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('v1.12.0');
-    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'gh')).toBe(false);
+    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'gh' || c.command === 'git')).toBe(false);
     const pack = r.calls.find(c=>c.command === 'node' && c.args[1] === 'pack');
     expect(pack.args).toContain('--tarball');
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual([['@rig-c/play','spine-html','1.12.0']]);

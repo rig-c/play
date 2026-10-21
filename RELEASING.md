@@ -106,7 +106,12 @@ refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
 (`RELEASE_TAG_UNRELEASED`), and a canonical version already served by npm
 (`RELEASE_ALREADY_PUBLISHED`). Only an explicit registry `E404` permits the
 retry; network, permission and unknown errors stop it. It checks out the exact
-`refs/tags/vX.Y.Z` and requires that tree's package name and version to match.
+`refs/tags/vX.Y.Z`, fetches main's full history (unshallowing when needed),
+and requires that checked-out tag commit to be an ancestor of `origin/main`
+(`RELEASE_TAG_NOT_ON_MAIN` otherwise). History queries and fetch errors stop the
+retry; an unknown result never counts as ancestry. These checks run before
+installing dependencies or publishing, then that tree's package name and version
+must match the tag. Push releases retain their existing checkout and steps.
 The existing `prepublishOnly` library build gates the canonical publish; the
 same steps then publish both aliases with provenance and confirm all three
 names from registry tarballs. There is no separate typecheck/smoke gate in this
