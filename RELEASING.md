@@ -102,7 +102,7 @@ on the existing **vX.Y.Z tag**, set **tag** to that tag, and leave **alias_versi
 empty. The default **alias_names** belongs to alias repair and is ignored here.
 Do not create another tag or publish locally.
 
-The CLI equivalent is `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`.
+The CLI equivalent is `gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z -f tag=vX.Y.Z`.
 Only tags carrying the source-context guard described below can be retried this
 way. A tag cut before the fix carries its older workflow: dispatching on it does
 not run the current main workflow and cannot retroactively gain this safeguard.
@@ -112,24 +112,44 @@ The workflow requires exactly one of **tag** and **alias_version**. Tag retry
 refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
 (`RELEASE_TAG_UNRELEASED`), and a canonical version already served by npm
 (`RELEASE_ALREADY_PUBLISHED`). Only an explicit registry `E404` permits the
-retry; network, permission and unknown errors stop it. It checks out the exact
-`refs/tags/vX.Y.Z`, fetches main's full history (unshallowing when needed),
+retry; network, permission and unknown errors stop it. It resolves the explicit
+tag through `commits/tags%2FvX.Y.Z` to a full commit SHA, checks out that immutable
+SHA, fetches main's full history (unshallowing when needed),
 and requires that checked-out tag commit to be an ancestor of `origin/main`
 (`RELEASE_TAG_NOT_ON_MAIN` otherwise). History queries and fetch errors stop the
 retry; an unknown result never counts as ancestry. These checks run before
 installing dependencies or publishing, then that tree's package name and version
-must match the tag. Push releases retain their existing checkout and steps.
+must match the tag.
 The existing `prepublishOnly` library build gates the canonical publish; the
 same steps then publish both aliases with provenance and confirm all three
 names from registry tarballs. There is no separate typecheck/smoke gate in this
 workflow beyond the build that `prepublishOnly` runs.
 
-Checkout source and workflow execution context are distinct. For **both** tag
-retry and alias-only repair, the workflow compares the run's `github.sha` context
-(the source `GITHUB_SHA` npm provenance records) with the actual checked-out
-`HEAD` commit before installing anything or publishing. A missing or unequal run
-SHA refuses with `PROVENANCE_SHA_MISMATCH`, naming the run SHA (or `<missing>`)
-and checkout SHA; a failed HEAD lookup refuses with `PROVENANCE_SHA_LOOKUP`.
+Checkout source and workflow execution context are distinct. For **push, tag
+retry and alias-only repair**, before checkout or enabling publication, the
+workflow compares the run's `github.sha` context (the source `GITHUB_SHA` npm
+provenance records) with the resolved tag commit. The commits API resolves both
+lightweight and annotated tags to commits, not annotated tag objects; the
+explicit `tags%2F` reference avoids a same-named branch. API failures, empty or
+malformed responses refuse with `RELEASE_TAG_UNRESOLVED`; only a full 40-character
+lowercase hexadecimal SHA is accepted. A missing or unequal run SHA refuses
+with `PROVENANCE_SHA_MISMATCH`, naming both SHAs and a repository-scoped recovery
+command. Successful paths check out the validated SHA, even if the tag moves
+after resolution; alias repair receives that SHA through the release job output.
+Tag retry and alias repair also retain the post-checkout `HEAD` comparison before
+installing anything or publishing (`PROVENANCE_SHA_LOOKUP` for a failed HEAD
+lookup). Alias repair gains no main-ancestry requirement.
+
+On push this check follows release-please, only when it reports a new release.
+A rerun of an older push may cut a tag at a newer commit while the run still
+names its original SHA. The guard refuses before any of the three publishes;
+the tag and GitHub release remain cut. With release approval, recover using the
+printed command: `gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z -f tag=vX.Y.Z`.
+A push without a new release performs no tag lookup. These checks apply only to
+workflow versions containing them: they do not repair already-published
+provenance, an old run's stored workflow copy, or tags carrying an older workflow.
+The old-tag limitation above still applies.
+
 Checking out a tag from a main-ref dispatch does not change `GITHUB_SHA`, so
 that dispatch fails when main and the tag name different commits. No GitHub
 metadata is overridden. Live OIDC issuance and the registry's resulting
@@ -139,10 +159,13 @@ and the [npm CLI provenance implementation](https://github.com/npm/cli/blob/late
 
 If `@rig-c/play` already exists and an alias is missing, leave **tag** empty
 and use **alias_version** and **alias_names** as described above, dispatching on
-that version's tag: `gh workflow run release.yml --ref vX.Y.Z -f alias_version=X.Y.Z -f 'alias_names=rig-play spine-html'`
+that version's tag: `gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z -f alias_version=X.Y.Z -f 'alias_names=rig-play spine-html'`
 (name only the missing aliases). The same old-tag limitation applies. That path
 continues to derive aliases from the canonical registry tarball, never a rebuild;
 the source guard binds its execution context to the checkout used by that path.
+An alias mismatch prints an alias-repair command preserving the original
+space-separated `alias_names` selection with shell-safe quoting; it never sends
+an already-published canonical version to the tag-retry path.
 Tag retry does not republish canonical or skip arbitrary aliases.
 
 The isolated decision checks run with `bun test scripts/release-workflow.test.ts`.

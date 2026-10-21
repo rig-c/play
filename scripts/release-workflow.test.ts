@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { ALIASES } from '../scripts/alias-tarball.mjs';
@@ -15,6 +15,9 @@ const workflow = Bun.YAML.parse(source) as any;
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const tagSha = '1111111111111111111111111111111111111111';
 const otherSha = '2222222222222222222222222222222222222222';
+const commitRequest = ['api','repos/rig-c/play/commits/tags%2Fv1.12.0','--jq','.sha'];
+const canonicalRecovery = 'gh workflow run release.yml --repo rig-c/play --ref v1.12.0 -f tag=v1.12.0';
+const aliasRecovery = (names: string) => 'gh workflow run release.yml --repo rig-c/play --ref v1.12.0 -f alias_version=1.12.0 -f alias_names=' + names.replaceAll(' ', '\\ ');
 const sourceGuard = (s: Step) => s.name === 'Verify the dispatched source commit';
 const resolver = workflow.jobs.release.steps.find((s: Step) => s.id === 'target') as Step;
 const originalSteps = workflow.jobs.release.steps.filter((s: Step) => !sourceGuard(s) && s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
@@ -34,6 +37,15 @@ const save = () => writeFileSync(process.env.MOCK_STATE, JSON.stringify(state));
 const fail = message => { console.error(message); process.exit(71); };
 record(command, args);
 if (command === 'gh') {
+  if (args[1]?.includes('/commits/')) {
+    if (JSON.stringify(args) !== JSON.stringify(['api','repos/rig-c/play/commits/tags%2Fv1.12.0','--jq','.sha'])) fail('tag commit request must use explicit tags/ and select commit SHA');
+    if (config.commitLookupFails) { console.error('mock commit lookup failure'); process.exit(1); }
+    // The commits endpoint returns a commit for either tag kind, even if an
+    // annotated tag object or a same-named branch has a different SHA.
+    const sha = config.resolvedSha ?? '1111111111111111111111111111111111111111';
+    record('commit-response', [config.tagKind ?? 'lightweight', sha]);
+    console.log(sha); process.exit(0);
+  }
   if (args[0] !== 'api' || args[1] !== '--include' || args[2] !== 'repos/rig-c/play/releases/tags/v1.12.0') fail('unexpected gh request');
   const status = config.ghStatus ?? 200;
   if (status === 0) { console.error('mock connection failure'); process.exit(1); }
@@ -131,6 +143,8 @@ type Scenario = {
   unpublished?: boolean; registryError?: string; registryMalformed?: boolean; packageVersion?: string;
   packageName?: string; buildFails?: boolean; shallow?: string; gitQueryFails?: boolean;
   gitFetchFails?: boolean; ancestryStatus?: number; runSha?: string; headSha?: string; headQueryFails?: boolean;
+  resolvedSha?: string; commitLookupFails?: boolean; tagKind?: 'lightweight' | 'annotated';
+  movedTagSha?: string;
 };
 function exercise(config: Scenario = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'play-release-mock-'));
@@ -166,16 +180,26 @@ function exercise(config: Scenario = {}) {
       return values[match[1]] === match[2];
     };
     const actions: {uses: string; ref?:string}[] = [];
+    const timeline: string[] = [];
+    const outputWrites: {step: string; status: number; text: string}[] = [];
     const ran: string[] = [];
     let status = 0, output = '';
     const execute = (step: Step, jobEnv: Record<string,string> = {}) => {
       if (!condition(step.if)) return;
+      timeline.push(step.uses ?? step.name ?? step.id ?? 'run');
       if (step.uses) {
         actions.push({uses:step.uses, ...(step.with?.ref ? {ref:expand(step.with.ref)} : {})});
         if (step.uses === 'actions/checkout@v4') {
           const current = JSON.parse(readFileSync(state, 'utf8'));
           current.checkedOutRef = expand(step.with!.ref);
-          current.checkoutSha = config.headSha ?? tagSha;
+          // Simulate a tag moving after resolution. Immutable SHA checkout is
+          // unaffected; a regression to a mutable ref receives the moved SHA.
+          current.checkoutSha = config.headSha ?? (/^[0-9a-f]{40}$/.test(current.checkedOutRef)
+            ? current.checkedOutRef : config.movedTagSha ?? config.resolvedSha ?? tagSha);
+          writeFileSync(state, JSON.stringify(current));
+        } else if (step.uses === 'googleapis/release-please-action@v4' && config.created === 'true') {
+          const current = JSON.parse(readFileSync(state, 'utf8'));
+          current.cutTag = config.cutTag ?? 'v1.12.0';
           writeFileSync(state, JSON.stringify(current));
         }
         return;
@@ -191,6 +215,7 @@ function exercise(config: Scenario = {}) {
       const result = spawnSync('/bin/bash', ['-e','-o','pipefail','-c',step.run], {cwd:dir, env, encoding:'utf8', timeout:10000});
       if (result.error) throw result.error;
       status = result.status ?? 1; output += result.stdout + result.stderr;
+      outputWrites.push({step:step.id ?? step.name ?? 'run', status, text:readFileSync(outFile, 'utf8')});
       if (status === 0 && step.id) {
         for (const line of readFileSync(outFile, 'utf8').trim().split('\n').filter(Boolean)) {
           const index = line.indexOf('='); const key = line.slice(0,index), value = line.slice(index+1);
@@ -199,10 +224,19 @@ function exercise(config: Scenario = {}) {
       }
     };
     for (const step of workflow.jobs.release.steps as Step[]) { execute(step); if (status) break; }
-    values['needs.release.outputs.mode'] = outputs.mode ?? '';
+    for (const [key,value] of Object.entries(workflow.jobs.release.outputs) as [string,string][]) {
+      const expression = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(value)![1];
+      values[`needs.release.outputs.${key}`] = values[expression] ?? '';
+    }
     const aliasRan = status === 0 && condition(workflow.jobs.alias.if);
     if (aliasRan) for (const step of workflow.jobs.alias.steps as Step[]) { execute(step, workflow.jobs.alias.env); if (status) break; }
-    return {status, output, outputs, actions, ran, aliasRan, calls:readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))};
+    const result = {status, output, outputs, actions, ran, aliasRan, timeline, outputWrites,
+      state:JSON.parse(readFileSync(state, 'utf8')),
+      calls:readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))};
+    // Optional private raw evidence; no path is baked into the public tree.
+    if (process.env.RELEASE_WORKFLOW_MOCK_LOG)
+      appendFileSync(process.env.RELEASE_WORKFLOW_MOCK_LOG, JSON.stringify({config,...result}) + '\n');
+    return result;
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }
 const published = (r: ReturnType<typeof exercise>) => r.calls.filter(c => c.command === 'published').map(c => c.args[0]);
@@ -216,6 +250,30 @@ function refused(config: Scenario, code: string) {
   noInstallOrPublish(r);
   return r;
 }
+function unresolvedBeforeCheckout(config: Scenario, code: string) {
+  const r = refused(config, code);
+  expect(r.outputs).toEqual({});
+  // Inspect even the failed step's raw output file: ignored failed-step
+  // outputs must not conceal an early publish=true or an unsafe checkout ref.
+  expect(r.outputWrites.find(w=>w.step === 'target')?.text).toBe('');
+  expect(r.actions.some(a=>a.uses === 'actions/checkout@v4' || a.uses === 'actions/setup-node@v4' || a.uses === 'oven-sh/setup-bun@v2')).toBe(false);
+  expect(r.calls.some(c=>c.command === 'git')).toBe(false);
+  return r;
+}
+
+// Parse a printed recovery hint by running it against an isolated gh recorder.
+// This never dispatches a workflow; every argument is returned as JSON.
+function recoveryArgs(command: string) {
+  const dir = mkdtempSync(join(tmpdir(), 'play-recovery-mock-'));
+  try {
+    writeFileSync(join(dir, 'gh'), '#!' + process.execPath + '\nconsole.log(JSON.stringify(process.argv.slice(2)));', {mode:0o755});
+    const result = spawnSync('/bin/bash', ['-e','-c',command], {cwd:dir, env:{PATH:dir}, encoding:'utf8', timeout:10000});
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(existsSync(join(dir, 'injected'))).toBe(false);
+    return JSON.parse(result.stdout);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+}
 
 describe('release workflow contract', () => {
   test('preserves original publication bodies/order and alias job steps', () => {
@@ -227,11 +285,12 @@ describe('release workflow contract', () => {
     };
     // SHA-256 of parsed original steps, excluding only routing condition/ref.
     expect(digest(originalSteps.map(clean))).toBe('1268705f8a94844af4d72dd083c007cbe194148864ddd5c2c9c57e9b1e7aa361');
-    expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)))).toBe('2aaeef5812c8c0beac4025a53434c90891b605209832b26ec00b54b1452b944f');
-    // Preserve the existing steps in full, including push refs/conditions and
+    expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)).map((s: Step) =>
+      s.uses === 'actions/checkout@v4' ? {...s, with:{...s.with, ref:'v${{ inputs.alias_version }}'}} : s
+    ))).toBe('2aaeef5812c8c0beac4025a53434c90891b605209832b26ec00b54b1452b944f');
+    // Preserve the existing steps in full, including publish conditions and
     // the canonical HEAD-to-main ancestry guard added before this change.
     expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('901f721eca42554866b7dc1035b5db1d4de7d8558634495b72d7352b5aa2f16f');
-    expect(digest(resolver.run!.split('if [ -n "$INPUT_TAG" ]')[0])).toBe('eac7560cf5ce8b3d604f5d35d605121396870d1bec5cc9c81db0dc7033e656eb');
     expect(ALIASES).toEqual(['rig-play','spine-html']);
     expect(workflow.concurrency).toEqual({group:'release-${{ github.ref }}', 'cancel-in-progress':false});
     expect(workflow.permissions).toEqual({});
@@ -241,10 +300,18 @@ describe('release workflow contract', () => {
     expect(workflow.jobs.alias.needs).toBe('release');
     expect(workflow.on.workflow_dispatch.inputs.tag.required).toBe(false);
     expect(workflow.on.workflow_dispatch.inputs.alias_version.required).toBe(false);
+    expect(workflow.on.push).toEqual({branches:['main']});
+    expect(workflow.on.workflow_dispatch.inputs.alias_names).toEqual({
+      description:'Which aliases to publish, space-separated (an alias already at that version would be refused)',
+      required:true, default:'rig-play spine-html', type:'string',
+    });
+    expect(workflow.jobs.release.outputs).toEqual({mode:'${{ steps.target.outputs.mode }}',checkout_ref:'${{ steps.target.outputs.checkout_ref }}'});
+    expect(workflow.jobs.alias.steps[0].with.ref).toBe('${{ needs.release.outputs.checkout_ref }}');
     const canonicalGuard = workflow.jobs.release.steps.find(sourceGuard) as Step;
     const aliasGuard = workflow.jobs.alias.steps.find(sourceGuard) as Step;
-    expect(canonicalGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'${{ steps.target.outputs.tag }}'});
-    expect(aliasGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'v${{ inputs.alias_version }}'});
+    const recoveryEnv = {REPO:'${{ github.repository }}', ALIAS_VERSION:'${{ inputs.alias_version }}', ALIAS_NAMES:'${{ inputs.alias_names }}'};
+    expect(canonicalGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'${{ steps.target.outputs.tag }}', MODE:'${{ steps.target.outputs.mode }}', ...recoveryEnv});
+    expect(aliasGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'v${{ inputs.alias_version }}', MODE:'alias', ...recoveryEnv});
     expect(aliasGuard.run).toBe(canonicalGuard.run);
     for (const job of Object.values(workflow.jobs) as any[]) {
       for (const env of [job.env ?? {}, ...job.steps.map((s: Step) => s.env ?? {})]) {
@@ -257,10 +324,10 @@ describe('release workflow contract', () => {
     }
     expect(resolver.env!.INPUT_TAG).toBe('${{ inputs.tag }}');
   });
-  test('same-SHA tag-ref retry uses exact tag, original build hook and all three publishes/confirmations (mock only)', () => {
+  test('same-SHA tag-ref retry checks out validated commit, original build hook and all three publishes/confirmations (mock only)', () => {
     const r = exercise(); expect(r.status).toBe(0); expect(r.aliasRan).toBe(false);
     expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
-    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('refs/tags/v1.12.0');
+    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.actions.some(a=>a.uses === 'googleapis/release-please-action@v4')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(ALIASES.map(a=>['@rig-c/play',a,'1.12.0']));
     expect(r.calls.find(c=>c.command === 'prepublishOnly')?.args).toEqual(['npm run build:lib']);
@@ -292,16 +359,16 @@ describe('release workflow contract', () => {
   ];
   for (const {mode,config} of dispatchModes) {
     test.each([
-      {runSha:otherSha}, {runSha:''}, {headQueryFails:true}, {headSha:''},
+      {headQueryFails:true}, {headSha:''}, {headSha:otherSha},
     ])(`${mode} source guard fails closed before install/publish for %j`, failure => {
       const r = exercise({...config,...failure});
       expect(r.status).not.toBe(0); expect(published(r)).toEqual([]);
       noInstallOrPublish(r);
-      expect(r.output).toContain('headQueryFails' in failure || 'headSha' in failure ? 'PROVENANCE_SHA_LOOKUP' : 'PROVENANCE_SHA_MISMATCH');
-      if ('runSha' in failure) {
-        expect(r.output).toContain(failure.runSha || '<missing>');
+      expect(r.output).toContain('headQueryFails' in failure || failure.headSha === '' ? 'PROVENANCE_SHA_LOOKUP' : 'PROVENANCE_SHA_MISMATCH');
+      if (failure.headSha === otherSha) {
+        expect(r.output).toContain(otherSha);
         expect(r.output).toContain(tagSha);
-        expect(r.output).toContain('--ref v1.12.0');
+        expect(r.output).toContain(mode === 'canonical' ? canonicalRecovery : aliasRecovery('rig-play spine-html'));
       }
       expect(r.calls.filter(c=>c.command === 'git').at(-1)?.args).toEqual(['rev-parse','--verify','HEAD^{commit}']);
       expect(r.calls.some(c=>c.command === 'npm' && c.args[0] === 'pack')).toBe(false);
@@ -344,14 +411,15 @@ describe('release workflow contract', () => {
     expect(r.calls.some(c=>c.command === 'compared')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'prepublishOnly')).toHaveLength(1);
   });
-  test('push with a new release has unchanged steps and no dispatch preflight', () => {
-    const r = exercise({event:'push',created:'true',ref:'refs/heads/main',runSha:otherSha,tag:'bad-input',aliasVersion:'ignored'});
+  test('push with a same-SHA new release validates before checkout and keeps all publication steps', () => {
+    const r = exercise({event:'push',created:'true',ref:'refs/heads/main',tag:'bad-input',aliasVersion:'ignored'});
     expect(r.status).toBe(0); expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
-    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('v1.12.0');
+    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.actions[0].uses).toBe('googleapis/release-please-action@v4');
-    expect(r.calls.some(c=>c.command === 'gh' || c.args.includes('--json'))).toBe(false);
+    expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
     expect(r.ran).not.toContain('Verify the retry tag matches the package');
     expect(r.calls.some(c=>c.command === 'git')).toBe(false);
+    expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(ALIASES.map(a=>['@rig-c/play',a,'1.12.0']));
   });
   test('push without a release remains a no-op', () => {
     const r = exercise({event:'push',created:'false'}); expect(r.status).toBe(0);
@@ -361,12 +429,92 @@ describe('release workflow contract', () => {
   test('same-SHA tag-ref alias-only dispatch uses served canonical, named missing alias, no canonical republish/build', () => {
     const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames:'spine-html',served:['@rig-c/play','rig-play']});
     expect(r.status).toBe(0); expect(r.aliasRan).toBe(true); expect(published(r)).toEqual(['spine-html']);
-    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('v1.12.0');
-    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'gh' || c.command === 'bun' || c.command === 'npm' && c.args[0] === 'install' && !c.args.includes('-g'))).toBe(false);
+    expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
+    expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
+    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'bun' || c.command === 'npm' && c.args[0] === 'install' && !c.args.includes('-g'))).toBe(false);
     expect(r.calls.filter(c=>c.command === 'git').map(c=>c.args)).toEqual([['rev-parse','--verify','HEAD^{commit}']]);
     expect(r.calls.findIndex(c=>c.command === 'git')).toBeLessThan(r.calls.findIndex(c=>c.command === 'npm'));
     const pack = r.calls.find(c=>c.command === 'node' && c.args[1] === 'pack');
     expect(pack.args).toContain('--tarball');
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual([['@rig-c/play','spine-html','1.12.0']]);
   });
+
+  const modes: {mode: string; config: Scenario}[] = [
+    {mode:'push',config:{event:'push',created:'true',ref:'refs/heads/main'}},
+    {mode:'tag',config:{}},
+    {mode:'alias',config:{tag:'',aliasVersion:'1.12.0',served:['@rig-c/play']}},
+  ];
+  for (const {mode,config} of modes) {
+    test.each(['lightweight','annotated'] as const)(`${mode} resolves %s via the explicit tag commits API, never a branch or tag-object SHA`, tagKind => {
+      const r = exercise({...config,tagKind});
+      expect(r.status).toBe(0);
+      expect(r.calls.filter(c=>c.command === 'gh' && c.args[1]?.includes('/commits/')).map(c=>c.args)).toEqual([commitRequest]);
+      expect(r.calls.find(c=>c.command === 'commit-response')?.args).toEqual([tagKind,tagSha]);
+      expect(r.outputs.checkout_ref).toBe(tagSha);
+      expect(r.actions.filter(a=>a.uses === 'actions/checkout@v4').map(a=>a.ref)).toEqual([tagSha]);
+      expect(published(r)).toEqual(mode === 'alias' ? ALIASES : ['@rig-c/play',...ALIASES]);
+    });
+    test.each([
+      {commitLookupFails:true}, {resolvedSha:''}, {resolvedSha:'null'}, {resolvedSha:'not-a-sha'},
+      {resolvedSha:'a'.repeat(39)}, {resolvedSha:'a'.repeat(41)}, {resolvedSha:'A'.repeat(40)},
+      {resolvedSha:' ' + tagSha}, {resolvedSha:tagSha + ' '}, {resolvedSha:tagSha + '\n' + otherSha},
+      {resolvedSha:tagSha + '\npublish=true'},
+    ])(`${mode} unresolved commit fails closed before checkout for %j`, failure => {
+      const r = unresolvedBeforeCheckout({...config,...failure}, 'RELEASE_TAG_UNRESOLVED');
+      expect(r.calls.filter(c=>c.command === 'gh' && c.args[1]?.includes('/commits/')).map(c=>c.args)).toEqual([commitRequest]);
+    });
+    test.each([otherSha,''])(`${mode} run SHA %j mismatches before checkout and preserves mode-specific recovery`, runSha => {
+      const r = unresolvedBeforeCheckout({...config,runSha}, 'PROVENANCE_SHA_MISMATCH');
+      expect(r.output).toContain(runSha || '<missing>');
+      expect(r.output).toContain(tagSha);
+      expect(r.output).toContain('the tag remains cut');
+      expect(r.output).toContain(mode === 'alias' ? aliasRecovery('rig-play spine-html') : canonicalRecovery);
+      if (mode === 'push') {
+        expect(r.state.cutTag).toBe('v1.12.0');
+        expect(r.timeline[0]).toBe('googleapis/release-please-action@v4');
+        expect(r.timeline[1]).toBe('Resolve the release target');
+      }
+    });
+    test(`${mode} tag movement after resolution cannot change the checkout`, () => {
+      const r = exercise({...config,movedTagSha:otherSha});
+      expect(r.status).toBe(0);
+      expect(r.state.checkoutSha).toBe(tagSha);
+      expect(r.outputs.checkout_ref).toBe(tagSha);
+      expect(r.actions.filter(a=>a.uses === 'actions/checkout@v4').map(a=>a.ref)).toEqual([tagSha]);
+    });
+  }
+  test('old push rerun cutting a newer tag refuses before install, canonical and both alias publishes', () => {
+    const r = unresolvedBeforeCheckout({event:'push',created:'true',runSha:otherSha}, 'PROVENANCE_SHA_MISMATCH');
+    expect(r.output).toContain(otherSha);
+    expect(r.output).toContain(tagSha);
+    expect(r.output).toContain(canonicalRecovery);
+    expect(r.state.cutTag).toBe('v1.12.0');
+    expect(r.calls.filter(c=>c.command === 'npm' || c.command === 'bun')).toEqual([]);
+    expect(recoveryArgs(r.output.split('recover with ')[1].trim())).toEqual(['workflow','run','release.yml','--repo','rig-c/play','--ref','v1.12.0','-f','tag=v1.12.0']);
+  });
+  test.each(['','1.12.0','v01.12.0','v1.12.0-beta.1','v1.12.0\npublish=true','v1.12.0;bad'])('push refuses malformed cut tag %j without API requests', cutTag => {
+    const r = unresolvedBeforeCheckout({event:'push',created:'true',cutTag}, 'RELEASE_TAG_FORM');
+    expect(r.calls).toEqual([]);
+  });
+  test.each(['false','','true-ish'])('push created=%j bypasses lookup even with a bad tag and SHA', created => {
+    const r = exercise({event:'push',created,cutTag:'bad',runSha:otherSha,commitLookupFails:true});
+    expect(r.status).toBe(0); expect(r.calls).toEqual([]);
+    expect(r.outputs).toEqual({publish:'false',mode:'push'});
+    expect(r.actions.map(a=>a.uses)).toEqual(['googleapis/release-please-action@v4']);
+  });
+  for (const names of ['spine-html','rig-play','rig-play spine-html','spine-html; $(printf unsafe > injected) "quote"']) {
+    for (const afterCheckout of [false,true]) {
+      test(`alias recovery preserves safely quoted selection ${JSON.stringify(names)} (${afterCheckout ? 'HEAD' : 'resolver'} mismatch)`, () => {
+        const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames:names,served:['@rig-c/play'],
+          ...(afterCheckout ? {headSha:otherSha} : {runSha:otherSha})});
+        expect(r.status).not.toBe(0); noInstallOrPublish(r);
+        expect(r.output).toContain('PROVENANCE_SHA_MISMATCH');
+        expect(r.output).toContain(otherSha); expect(r.output).toContain(tagSha);
+        const hint = r.output.split('recover with ')[1].trim();
+        if (!names.includes(';')) expect(hint).toBe(aliasRecovery(names));
+        expect(hint).not.toContain('-f tag=');
+        expect(recoveryArgs(hint)).toEqual(['workflow','run','release.yml','--repo','rig-c/play','--ref','v1.12.0','-f','alias_version=1.12.0','-f',`alias_names=${names}`]);
+      });
+    }
+  }
 });
