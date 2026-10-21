@@ -474,10 +474,10 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
 
 HQ assigns the issue and its scope; the authoring sub-commander implements,
 validates and reports it. These gates replace the former blanket permission to
-merge features and release-please PRs. (Naru, 2026-10-21)
+merge features and release-please PRs.
 
 - **One issue = one PR = one branch.** Start assigned work from current `main`
-  on `naru/<number>-slug`, link the issue in the PR, and keep its acceptance bars
+  on `<agent>/<number>-slug`, link the issue in the PR, and keep its acceptance bars
   and exclusions explicit. Record changes to the order on the issue.
 - **Open and report a feature PR; merge only after HQ's sign.** Green checks or
   opening a PR do not supply that sign. Report the current head and outstanding
@@ -536,9 +536,8 @@ merge features and release-please PRs. (Naru, 2026-10-21)
 - Use Conventional Commits with English subjects and bodies; release-please
   reads the subjects for versions and CHANGELOG.md. Stage explicit paths with
   `git add -- <path>`, never `git add -A`; preserve other owners' work.
-- Naru contributions retain this trailer on every contributed commit and final
-  squash message; read back the resulting commit to verify it:
-  `Co-Authored-By: Naru <342599188+fj-naru[bot]@users.noreply.github.com>`.
+- Each contributing agent's commits and the final squash carry that agent's
+  own `Co-Authored-By` trailer; read back the resulting commit to verify it.
   Keep private relational signatures out of commits and public documents.
 - For `rm`, use an explicit literal target or a required-variable guard such as
   `rm -rf -- "${OUTPUT_DIR:?}"`; never delete through an unchecked variable.
