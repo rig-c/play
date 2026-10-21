@@ -100,7 +100,7 @@ jobs:
           resolve_commit() {
             # Explicit tags/ disambiguates a same-named branch. The commits API
             # peels annotated tags as well as lightweight tags to a commit SHA.
-            if ! tag_sha="$(gh api "repos/$REPO/commits/tags%2F$release_tag" --jq .sha)"; then
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$release_tag" --jq .sha)"; then
               echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $release_tag to a commit"
               exit 1
             fi

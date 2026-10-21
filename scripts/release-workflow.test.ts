@@ -15,7 +15,13 @@ const workflow = Bun.YAML.parse(source) as any;
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const tagSha = '1111111111111111111111111111111111111111';
 const otherSha = '2222222222222222222222222222222222222222';
-const commitRequest = ['api','repos/rig-c/play/commits/tags%2Fv1.12.0','--jq','.sha'];
+const commitRequest = ['api','repos/rig-c/play/commits/refs%2Ftags%2Fv1.12.0','--jq','.sha'];
+type RecordedResponse = { argv: string[]; recordedAt: string; exit: number; stdout: string; stderr: string;
+  httpStatus: number; stdoutSha256: string; stderrSha256: string; rawResponseSha256: string };
+type CommitRecording = { name: string; repo: string; tag: string; commitSha: string;
+  ref: { argv: string[]; stdout: string; stderr: string; exit: number }; responses: RecordedResponse[] };
+const recordingsPath = join(root, 'scripts/fixtures/release-commit-responses.json');
+const recordings = JSON.parse(readFileSync(recordingsPath, 'utf8')).cases as CommitRecording[];
 const canonicalRecovery = 'gh workflow run release.yml --repo rig-c/play --ref v1.12.0 -f tag=v1.12.0';
 const aliasRecovery = (names: string) => 'gh workflow run release.yml --repo rig-c/play --ref v1.12.0 -f alias_version=1.12.0 -f alias_names=' + names.replaceAll(' ', '\\ ');
 const sourceGuard = (s: Step) => s.name === 'Verify the dispatched source commit';
@@ -32,24 +38,37 @@ const command = basename(process.argv[1]);
 const args = process.argv.slice(2);
 const config = JSON.parse(readFileSync(process.env.MOCK_CONFIG, 'utf8'));
 const state = JSON.parse(readFileSync(process.env.MOCK_STATE, 'utf8'));
+const recordings = JSON.parse(readFileSync(process.env.MOCK_RECORDINGS, 'utf8')).cases;
+const recording = config.recording ? recordings.find(r => r.name === config.recording) : undefined;
+if (config.recording && !recording) throw Error('unknown commit recording');
+const repo = recording?.repo ?? 'rig-c/play';
+const releaseTag = recording?.tag ?? 'v1.12.0';
 const record = (command, args) => appendFileSync(process.env.MOCK_LOG, JSON.stringify({command, args}) + '\n');
 const save = () => writeFileSync(process.env.MOCK_STATE, JSON.stringify(state));
 const fail = message => { console.error(message); process.exit(71); };
 record(command, args);
 if (command === 'gh') {
   if (args[1]?.includes('/commits/')) {
-    if (JSON.stringify(args) !== JSON.stringify(['api','repos/rig-c/play/commits/tags%2Fv1.12.0','--jq','.sha'])) fail('tag commit request must use explicit tags/ and select commit SHA');
+    if (recording) {
+      // Replay exact live gh bytes by request, not a tag-kind label. The old
+      // prefix really failed for git's annotated tag, but not play's lightweight.
+      const response = recording.responses.find(r => JSON.stringify(r.argv.slice(1)) === JSON.stringify(args));
+      if (!response) fail('unrecorded commit request');
+      record('commit-response', [args[1], response.stdout, response.stderr, response.exit]);
+      process.stdout.write(response.stdout); process.stderr.write(response.stderr);
+      process.exit(response.exit);
+    }
+    if (JSON.stringify(args) !== JSON.stringify(['api','repos/rig-c/play/commits/refs%2Ftags%2Fv1.12.0','--jq','.sha'])) fail('tag commit request must use full refs/tags/ and select commit SHA');
     if (config.commitLookupFails) { console.error('mock commit lookup failure'); process.exit(1); }
-    // The commits endpoint returns a commit for either tag kind, even if an
-    // annotated tag object or a same-named branch has a different SHA.
+    // Synthetic values remain only for malformed-response and SHA guard cases.
     const sha = config.resolvedSha ?? '1111111111111111111111111111111111111111';
-    record('commit-response', [config.tagKind ?? 'lightweight', sha]);
+    record('synthetic-commit-response', [sha]);
     console.log(sha); process.exit(0);
   }
-  if (args[0] !== 'api' || args[1] !== '--include' || args[2] !== 'repos/rig-c/play/releases/tags/v1.12.0') fail('unexpected gh request');
+  if (args[0] !== 'api' || args[1] !== '--include' || args[2] !== 'repos/' + repo + '/releases/tags/' + releaseTag) fail('unexpected gh request');
   const status = config.ghStatus ?? 200;
   if (status === 0) { console.error('mock connection failure'); process.exit(1); }
-  console.log('HTTP/2.0 ' + status + '\r\nx-mock: true\r\n\r\n' + JSON.stringify({tag_name:'v1.12.0', draft:config.draft ?? false, published_at:config.unpublished ? null : '2026-10-21T00:00:00Z'}));
+  console.log('HTTP/2.0 ' + status + '\r\nx-mock: true\r\n\r\n' + JSON.stringify({tag_name:releaseTag, draft:config.draft ?? false, published_at:config.unpublished ? null : '2026-10-21T00:00:00Z'}));
   process.exit(status === 200 ? 0 : 1);
 }
 if (command === 'git') {
@@ -123,7 +142,7 @@ if (command === 'node') {
       const dest = args[args.indexOf('--out') + 1];
       mkdirSync(dest, {recursive:true});
       const file = join(dest, name + '.tgz');
-      writeFileSync(file, JSON.stringify({name, version:'1.12.0'})); console.log(file); process.exit(0);
+      writeFileSync(file, JSON.stringify({name, version:JSON.parse(readFileSync('package.json', 'utf8')).version})); console.log(file); process.exit(0);
     }
     if (args[1] === 'compare') {
       const a = JSON.parse(readFileSync(args[2], 'utf8'));
@@ -143,10 +162,15 @@ type Scenario = {
   unpublished?: boolean; registryError?: string; registryMalformed?: boolean; packageVersion?: string;
   packageName?: string; buildFails?: boolean; shallow?: string; gitQueryFails?: boolean;
   gitFetchFails?: boolean; ancestryStatus?: number; runSha?: string; headSha?: string; headQueryFails?: boolean;
-  resolvedSha?: string; commitLookupFails?: boolean; tagKind?: 'lightweight' | 'annotated';
+  resolvedSha?: string; commitLookupFails?: boolean; recording?: string;
   movedTagSha?: string;
 };
-function exercise(config: Scenario = {}) {
+function exercise(config: Scenario = {}, workflowFile?: string) {
+  const input = workflowFile ? readFileSync(workflowFile, 'utf8') : source;
+  const definition = workflowFile ? Bun.YAML.parse(input) as any : workflow;
+  const recording = config.recording ? recordings.find(r => r.name === config.recording)! : undefined;
+  const releaseTag = recording?.tag ?? 'v1.12.0';
+  const resolvedSha = recording?.commitSha ?? tagSha;
   const dir = mkdtempSync(join(tmpdir(), 'play-release-mock-'));
   try {
     const bin = join(dir, 'bin'); mkdirSync(bin);
@@ -157,17 +181,17 @@ function exercise(config: Scenario = {}) {
     const state = join(dir, 'state.json'); writeFileSync(state, JSON.stringify({served:config.served ?? []}));
     const cfg = join(dir, 'config.json'); writeFileSync(cfg, JSON.stringify(config));
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-    manifest.version = config.packageVersion ?? '1.12.0';
+    manifest.version = config.packageVersion ?? releaseTag.slice(1);
     manifest.name = config.packageName ?? '@rig-c/play';
     writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest));
     const outputs: Record<string,string> = {};
     const values: Record<string,string> = {
       'github.event_name': config.event ?? 'workflow_dispatch',
-      'github.ref': config.ref ?? 'refs/tags/v1.12.0', 'github.sha':config.runSha ?? tagSha,
-      'github.repository':'rig-c/play', 'github.token':'mock-token',
-      'inputs.tag':config.tag ?? 'v1.12.0', 'inputs.alias_version':config.aliasVersion ?? '',
+      'github.ref': config.ref ?? 'refs/tags/' + releaseTag, 'github.sha':config.runSha ?? resolvedSha,
+      'github.repository':recording?.repo ?? 'rig-c/play', 'github.token':'mock-token',
+      'inputs.tag':config.tag ?? releaseTag, 'inputs.alias_version':config.aliasVersion ?? '',
       'inputs.alias_names':config.aliasNames ?? 'rig-play spine-html',
-      'steps.release.outputs.release_created':config.created ?? '', 'steps.release.outputs.tag_name':config.cutTag ?? 'v1.12.0',
+      'steps.release.outputs.release_created':config.created ?? '', 'steps.release.outputs.tag_name':config.cutTag ?? releaseTag,
     };
     const expand = (text: string) => text.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_, key) => {
       if (!(key in values)) throw Error('unhandled expression: ' + key);
@@ -195,11 +219,11 @@ function exercise(config: Scenario = {}) {
           // Simulate a tag moving after resolution. Immutable SHA checkout is
           // unaffected; a regression to a mutable ref receives the moved SHA.
           current.checkoutSha = config.headSha ?? (/^[0-9a-f]{40}$/.test(current.checkedOutRef)
-            ? current.checkedOutRef : config.movedTagSha ?? config.resolvedSha ?? tagSha);
+            ? current.checkedOutRef : config.movedTagSha ?? config.resolvedSha ?? resolvedSha);
           writeFileSync(state, JSON.stringify(current));
         } else if (step.uses === 'googleapis/release-please-action@v4' && config.created === 'true') {
           const current = JSON.parse(readFileSync(state, 'utf8'));
-          current.cutTag = config.cutTag ?? 'v1.12.0';
+          current.cutTag = config.cutTag ?? releaseTag;
           writeFileSync(state, JSON.stringify(current));
         }
         return;
@@ -209,7 +233,7 @@ function exercise(config: Scenario = {}) {
       const outFile = join(dir, 'outputs'); writeFileSync(outFile, '');
       const env: Record<string,string> = {
         PATH:bin + ':/usr/bin:/bin', HOME:home, RUNNER_TEMP:dir, GITHUB_OUTPUT:outFile,
-        MOCK_CONFIG:cfg, MOCK_STATE:state, MOCK_LOG:log, MOCK_REAL_NODE:Bun.which('node')!,
+        MOCK_CONFIG:cfg, MOCK_STATE:state, MOCK_LOG:log, MOCK_REAL_NODE:Bun.which('node')!, MOCK_RECORDINGS:recordingsPath,
       };
       for (const [key,value] of Object.entries({...jobEnv,...step.env})) env[key] = expand(value);
       const result = spawnSync('/bin/bash', ['-e','-o','pipefail','-c',step.run], {cwd:dir, env, encoding:'utf8', timeout:10000});
@@ -223,14 +247,15 @@ function exercise(config: Scenario = {}) {
         }
       }
     };
-    for (const step of workflow.jobs.release.steps as Step[]) { execute(step); if (status) break; }
-    for (const [key,value] of Object.entries(workflow.jobs.release.outputs) as [string,string][]) {
+    for (const step of definition.jobs.release.steps as Step[]) { execute(step); if (status) break; }
+    for (const [key,value] of Object.entries(definition.jobs.release.outputs) as [string,string][]) {
       const expression = /^\$\{\{\s*(.*?)\s*\}\}$/.exec(value)![1];
       values[`needs.release.outputs.${key}`] = values[expression] ?? '';
     }
-    const aliasRan = status === 0 && condition(workflow.jobs.alias.if);
-    if (aliasRan) for (const step of workflow.jobs.alias.steps as Step[]) { execute(step, workflow.jobs.alias.env); if (status) break; }
+    const aliasRan = status === 0 && condition(definition.jobs.alias.if);
+    if (aliasRan) for (const step of definition.jobs.alias.steps as Step[]) { execute(step, definition.jobs.alias.env); if (status) break; }
     const result = {status, output, outputs, actions, ran, aliasRan, timeline, outputWrites,
+      workflowSha256:createHash('sha256').update(input).digest('hex'),
       state:JSON.parse(readFileSync(state, 'utf8')),
       calls:readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))};
     // Optional private raw evidence; no path is baked into the public tree.
@@ -276,6 +301,34 @@ function recoveryArgs(command: string) {
 }
 
 describe('release workflow contract', () => {
+  test('recorded bytes identify annotated refusal versus lightweight resolution, not synthetic tag labels', () => {
+    expect(recordings.map(r=>[r.repo,r.tag])).toEqual([['git/git','v2.45.0'],['rig-c/play','v1.14.0']]);
+    for (const recording of recordings) {
+      expect(recording.ref.argv).toEqual(['gh','api',`repos/${recording.repo}/git/ref/tags/${recording.tag}`]);
+      expect(recording.ref.exit).toBe(0); expect(recording.ref.stderr).toBe('');
+      const ref = JSON.parse(recording.ref.stdout);
+      expect(ref.ref).toBe('refs/tags/' + recording.tag);
+      const annotated = recording.repo === 'git/git';
+      expect(ref.object.type).toBe(annotated ? 'tag' : 'commit');
+      if (annotated) expect(ref.object.sha).not.toBe(recording.commitSha);
+      else expect(ref.object.sha).toBe(recording.commitSha);
+      expect(recording.responses).toHaveLength(2);
+      for (const [index,response] of recording.responses.entries()) {
+        expect(response.argv).toEqual(['gh','api',`repos/${recording.repo}/commits/${index ? 'refs%2Ftags' : 'tags'}%2F${recording.tag}`,'--jq','.sha']);
+        for (const stream of ['stdout','stderr'] as const)
+          expect(createHash('sha256').update(response[stream]).digest('hex')).toBe(response[`${stream}Sha256`]);
+        if (annotated && index === 0) {
+          expect(response.httpStatus).toBe(422); expect(response.exit).toBe(1);
+          expect(JSON.parse(response.stdout)).toEqual({message:'No commit found for SHA: tags/v2.45.0',
+            documentation_url:'https://docs.github.com/rest/commits/commits#get-a-commit',status:'422'});
+          expect(response.stderr).toBe('gh: No commit found for SHA: tags/v2.45.0 (HTTP 422)\n');
+        } else {
+          expect(response.httpStatus).toBe(200); expect(response.exit).toBe(0);
+          expect(response.stdout).toBe(recording.commitSha + '\n'); expect(response.stderr).toBe('');
+        }
+      }
+    }
+  });
   test('preserves original publication bodies/order and alias job steps', () => {
     const clean = (s: Step) => {
       const c = structuredClone(s); delete c.if;
@@ -445,14 +498,70 @@ describe('release workflow contract', () => {
     {mode:'alias',config:{tag:'',aliasVersion:'1.12.0',served:['@rig-c/play']}},
   ];
   for (const {mode,config} of modes) {
-    test.each(['lightweight','annotated'] as const)(`${mode} resolves %s via the explicit tag commits API, never a branch or tag-object SHA`, tagKind => {
-      const r = exercise({...config,tagKind});
+    const recordedScenario = (recording: CommitRecording): Scenario => ({...config, recording:recording.name,
+      ...(mode === 'alias' ? {aliasVersion:recording.tag.slice(1)} : {})});
+    test.each(recordings)(`${mode} resolves recorded $name via full refs/tags commit request (offline replay)`, recording => {
+      const r = exercise(recordedScenario(recording));
+      const response = recording.responses.find(r=>r.argv[2].includes('/refs%2Ftags%2F'))!;
       expect(r.status).toBe(0);
-      expect(r.calls.filter(c=>c.command === 'gh' && c.args[1]?.includes('/commits/')).map(c=>c.args)).toEqual([commitRequest]);
-      expect(r.calls.find(c=>c.command === 'commit-response')?.args).toEqual([tagKind,tagSha]);
-      expect(r.outputs.checkout_ref).toBe(tagSha);
-      expect(r.actions.filter(a=>a.uses === 'actions/checkout@v4').map(a=>a.ref)).toEqual([tagSha]);
+      expect(r.calls.filter(c=>c.command === 'gh' && c.args[1]?.includes('/commits/')).map(c=>c.args)).toEqual([response.argv.slice(1)]);
+      expect(r.calls.find(c=>c.command === 'commit-response')?.args).toEqual([response.argv[2],response.stdout,response.stderr,response.exit]);
+      expect(r.outputs.checkout_ref).toBe(recording.commitSha);
+      expect(r.actions.filter(a=>a.uses === 'actions/checkout@v4').map(a=>a.ref)).toEqual([recording.commitSha]);
       expect(published(r)).toEqual(mode === 'alias' ? ALIASES : ['@rig-c/play',...ALIASES]);
+      // A real commit differing from the old synthetic default must still fail
+      // both SHA guards when the run context or checked-out HEAD differs.
+      const mismatch = unresolvedBeforeCheckout({...recordedScenario(recording),runSha:otherSha}, 'PROVENANCE_SHA_MISMATCH');
+      expect(mismatch.output).toContain(otherSha); expect(mismatch.output).toContain(recording.commitSha);
+      expect(mismatch.output).toContain(`--repo ${recording.repo} --ref ${recording.tag}`);
+      if (mode !== 'push') {
+        const movedHead = exercise({...recordedScenario(recording),headSha:otherSha});
+        expect(movedHead.status).toBe(1); expect(movedHead.output).toContain('PROVENANCE_SHA_MISMATCH');
+        expect(movedHead.aliasRan).toBe(mode === 'alias');
+        expect(published(movedHead)).toEqual([]); noInstallOrPublish(movedHead);
+        expect(movedHead.output).toContain(otherSha); expect(movedHead.output).toContain(recording.commitSha);
+      }
+    });
+    test.each(recordings)(`${mode} old-prefix planted mutant: recorded $name (offline copied input)`, recording => {
+      // Announce before execution; mutate only a separate YAML copy. Never write
+      // the candidate. Private evidence may retain the copied input for review.
+      const before = readFileSync(join(root, '.github/workflows/release.yml'));
+      const candidateHash = createHash('sha256').update(before).digest('hex');
+      const dir = mkdtempSync(join(process.env.RELEASE_WORKFLOW_EVIDENCE_DIR ?? tmpdir(), 'play-release-mutant-'));
+      try {
+        const oldPrefix = 'commits/tags%2F$release_tag';
+        const fullPrefix = 'commits/refs%2Ftags%2F$release_tag';
+        expect(source.split(fullPrefix)).toHaveLength(2);
+        const copiedInput = join(dir, 'release.yml');
+        writeFileSync(copiedInput, source.replace(fullPrefix, oldPrefix));
+        const r = exercise(recordedScenario(recording), copiedInput);
+        const response = recording.responses.find(r=>r.argv[2].includes('/commits/tags%2F'))!;
+        expect(r.calls.find(c=>c.command === 'commit-response')?.args).toEqual([response.argv[2],response.stdout,response.stderr,response.exit]);
+        if (response.exit !== 0) {
+          expect(response.httpStatus).toBe(422);
+          expect(r.status).toBe(1); expect(r.output).toContain('RELEASE_TAG_UNRESOLVED');
+          expect(r.output).toContain('No commit found for SHA: tags/v2.45.0');
+          expect(r.outputs).toEqual({});
+          expect(r.outputWrites.find(w=>w.step === 'target')?.text).toBe('');
+          expect(r.actions.some(a=>a.uses === 'actions/checkout@v4')).toBe(false);
+          expect(r.calls.some(c=>c.command === 'git')).toBe(false);
+          expect(published(r)).toEqual([]); expect(r.aliasRan).toBe(false);
+          noInstallOrPublish(r);
+        } else {
+          expect(response.httpStatus).toBe(200);
+          expect(r.status).toBe(0);
+          expect(r.outputs.checkout_ref).toBe(recording.commitSha);
+          expect(r.actions.filter(a=>a.uses === 'actions/checkout@v4').map(a=>a.ref)).toEqual([recording.commitSha]);
+          expect(published(r)).toEqual(mode === 'alias' ? ALIASES : ['@rig-c/play',...ALIASES]);
+        }
+        const after = readFileSync(join(root, '.github/workflows/release.yml'));
+        expect(after.equals(before)).toBe(true);
+        expect(createHash('sha256').update(after).digest('hex')).toBe(candidateHash);
+        if (process.env.RELEASE_WORKFLOW_MOCK_LOG)
+          appendFileSync(process.env.RELEASE_WORKFLOW_MOCK_LOG, JSON.stringify({mutant:'old-prefix', mode, recording:recording.name,
+            status:r.status, failure:response.exit ? 'RELEASE_TAG_UNRESOLVED' : null, candidateHashBefore:candidateHash,
+            candidateHashAfter:createHash('sha256').update(after).digest('hex'), mutantHash:r.workflowSha256}) + '\n');
+      } finally { if (!process.env.RELEASE_WORKFLOW_EVIDENCE_DIR) rmSync(dir, {recursive:true, force:true}); }
     });
     test.each([
       {commitLookupFails:true}, {resolvedSha:''}, {resolvedSha:'null'}, {resolvedSha:'not-a-sha'},
