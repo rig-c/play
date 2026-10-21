@@ -13,8 +13,11 @@ const root = resolve(import.meta.dir, '..');
 const source = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
 const workflow = Bun.YAML.parse(source) as any;
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const tagSha = '1111111111111111111111111111111111111111';
+const otherSha = '2222222222222222222222222222222222222222';
+const sourceGuard = (s: Step) => s.name === 'Verify the dispatched source commit';
 const resolver = workflow.jobs.release.steps.find((s: Step) => s.id === 'target') as Step;
-const originalSteps = workflow.jobs.release.steps.filter((s: Step) => s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
+const originalSteps = workflow.jobs.release.steps.filter((s: Step) => !sourceGuard(s) && s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
 
 // The mock never delegates npm/gh/bun/git to the host. Only node's local JSON checks
 // reach a real interpreter; alias pack/compare are recorded stand-ins here.
@@ -38,6 +41,11 @@ if (command === 'gh') {
   process.exit(status === 200 ? 0 : 1);
 }
 if (command === 'git') {
+  if (args.join(' ') === 'rev-parse --verify HEAD^{commit}') {
+    if (!state.checkedOutRef) fail('HEAD query before checkout');
+    if (config.headQueryFails) process.exit(128);
+    console.log(state.checkoutSha); process.exit(0);
+  }
   if (args.join(' ') === 'rev-parse --is-shallow-repository') {
     if (config.gitQueryFails) process.exit(128);
     console.log(config.shallow ?? 'true'); process.exit(0);
@@ -122,7 +130,7 @@ type Scenario = {
   aliasNames?: string; ref?: string; served?: string[]; ghStatus?: number; draft?: boolean;
   unpublished?: boolean; registryError?: string; registryMalformed?: boolean; packageVersion?: string;
   packageName?: string; buildFails?: boolean; shallow?: string; gitQueryFails?: boolean;
-  gitFetchFails?: boolean; ancestryStatus?: number;
+  gitFetchFails?: boolean; ancestryStatus?: number; runSha?: string; headSha?: string; headQueryFails?: boolean;
 };
 function exercise(config: Scenario = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'play-release-mock-'));
@@ -141,7 +149,8 @@ function exercise(config: Scenario = {}) {
     const outputs: Record<string,string> = {};
     const values: Record<string,string> = {
       'github.event_name': config.event ?? 'workflow_dispatch',
-      'github.ref': config.ref ?? 'refs/heads/main', 'github.repository':'rig-c/play', 'github.token':'mock-token',
+      'github.ref': config.ref ?? 'refs/tags/v1.12.0', 'github.sha':config.runSha ?? tagSha,
+      'github.repository':'rig-c/play', 'github.token':'mock-token',
       'inputs.tag':config.tag ?? 'v1.12.0', 'inputs.alias_version':config.aliasVersion ?? '',
       'inputs.alias_names':config.aliasNames ?? 'rig-play spine-html',
       'steps.release.outputs.release_created':config.created ?? '', 'steps.release.outputs.tag_name':config.cutTag ?? 'v1.12.0',
@@ -163,6 +172,12 @@ function exercise(config: Scenario = {}) {
       if (!condition(step.if)) return;
       if (step.uses) {
         actions.push({uses:step.uses, ...(step.with?.ref ? {ref:expand(step.with.ref)} : {})});
+        if (step.uses === 'actions/checkout@v4') {
+          const current = JSON.parse(readFileSync(state, 'utf8'));
+          current.checkedOutRef = expand(step.with!.ref);
+          current.checkoutSha = config.headSha ?? tagSha;
+          writeFileSync(state, JSON.stringify(current));
+        }
         return;
       }
       if (!step.run) throw Error('missing run');
@@ -191,10 +206,14 @@ function exercise(config: Scenario = {}) {
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }
 const published = (r: ReturnType<typeof exercise>) => r.calls.filter(c => c.command === 'published').map(c => c.args[0]);
+function noInstallOrPublish(r: ReturnType<typeof exercise>) {
+  expect(r.calls.filter(c => c.command === 'npm' && ['install','publish'].includes(c.args[0]) || c.command === 'bun' || c.command === 'prepublishOnly')).toEqual([]);
+}
 function refused(config: Scenario, code: string) {
   const r = exercise(config);
   expect(r.status).not.toBe(0); expect(r.output).toContain(code);
   expect(published(r)).toEqual([]); expect(r.aliasRan).toBe(false);
+  noInstallOrPublish(r);
   return r;
 }
 
@@ -208,7 +227,11 @@ describe('release workflow contract', () => {
     };
     // SHA-256 of parsed original steps, excluding only routing condition/ref.
     expect(digest(originalSteps.map(clean))).toBe('1268705f8a94844af4d72dd083c007cbe194148864ddd5c2c9c57e9b1e7aa361');
-    expect(digest(workflow.jobs.alias.steps)).toBe('2aaeef5812c8c0beac4025a53434c90891b605209832b26ec00b54b1452b944f');
+    expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)))).toBe('2aaeef5812c8c0beac4025a53434c90891b605209832b26ec00b54b1452b944f');
+    // Preserve the existing steps in full, including push refs/conditions and
+    // the canonical HEAD-to-main ancestry guard added before this change.
+    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('901f721eca42554866b7dc1035b5db1d4de7d8558634495b72d7352b5aa2f16f');
+    expect(digest(resolver.run!.split('if [ -n "$INPUT_TAG" ]')[0])).toBe('eac7560cf5ce8b3d604f5d35d605121396870d1bec5cc9c81db0dc7033e656eb');
     expect(ALIASES).toEqual(['rig-play','spine-html']);
     expect(workflow.concurrency).toEqual({group:'release-${{ github.ref }}', 'cancel-in-progress':false});
     expect(workflow.permissions).toEqual({});
@@ -218,10 +241,23 @@ describe('release workflow contract', () => {
     expect(workflow.jobs.alias.needs).toBe('release');
     expect(workflow.on.workflow_dispatch.inputs.tag.required).toBe(false);
     expect(workflow.on.workflow_dispatch.inputs.alias_version.required).toBe(false);
-    for (const step of workflow.jobs.release.steps as Step[]) if (step.run) expect(step.run).not.toContain('${{');
+    const canonicalGuard = workflow.jobs.release.steps.find(sourceGuard) as Step;
+    const aliasGuard = workflow.jobs.alias.steps.find(sourceGuard) as Step;
+    expect(canonicalGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'${{ steps.target.outputs.tag }}'});
+    expect(aliasGuard.env).toEqual({RUN_SHA:'${{ github.sha }}', TAG_NAME:'v${{ inputs.alias_version }}'});
+    expect(aliasGuard.run).toBe(canonicalGuard.run);
+    for (const job of Object.values(workflow.jobs) as any[]) {
+      for (const env of [job.env ?? {}, ...job.steps.map((s: Step) => s.env ?? {})]) {
+        expect(Object.keys(env).filter(k=>k.startsWith('GITHUB_'))).toEqual([]);
+      }
+      for (const step of job.steps as Step[]) if (step.run) {
+        expect(step.run).not.toContain('${{');
+        expect(step.run).not.toMatch(/(?:export\s+)?GITHUB_(?:SHA|REF)=/);
+      }
+    }
     expect(resolver.env!.INPUT_TAG).toBe('${{ inputs.tag }}');
   });
-  test('cut-but-unpublished tag uses exact tag, original build hook and all three publishes/confirmations (mock only)', () => {
+  test('same-SHA tag-ref retry uses exact tag, original build hook and all three publishes/confirmations (mock only)', () => {
     const r = exercise(); expect(r.status).toBe(0); expect(r.aliasRan).toBe(false);
     expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('refs/tags/v1.12.0');
@@ -246,15 +282,46 @@ describe('release workflow contract', () => {
   });
   test('malformed registry failure fails closed', () => { refused({registryMalformed:true}, 'RELEASE_REGISTRY_LOOKUP'); });
   test.each([{tag:'',aliasVersion:''},{tag:'v1.12.0',aliasVersion:'1.12.0'},{tag:'',aliasVersion:'1.12.0;bad'}])('rejects ambiguous/empty/invalid mode %j', scenario => { refused(scenario, 'RELEASE_MODE'); });
-  test('tag retry must run workflow from main', () => { refused({ref:'refs/heads/other'}, 'RELEASE_WORKFLOW_REF'); });
+  test.each(['refs/heads/main','refs/heads/other'])('branch-ref dispatch %s with a different run SHA refuses', ref => {
+    const r = refused({ref,runSha:otherSha}, 'PROVENANCE_SHA_MISMATCH');
+    expect(r.output).toContain(otherSha); expect(r.output).toContain(tagSha);
+  });
+  const dispatchModes: {mode: string; config: Scenario}[] = [
+    {mode:'canonical',config:{}},
+    {mode:'alias',config:{tag:'',aliasVersion:'1.12.0',served:['@rig-c/play']}},
+  ];
+  for (const {mode,config} of dispatchModes) {
+    test.each([
+      {runSha:otherSha}, {runSha:''}, {headQueryFails:true}, {headSha:''},
+    ])(`${mode} source guard fails closed before install/publish for %j`, failure => {
+      const r = exercise({...config,...failure});
+      expect(r.status).not.toBe(0); expect(published(r)).toEqual([]);
+      noInstallOrPublish(r);
+      expect(r.output).toContain('headQueryFails' in failure || 'headSha' in failure ? 'PROVENANCE_SHA_LOOKUP' : 'PROVENANCE_SHA_MISMATCH');
+      if ('runSha' in failure) {
+        expect(r.output).toContain(failure.runSha || '<missing>');
+        expect(r.output).toContain(tagSha);
+        expect(r.output).toContain('--ref v1.12.0');
+      }
+      expect(r.calls.filter(c=>c.command === 'git').at(-1)?.args).toEqual(['rev-parse','--verify','HEAD^{commit}']);
+      expect(r.calls.some(c=>c.command === 'npm' && c.args[0] === 'pack')).toBe(false);
+      expect(r.actions.some(a=>a.uses === 'actions/setup-node@v4' || a.uses === 'oven-sh/setup-bun@v2')).toBe(false);
+      if (mode === 'canonical') {
+        expect(r.ran.indexOf('Verify the retry tag is on main')).toBeLessThan(r.ran.indexOf('Verify the dispatched source commit'));
+        expect(r.ran).not.toContain('Verify the retry tag matches the package');
+      }
+    });
+  }
   test.each(['true','false'])('tag ancestry fetch handles shallow=%s before checking exact HEAD/main ancestry', shallow => {
     const r = exercise({shallow}); expect(r.status).toBe(0);
     expect(r.calls.filter(c=>c.command === 'git').map(c=>c.args)).toEqual([
       ['rev-parse','--is-shallow-repository'],
       ['fetch','--no-tags', ...(shallow === 'true' ? ['--unshallow'] : []), 'origin','refs/heads/main:refs/remotes/origin/main'],
       ['merge-base','--is-ancestor','HEAD','origin/main'],
+      ['rev-parse','--verify','HEAD^{commit}'],
     ]);
-    expect(r.ran.indexOf('Verify the retry tag is on main')).toBeLessThan(r.ran.indexOf('Verify the retry tag matches the package'));
+    expect(r.ran.indexOf('Verify the retry tag is on main')).toBeLessThan(r.ran.indexOf('Verify the dispatched source commit'));
+    expect(r.ran.indexOf('Verify the dispatched source commit')).toBeLessThan(r.ran.indexOf('Verify the retry tag matches the package'));
   });
   test.each([
     {scenario:{ancestryStatus:1},code:'RELEASE_TAG_NOT_ON_MAIN',calls:3},
@@ -278,7 +345,7 @@ describe('release workflow contract', () => {
     expect(r.calls.filter(c=>c.command === 'prepublishOnly')).toHaveLength(1);
   });
   test('push with a new release has unchanged steps and no dispatch preflight', () => {
-    const r = exercise({event:'push',created:'true',tag:'bad-input',aliasVersion:'ignored'});
+    const r = exercise({event:'push',created:'true',ref:'refs/heads/main',runSha:otherSha,tag:'bad-input',aliasVersion:'ignored'});
     expect(r.status).toBe(0); expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('v1.12.0');
     expect(r.actions[0].uses).toBe('googleapis/release-please-action@v4');
@@ -291,11 +358,13 @@ describe('release workflow contract', () => {
     expect(r.outputs.publish).toBe('false'); expect(r.calls).toEqual([]); expect(r.aliasRan).toBe(false);
     expect(r.actions.map(a=>a.uses)).toEqual(['googleapis/release-please-action@v4']);
   });
-  test('alias-only dispatch uses served canonical, named missing alias, no canonical republish/build', () => {
+  test('same-SHA tag-ref alias-only dispatch uses served canonical, named missing alias, no canonical republish/build', () => {
     const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames:'spine-html',served:['@rig-c/play','rig-play']});
     expect(r.status).toBe(0); expect(r.aliasRan).toBe(true); expect(published(r)).toEqual(['spine-html']);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe('v1.12.0');
-    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'gh' || c.command === 'git')).toBe(false);
+    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'gh' || c.command === 'bun' || c.command === 'npm' && c.args[0] === 'install' && !c.args.includes('-g'))).toBe(false);
+    expect(r.calls.filter(c=>c.command === 'git').map(c=>c.args)).toEqual([['rev-parse','--verify','HEAD^{commit}']]);
+    expect(r.calls.findIndex(c=>c.command === 'git')).toBeLessThan(r.calls.findIndex(c=>c.command === 'npm'));
     const pack = r.calls.find(c=>c.command === 'node' && c.args[1] === 'pack');
     expect(pack.args).toContain('--tarball');
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual([['@rig-c/play','spine-html','1.12.0']]);
