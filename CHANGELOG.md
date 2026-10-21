@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/rig-c/play/compare/v1.13.0...v1.14.0) (2026-10-21)
+
+
+### Features
+
+* forward adjust context and live physics parameters ([#161](https://github.com/rig-c/play/issues/161)) ([fcac1d1](https://github.com/rig-c/play/commit/fcac1d1443bf72b6301f95b30705dc11c2dffb75))
+
 ## [1.13.0](https://github.com/rig-c/play/compare/v1.12.1...v1.13.0) (2026-10-21)
 
 
