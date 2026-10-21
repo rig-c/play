@@ -482,8 +482,12 @@ merge features and release-please PRs. (Naru, 2026-10-21)
 - **Open and report a feature PR; merge only after HQ's sign.** Green checks or
   opening a PR do not supply that sign. Report the current head and outstanding
   gates; do not silently expand the approved scope.
-- **AI review runs at most once per PR.** The authoring sub-commander judges
-  every finding, adopts or rejects it with evidence, and records each decision
+- **AI review runs at most once per PR.** For a Codex-authored PR, independent
+  review must come from the Claude family; same-family Codex automatic review
+  is advisory only. HQ reads the diff directly when signing. If any AI review
+  has already run, request no additional review to satisfy the family boundary.
+  The authoring sub-commander judges every finding, adopts or rejects it with
+  evidence, and records each decision
   in the PR and in report sections 3/4. HQ checks that these records are present;
   it does not substitute its judgment for the author's finding-by-finding
   decisions. This does not remove the separate HQ merge gate.
