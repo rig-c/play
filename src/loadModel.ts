@@ -1,4 +1,4 @@
-import { type CompiledDocument, CORE_DOCUMENT_SPECS, CoreInputError, readModel } from 'rig-c/core';
+import { type CompiledDocument, CORE_DOCUMENT_SPECS, CoreInputError, readModel, readSetupMesh as coreReadSetupMesh, underNoSkin } from 'rig-c/core';
 import { type RegionImage, revokeRegions, unpackRegions } from './DomTexture.js';
 
 /**
@@ -124,6 +124,36 @@ export interface ReadDocument extends ModelDocument {
   readonly doc: CompiledDocument;
   /** The document's parsed JSON — the sequences' `start`/`digits`, which `readModel` does not keep, are read off it. */
   readonly parsed: unknown;
+}
+
+/** Exact slot name and attachment table key, independent of a player's selection. */
+export interface SetupMeshTarget {
+  readonly slot: string;
+  readonly attachment: string;
+  /** Omitted or null: no skin set. A name uses default fallback; `all` refuses differing definitions. */
+  readonly skin?: string | null;
+}
+
+/** Detached setup geometry in world units, Y up. The arrays are fresh and mutable. */
+export interface SetupMesh {
+  slot: string;
+  attachment: string;
+  /** The table supplying the attachment, including default fallback. */
+  skin: string;
+  vertices: number[];
+  triangles: number[];
+  /** Number of leading hull vertices, or null when absent. */
+  hull: number | null;
+}
+
+/**
+ * Reads any named mesh or linked mesh through the core's setup poser, without
+ * creating or advancing a player. Selected meshes include setup-slider deform;
+ * unselected meshes use stored geometry through unchanged setup matrices.
+ * Core skin, ambiguity, non-mesh and setup refusals propagate unchanged.
+ */
+export function readSetupMesh(assets: ModelAssets, target: SetupMeshTarget): SetupMesh {
+  return coreReadSetupMesh(underNoSkin((assets.document as ReadDocument).doc), target);
 }
 
 const SETS_SPECS = ['spine-parts-sets/1', 'rig-parts-sets/1'] as const;

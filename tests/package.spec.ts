@@ -172,6 +172,7 @@ test('the package entry resolves by name in node and exposes its public API', ()
     'DomRenderer',
     'RigPlayer',
     'loadModel',
+    'readSetupMesh',
     'revokeRegions',
     'unpackRegions',
   ]);
@@ -331,6 +332,10 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and th
   // pose doubt is a rigc issue against that version.
   expect(typeof manifest.devDependencies?.['rig-c']).toBe('string');
   expect(manifest.devDependencies?.['rig-c']).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(manifest.devDependencies?.['rig-c']).toBe('2.66.0');
+  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.66.0');
+  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.66.0');
+  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.66.0"');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
 });
 
@@ -593,9 +598,12 @@ test('the bundle imports nothing: rig-c/core is inside it, and no node built-in 
  * offers, reached by package name through the shipped `.d.ts`.
  */
 const CONSUMER_SOURCE = [
-  "import { CanvasRenderer, DomRenderer, loadModel, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
+  "import { CanvasRenderer, DomRenderer, loadModel, readSetupMesh, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
   "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions, SlotIdentity, SlotIdentityReason, SlotIdentitySnapshot } from '@rig-c/play';",
   'export const surface = [CanvasRenderer, DomRenderer, RigPlayer, loadModel, unpackRegions, revokeRegions];',
+  "import type { SetupMesh, SetupMeshTarget } from '@rig-c/play';",
+  'export function setup(assets: ModelAssets, target: SetupMeshTarget): SetupMesh { const m = readSetupMesh(assets, target); const xy: number[] = m.vertices; const triangles: number[] = m.triangles; const hull: number | null = m.hull; return { ...m, vertices: xy, triangles, hull }; }',
+  "export const targets: SetupMeshTarget[] = [{ slot: 's', attachment: 'm' }, { slot: 's', attachment: 'm', skin: null }, { slot: 's', attachment: 'm', skin: 'all' }];",
   'export function drawCanvas(renderer: CanvasRenderer, frame: PosedFrame): number { renderer.render(frame); return renderer.drawCalls; }',
   'export function draw(renderer: DomRenderer, frame: PosedFrame): PosedSlot[] { renderer.render(frame); return frame.order; }',
   'export function play(root: HTMLElement, assets: ModelAssets, options: RigPlayerOptions): RigPlayer { const p = new RigPlayer(root, assets, options); p.play(assets.animations[0].name, { loop: true }); return p; }',

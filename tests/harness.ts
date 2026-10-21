@@ -1,3 +1,5 @@
+import { setupMeshLiteralProbe } from './setupMeshLiteral';
+import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
 import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
 
 import {
@@ -206,6 +208,10 @@ export interface RegionGeometryProbeResult {
 }
 
 export interface RigPlayHarness {
+  setupMeshLookDiagnosisProbe: typeof setupMeshLookDiagnosisProbe;
+  setupMeshLiteralProbe: typeof setupMeshLiteralProbe;
+  setupMeshGalleryProbe: typeof setupMeshGalleryProbe;
+  setupMeshPlayerProbe: typeof setupMeshPlayerProbe;
   drawContractStage(options: DrawContractOptions): Promise<DrawContractStageResult>;
   drawContractDispose(): void;
   drawBoundsProbe(): Promise<DrawBoundsProbeResult>;
@@ -8739,6 +8745,10 @@ async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
 }
 
 window.rigPlayHarness = {
+  setupMeshLookDiagnosisProbe,
+  setupMeshLiteralProbe,
+  setupMeshGalleryProbe,
+  setupMeshPlayerProbe,
   drawContractStage,
   drawContractDispose,
   drawBoundsProbe,
