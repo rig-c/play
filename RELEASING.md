@@ -91,6 +91,49 @@ URLs (`firejune/spine-html`, `firejune/rig-play`); nothing redirects an npm page
   and where each resolves after a retirement, and what the alias says until
   then (#65).
 
+## Retrying an already-cut release
+
+If release-please created the tag and GitHub release but the first
+`@rig-c/play` publish failed (for example, a signing-service outage), rerunning
+the push job cannot recover it: release-please no longer reports a new release.
+With the owner's release approval, use **Actions → release → Run workflow**
+on **main**, set **tag** to the existing `vX.Y.Z`, and leave **alias_version**
+empty. The default **alias_names** belongs to alias repair and is ignored here.
+Do not create another tag or publish locally.
+
+The workflow requires exactly one of **tag** and **alias_version**. Tag retry
+refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
+(`RELEASE_TAG_UNRELEASED`), and a canonical version already served by npm
+(`RELEASE_ALREADY_PUBLISHED`). Only an explicit registry `E404` permits the
+retry; network, permission and unknown errors stop it. It checks out the exact
+`refs/tags/vX.Y.Z`, fetches main's full history (unshallowing when needed),
+and requires that checked-out tag commit to be an ancestor of `origin/main`
+(`RELEASE_TAG_NOT_ON_MAIN` otherwise). History queries and fetch errors stop the
+retry; an unknown result never counts as ancestry. These checks run before
+installing dependencies or publishing, then that tree's package name and version
+must match the tag. Push releases retain their existing checkout and steps.
+The existing `prepublishOnly` library build gates the canonical publish; the
+same steps then publish both aliases with provenance and confirm all three
+names from registry tarballs. There is no separate typecheck/smoke gate in this
+workflow beyond the build that `prepublishOnly` runs.
+
+Checkout source and workflow execution context are distinct. On a dispatch from
+main, checking out the tag does not change the event's `GITHUB_REF` or
+`GITHUB_SHA`. The existing `--provenance` flag is preserved; it alone does not
+establish that the attestation identifies the checked-out tag commit. Inspect
+that relationship in a separately authorized live provenance verification.
+See GitHub's [`workflow_dispatch` context table](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
+and the [npm CLI provenance implementation](https://github.com/npm/cli/blob/latest/workspaces/libnpmpublish/lib/provenance.js#L44-L49).
+
+If `@rig-c/play` already exists and an alias is missing, leave **tag** empty
+and use **alias_version** and **alias_names** as described above. That path
+continues to derive aliases from the canonical registry tarball, never a rebuild.
+Tag retry does not republish canonical or skip arbitrary aliases.
+
+The isolated decision checks run with `bun test scripts/release-workflow.test.ts`.
+They execute the workflow's shell bodies with mocked APIs and publish recorders;
+they do not prove production OIDC, provenance issuance or registry propagation.
+
 ## One-time setup (owner, GitHub)
 
 **Settings → Actions → General → Workflow permissions → tick "Allow GitHub

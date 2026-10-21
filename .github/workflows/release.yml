@@ -32,9 +32,13 @@ on:
   # confirmation.
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Existing release tag whose @rig-c/play publish failed (vX.Y.Z); leave alias_version empty'
+        required: false
+        type: string
       alias_version:
-        description: 'Version already published as @rig-c/play (e.g. 1.9.0) to publish under the aliases'
-        required: true
+        description: 'Version already published as @rig-c/play (e.g. 1.9.0) to repair aliases; leave tag empty'
+        required: false
         type: string
       alias_names:
         description: 'Which aliases to publish, space-separated (an alias already at that version would be refused)'
@@ -50,7 +54,6 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     # 20 minutes covered the publish; the confirmation below may wait up to 15
     # more for the registry to serve each name, so the ceiling sits above both.
@@ -60,9 +63,12 @@ jobs:
       pull-requests: write # open and update the release PR
       issues: write # release-please labels
       id-token: write # OIDC token for npm trusted publishing
+    outputs:
+      mode: ${{ steps.target.outputs.mode }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
+        if: ${{ github.event_name == 'push' }}
         with:
           # GITHUB_TOKEN is the intended default here. Its one limitation is
           # that a PR it opens does not start other workflows, so the release
@@ -73,24 +79,146 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Everything below runs only on the push that merged the release PR.
+      # Resolve both dispatch modes before either can reach a publish step.
+      # A partial alias failure still uses the registry tarball in the alias job;
+      # tag retry never republishes or selectively skips an existing canonical.
+      - name: Resolve the release target
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          CREATED: ${{ steps.release.outputs.release_created }}
+          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          ALIAS_VERSION: ${{ inputs.alias_version }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            if [ "$CREATED" = true ]; then
+              echo "publish=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=$CUT_TAG" >> "$GITHUB_OUTPUT"
+            else
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "mode=push" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$INPUT_TAG" ] && [ -n "$ALIAS_VERSION" ]; then
+            echo "::error::RELEASE_MODE: supply tag or alias_version, never both"
+            exit 1
+          fi
+          if [ -z "$INPUT_TAG" ]; then
+            if ! [[ "$ALIAS_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              echo "::error::RELEASE_MODE: supply tag or a numeric alias_version (X.Y.Z)"
+              exit 1
+            fi
+            echo "mode=alias" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::RELEASE_TAG_FORM: tag must be vX.Y.Z"
+            exit 1
+          fi
+          if [ "$WORKFLOW_REF" != refs/heads/main ]; then
+            echo "::error::RELEASE_WORKFLOW_REF: retry from main with the tag input"
+            exit 1
+          fi
+          release_result="$RUNNER_TEMP/release-response.txt"
+          release_ok=false
+          if gh api --include "repos/$REPO/releases/tags/$INPUT_TAG" > "$release_result"; then
+            release_ok=true
+          fi
+          node - "$release_result" "$release_ok" <<'NODE'
+          const fs = require('node:fs');
+          const refuse = (code, message) => { console.error(`::error::${code}: ${message}`); process.exit(1); };
+          const text = fs.readFileSync(process.argv[2], 'utf8');
+          const status = /^HTTP\/[\d.]+ (\d{3})\b/m.exec(text)?.[1];
+          if (status === '404') refuse('RELEASE_TAG_UNRELEASED', 'tag has no GitHub release');
+          if (process.argv[3] !== 'true' || status !== '200') refuse('RELEASE_TAG_LOOKUP', 'GitHub release lookup failed');
+          let release;
+          try { release = JSON.parse(text.split(/\r?\n\r?\n/).slice(1).join('\n\n')); }
+          catch { refuse('RELEASE_TAG_LOOKUP', 'invalid GitHub release response'); }
+          if (release.tag_name !== process.env.INPUT_TAG || release.draft !== false || !release.published_at)
+            refuse('RELEASE_TAG_UNRELEASED', 'tag has no published GitHub release (drafts are refused)');
+          NODE
+          version="${INPUT_TAG#v}"
+          registry_result="$RUNNER_TEMP/release-registry.json"
+          if npm view "@rig-c/play@$version" version --json --registry=https://registry.npmjs.org > "$registry_result"; then
+            echo "::error::RELEASE_ALREADY_PUBLISHED: canonical version is served; use alias_version for missing aliases"
+            exit 1
+          fi
+          # Only npm's explicit E404 means absent. An outage, permission error,
+          # malformed response or an unknown failure must not permit publishing.
+          if ! node -e 'const fs = require("node:fs"); const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.exit(r.error?.code === "E404" ? 0 : 1)' "$registry_result"; then
+            echo "::error::RELEASE_REGISTRY_LOOKUP: canonical absence could not be verified"
+            exit 1
+          fi
+          echo "mode=tag" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=refs/tags/$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      # The original gate, publish and confirmation steps serve both paths.
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          ref: ${{ steps.release.outputs.tag_name }}
+          ref: ${{ steps.target.outputs.checkout_ref }}
+
+      # A public release alone cannot authorize a tag from an off-main commit.
+      - name: Verify the retry tag is on main
+        if: ${{ steps.target.outputs.mode == 'tag' }}
+        run: |
+          set -euo pipefail
+          if ! shallow="$(git rev-parse --is-shallow-repository)"; then
+            echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: cannot determine checkout history depth"
+            exit 1
+          fi
+          fetch_args=(--no-tags)
+          case "$shallow" in
+            true) fetch_args+=(--unshallow) ;;
+            false) ;;
+            *) echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: unknown checkout history depth"; exit 1 ;;
+          esac
+          if ! git fetch "${fetch_args[@]}" origin refs/heads/main:refs/remotes/origin/main; then
+            echo "::error::RELEASE_TAG_MAIN_FETCH: cannot fetch complete main history"
+            exit 1
+          fi
+          if git merge-base --is-ancestor HEAD origin/main; then
+            :
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "::error::RELEASE_TAG_NOT_ON_MAIN: checked-out tag commit is not on main"
+            else
+              echo "::error::RELEASE_TAG_ANCESTRY_LOOKUP: cannot verify checked-out tag ancestry"
+            fi
+            exit 1
+          fi
+
+      # Refuse a moved/mistyped tag before prepublishOnly can build or publish.
+      - name: Verify the retry tag matches the package
+        if: ${{ steps.target.outputs.mode == 'tag' }}
+        env:
+          TAG_NAME: ${{ steps.target.outputs.tag }}
+        run: |
+          node -e 'const p = require("./package.json"); if (p.name !== "@rig-c/play" || `v${p.version}` !== process.env.TAG_NAME) { console.error("::error::RELEASE_TAG_VERSION: checked-out package does not match the release tag"); process.exit(1); }'
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       # Node 22 ships npm 10; OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           npm install -g npm@latest
           npm --version
@@ -99,7 +227,7 @@ jobs:
       # so `npm ci` has nothing to read. Deps exist only to let prepublishOnly
       # run tsc; the publish itself is npm's.
       - name: Install dependencies
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
       # prepublishOnly runs `build:lib` (tsc -p tsconfig.build.json), so the
@@ -107,7 +235,7 @@ jobs:
       # publish instead of shipping. `--access public`: a scoped package is
       # restricted unless told otherwise.
       - name: Publish @rig-c/play
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: npm publish --provenance --access public
 
       # The aliases (#65, #98): the same files under the names the package
@@ -126,7 +254,7 @@ jobs:
       # explicitly), so `prepublishOnly` gates the step above and only that
       # one. The alias is that publish's files, and the script holds it to them.
       - name: Publish the aliases rig-play and spine-html
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           for alias in rig-play spine-html; do
@@ -144,9 +272,9 @@ jobs:
       # confirmation was not taken, not that the package is wrong. A red here
       # does not un-publish anything; it says the cut needs a follow-up.
       - name: Confirm every name serves the same files
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         env:
-          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          TAG_NAME: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
@@ -172,9 +300,10 @@ jobs:
             node scripts/alias-tarball.mjs compare "$dest"/canonical/*.tgz "$dest/$alias"/*.tgz
           done
 
-  # Dispatch only: see `workflow_dispatch` above.
+  # Alias repair only: a tag retry cannot enter this job.
   alias:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: release
+    if: ${{ needs.release.outputs.mode == 'alias' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
