@@ -65,6 +65,7 @@ jobs:
       id-token: write # OIDC token for npm trusted publishing
     outputs:
       mode: ${{ steps.target.outputs.mode }}
+      checkout_ref: ${{ steps.target.outputs.checkout_ref }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -79,7 +80,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Resolve both dispatch modes before either can reach a publish step.
+      # Bind every publish path to an immutable commit before checkout.
       # A partial alias failure still uses the registry tarball in the alias job;
       # tag retry never republishes or selectively skips an existing canonical.
       - name: Resolve the release target
@@ -90,15 +91,45 @@ jobs:
           CUT_TAG: ${{ steps.release.outputs.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
           ALIAS_VERSION: ${{ inputs.alias_version }}
+          ALIAS_NAMES: ${{ inputs.alias_names }}
+          RUN_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          resolve_commit() {
+            # Explicit tags/ disambiguates a same-named branch. The commits API
+            # peels annotated tags as well as lightweight tags to a commit SHA.
+            if ! tag_sha="$(gh api "repos/$REPO/commits/tags%2F$release_tag" --jq .sha)"; then
+              echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $release_tag to a commit"
+              exit 1
+            fi
+            if ! [[ "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::RELEASE_TAG_UNRESOLVED: $release_tag did not resolve to a full commit SHA"
+              exit 1
+            fi
+            if [ -z "${RUN_SHA:-}" ] || [ "$RUN_SHA" != "$tag_sha" ]; then
+              if [ "$target_mode" = alias ]; then
+                printf -v recovery 'gh workflow run release.yml --repo %q --ref %q -f alias_version=%q -f alias_names=%q' "$REPO" "$release_tag" "$ALIAS_VERSION" "$ALIAS_NAMES"
+              else
+                printf -v recovery 'gh workflow run release.yml --repo %q --ref %q -f tag=%q' "$REPO" "$release_tag" "$release_tag"
+              fi
+              echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA ${RUN_SHA:-<missing>} is not $release_tag's commit $tag_sha; the tag remains cut; recover with $recovery"
+              exit 1
+            fi
+          }
           if [ "$EVENT" = push ]; then
             if [ "$CREATED" = true ]; then
+              if ! [[ "$CUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                echo "::error::RELEASE_TAG_FORM: tag must be vX.Y.Z"
+                exit 1
+              fi
+              release_tag="$CUT_TAG"
+              target_mode=push
+              resolve_commit
               echo "publish=true" >> "$GITHUB_OUTPUT"
               echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=$CUT_TAG" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
             else
               echo "publish=false" >> "$GITHUB_OUTPUT"
             fi
@@ -114,8 +145,12 @@ jobs:
               echo "::error::RELEASE_MODE: supply tag or a numeric alias_version (X.Y.Z)"
               exit 1
             fi
+            release_tag="v$ALIAS_VERSION"
+            target_mode=alias
+            resolve_commit
             echo "mode=alias" >> "$GITHUB_OUTPUT"
             echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -152,10 +187,13 @@ jobs:
             echo "::error::RELEASE_REGISTRY_LOOKUP: canonical absence could not be verified"
             exit 1
           fi
+          release_tag="$INPUT_TAG"
+          target_mode=tag
+          resolve_commit
           echo "mode=tag" >> "$GITHUB_OUTPUT"
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=refs/tags/$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
 
       # The original gate, publish and confirmation steps serve both paths.
       - uses: actions/checkout@v4
@@ -201,6 +239,10 @@ jobs:
         env:
           RUN_SHA: ${{ github.sha }}
           TAG_NAME: ${{ steps.target.outputs.tag }}
+          MODE: ${{ steps.target.outputs.mode }}
+          REPO: ${{ github.repository }}
+          ALIAS_VERSION: ${{ inputs.alias_version }}
+          ALIAS_NAMES: ${{ inputs.alias_names }}
         run: &provenance_source_guard |
           set -euo pipefail
           if ! checkout_sha="$(git rev-parse --verify 'HEAD^{commit}')" || [ -z "$checkout_sha" ]; then
@@ -208,7 +250,12 @@ jobs:
             exit 1
           fi
           if [ -z "${RUN_SHA:-}" ] || [ "$RUN_SHA" != "$checkout_sha" ]; then
-            echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA ${RUN_SHA:-<missing>} is not $TAG_NAME's checked-out HEAD $checkout_sha, and npm provenance would name the former; dispatch with --ref $TAG_NAME"
+            if [ "$MODE" = alias ]; then
+              printf -v recovery 'gh workflow run release.yml --repo %q --ref %q -f alias_version=%q -f alias_names=%q' "$REPO" "$TAG_NAME" "$ALIAS_VERSION" "$ALIAS_NAMES"
+            else
+              printf -v recovery 'gh workflow run release.yml --repo %q --ref %q -f tag=%q' "$REPO" "$TAG_NAME" "$TAG_NAME"
+            fi
+            echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA ${RUN_SHA:-<missing>} is not $TAG_NAME's checked-out HEAD $checkout_sha, and npm provenance would name the former; recover with $recovery"
             exit 1
           fi
 
@@ -328,12 +375,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ inputs.alias_version }}
+          ref: ${{ needs.release.outputs.checkout_ref }}
 
       - name: Verify the dispatched source commit
         env:
           RUN_SHA: ${{ github.sha }}
           TAG_NAME: v${{ inputs.alias_version }}
+          MODE: alias
+          REPO: ${{ github.repository }}
+          ALIAS_VERSION: ${{ inputs.alias_version }}
+          ALIAS_NAMES: ${{ inputs.alias_names }}
         run: *provenance_source_guard
 
       - uses: actions/setup-node@v4
