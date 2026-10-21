@@ -450,6 +450,42 @@ box, an inverse clip removes nothing, and bounding boxes, paths and points do
 not draw and do not count. Both cost nothing until called and read the same
 numbers in `dom` and `canvas` mode.
 
+`readSetupMesh` reads a named mesh from loaded assets before or during playback,
+including an attachment the setup pose does not select:
+
+```ts
+import { readSetupMesh } from '@rig-c/play';
+
+const mesh = readSetupMesh(assets, { slot: 'flag', attachment: 'alternate' });
+// mesh: { slot, attachment, skin, vertices, triangles, hull }
+// vertices: flat world x,y pairs, Y up; hull counts vertices, or is null.
+```
+
+Names are exact slot names and attachment table keys, not display names or atlas
+regions. Omitted or `null` skin means no skin set, as for a fresh player. A named
+`skin` uses that skin's activation lists with default-table fallback; the returned
+`skin` names the supplying table. `skin: 'all'` uses all activation lists and
+refuses differing definitions rather than guessing a merge order. Linked meshes
+retain the requested identity and borrow source topology/bindings; unweighted
+vertices use the queried slot's bone. Inactive bones retain core's zero matrix.
+The result and its arrays are detached and mutable. Missing slot/attachment/skin,
+non-mesh and ambiguous targets throw core's named `CoreInputError` messages;
+setup/non-finite refusals propagate unchanged. The read creates no player and
+changes no document, existing player, time, generation or rendered frame.
+
+**Setup-slider boundary (core 2.66.0):** selected meshes include setup-slider
+deform, exactly as core's setup pose does. Unselected meshes use stored geometry
+through the same setup constraint/reset-physics matrices, without switching the
+attachment or borrowing another selection's deform. Core measured **four of six
+nonselected official-runtime comparisons differing by up to
+`2.9999999999999982` world units (about 3.0)**: spine-core 4.3.13's
+`computeWorldVertices` borrows the selected slot's deform, including for a linked
+mesh with `timelines: false`. The other two nonselected calls and all three
+selected reads agree exactly. This wrapper passes core's output through; it does
+not correct or round it. Stored-only formula comparisons therefore have a
+different domain from selected geometry with setup deform. See
+[core AUTHORING §14, including S1538_09](https://github.com/rig-c/core/blob/v2.66.0/docs/AUTHORING.md#14-read-a-named-mesh-at-setup).
+
 ### Drawing some slots only
 
 `slots` is a draw filter — an allow list of slot names or a predicate — settable up
@@ -1009,6 +1045,7 @@ name, and unloading is still elements first, bitmaps second.
 | `skeleton.findBone('head').worldX`, `.worldY`, `.a` … `.d` | `player.bone('head')` | `{ x, y, a, b, c, d, rotationX, rotationY, scaleX, scaleY, active }`, the core's world transform for the pose the player holds (the setup pose before `play`). An unknown name is refused by name. Since 1.1.0. |
 | `bone.scaleY = …` on a `Skeleton` between `state.apply` and `updateWorldTransform` | `RigPlayerOptions.adjust`, `player.adjust`, `player.repose()` | A function called once per pose with the pose's bone locals (`bones.bone('mouth').scaleY = v`). A write lasts one pose: the core poses every step from the setup pose, so write the value you want, every pose — nothing compounds. See *Adjusting bones*. Since 1.2.0. |
 | `skeleton.getBounds(offset, size)` | `player.bounds()` | `{ x, y, width, height }` or null, world units, Y up: the box of every drawn region's corners and mesh's vertices, a slot under a clip counted inside the clip's own box. `ModelAssets.stage` remains the declared framing, not this box. Since 1.1.0. |
+| named setup mesh geometry | `readSetupMesh(assets, { slot, attachment, skin? })` | Detached full-double world x/y (Y up), triangles and hull for any named mesh/linked mesh, including non-setup selections; no player/time mutation. Selected geometry includes setup-slider deform; unselected geometry is stored geometry through unchanged setup matrices. See the measured official-runtime distinction under *Reading the pose*. |
 
 ### No counterpart in 1.0.0
 
