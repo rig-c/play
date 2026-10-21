@@ -1,0 +1,23 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "parameters",
+  "images": "parts",
+  "skeleton": { "x": -200, "y": -200, "width": 400, "height": 400 },
+  "bones": [
+    { "name": "root" },
+    { "name": "link", "parent": "root", "length": 160, "rotation": -90 },
+    { "name": "spare", "parent": "root", "length": 10 },
+    { "name": "optional", "parent": "root", "length": 10 }
+  ],
+  "slots": [{ "name": "link", "bone": "link", "attachment": "link" }],
+  "skins": {
+    "default": { "link": { "link": { "image": "link.png", "x": 80, "rotation": -90 } } },
+    "active": { "attachments": {}, "physics": ["optional_phys"] }
+  },
+  "constraints": [
+    { "type": "ik", "name": "aim", "bones": ["spare"], "target": "root", "mix": 1 },
+    { "type": "physics", "name": "declared", "bone": "link", "rotate": 1, "strength": 60, "damping": 0.8, "inertia": 0.4, "wind": 12, "gravity": 12, "mix": 0.9 },
+    { "type": "physics", "name": "defaults", "bone": "spare", "rotate": 1 },
+    { "type": "physics", "name": "optional_phys", "bone": "optional", "rotate": 1, "skin": true }
+  ]
+}

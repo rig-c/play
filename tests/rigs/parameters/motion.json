@@ -1,0 +1,14 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "parameters",
+  "cut": "test-parameters",
+  "easings": {},
+  "animations": {
+    "idle": { "duration": 1, "loop": true, "tracks": [
+      { "bone": "root", "property": "rotate", "keys": [{ "t": 0, "v": [0] }, { "t": 1, "v": [0] }] }
+    ] },
+    "keyed": { "duration": 1, "loop": true, "tracks": [
+      { "physics": "declared", "property": "damping", "keys": [{ "t": 0, "v": [0.2] }, { "t": 1, "v": [0.8] }] }
+    ] }
+  }
+}

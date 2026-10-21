@@ -163,7 +163,7 @@ test.afterAll(() => {
 test('the package entry resolves by name in node and exposes its public API', () => {
   const run = probe(
     'probe-index.mjs',
-    "const m = await import('@rig-c/play');\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
+    "const m = await import('@rig-c/play');\nfor (const name of ['setPhysicsParameters', 'readPhysicsParameters', 'clearPhysicsParameters']) { if (typeof m.RigPlayer.prototype[name] !== 'function') throw new Error(name); }\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
   );
   expect(run.status, `import('@rig-c/play') failed:\n${run.stderr}`).toBe(0);
   // Exhaustive on purpose: what the root entry exports is the package's API.
@@ -332,10 +332,10 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and th
   // pose doubt is a rigc issue against that version.
   expect(typeof manifest.devDependencies?.['rig-c']).toBe('string');
   expect(manifest.devDependencies?.['rig-c']).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(manifest.devDependencies?.['rig-c']).toBe('2.66.0');
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.66.0');
-  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.66.0');
-  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.66.0"');
+  expect(manifest.devDependencies?.['rig-c']).toBe('2.67.0');
+  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.67.0');
+  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.67.0');
+  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.67.0"');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
 });
 
@@ -600,6 +600,14 @@ test('the bundle imports nothing: rig-c/core is inside it, and no node built-in 
 const CONSUMER_SOURCE = [
   "import { CanvasRenderer, DomRenderer, loadModel, readSetupMesh, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
   "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions, SlotIdentity, SlotIdentityReason, SlotIdentitySnapshot } from '@rig-c/play';",
+  "import type { BoneAdjust, BoneAdjustContext, PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from '@rig-c/play';",
+  "export const unaryAdjust: BoneAdjust = bones => { bones.bone('root').rotation = 3; };",
+  "export const contextualAdjust: BoneAdjust = (bones, ctx: BoneAdjustContext) => { const time: number | null = ctx.trackTime; const animation: string | null = ctx.animation; const global: number = ctx.globalTime; bones.bone('root').rotation = time ?? global; void animation; };",
+  "export function physics(p: RigPlayer): PhysicsParameterRead { const patch: PhysicsParameterPatch = { strength: 2, damping: 0.4, inertia: 1, wind: 0, gravity: 3, mix: 0.5 }; p.setPhysicsParameters('cloth', patch); const read: PhysicsParameterRead = p.readPhysicsParameters('cloth'); const effective: PhysicsParameters | null = read.effective; p.clearPhysicsParameters('cloth'); void effective; return read; }",
+  '// @ts-expect-error public parameter fields are readonly',
+  'export function readonlyParameters(p: PhysicsParameters): void { p.damping = 1; }',
+  '// @ts-expect-error public context fields are readonly',
+  'export function readonlyContext(c: BoneAdjustContext): void { c.trackTime = 1; }',
   'export const surface = [CanvasRenderer, DomRenderer, RigPlayer, loadModel, unpackRegions, revokeRegions];',
   "import type { SetupMesh, SetupMeshTarget } from '@rig-c/play';",
   'export function setup(assets: ModelAssets, target: SetupMeshTarget): SetupMesh { const m = readSetupMesh(assets, target); const xy: number[] = m.vertices; const triangles: number[] = m.triangles; const hull: number | null = m.hull; return { ...m, vertices: xy, triangles, hull }; }',

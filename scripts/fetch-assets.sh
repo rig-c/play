@@ -26,7 +26,7 @@ set -euo pipefail
 # Pinned twice, on purpose: the sources come from the rigc tag below and the
 # build is run by the rig-c devDependency of the same version, so a fixture is
 # a function of one version and is rebuilt when it moves.
-RIGC_TAG="v2.66.0"
+RIGC_TAG="v2.67.0"
 RIGS="walk flex squash portrait nod look ride"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RIGS_DEST="$ROOT/public/rigs"
@@ -176,6 +176,7 @@ rm -f "$RIGS_DEST/turned/art/turned.atlas"
 test_rig duo duo
 test_rig named named --atlas-in art/named.atlas
 test_rig cloth cloth
+test_rig parameters parameters
 test_rig draw draw
 test_rig sets sets
 test_rig sets sets-packed --pack
