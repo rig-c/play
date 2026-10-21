@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.1](https://github.com/rig-c/play/compare/v1.12.0...v1.12.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** bind dispatched publication to its checkout commit ([#158](https://github.com/rig-c/play/issues/158)) ([2aa6b6a](https://github.com/rig-c/play/commit/2aa6b6a6bf535fa93be7aebe010e63eca6c03cbc)), closes [#155](https://github.com/rig-c/play/issues/155)
+* **ci:** retry publication for an already-cut release tag ([#156](https://github.com/rig-c/play/issues/156)) ([12d3e20](https://github.com/rig-c/play/commit/12d3e20bf2fce93598deb97214b50f267103b045))
+
 ## [1.12.0](https://github.com/rig-c/play/compare/v1.11.2...v1.12.0) (2026-10-18)
 
 
