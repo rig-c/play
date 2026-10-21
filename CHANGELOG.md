@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/rig-c/play/compare/v1.12.1...v1.13.0) (2026-10-21)
+
+
+### Features
+
+* read named mesh setup geometry through core ([#159](https://github.com/rig-c/play/issues/159)) ([c77f490](https://github.com/rig-c/play/commit/c77f490605953fbcf476ef8afed709310100f661))
+
 ## [1.12.1](https://github.com/rig-c/play/compare/v1.12.0...v1.12.1) (2026-10-21)
 
 
