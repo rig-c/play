@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.14.1](https://github.com/rig-c/play/compare/v1.14.0...v1.14.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** bind push release provenance to the cut tag commit ([#164](https://github.com/rig-c/play/issues/164)) ([3f80984](https://github.com/rig-c/play/commit/3f809845e767f3e164c1472f058269ff24c165d4))
+* **ci:** resolve annotated release tags through full refs ([#167](https://github.com/rig-c/play/issues/167)) ([1d2266d](https://github.com/rig-c/play/commit/1d2266d1eaf7a94ce4f8b39c52796e6fef3f7fc0))
+
 ## [1.14.0](https://github.com/rig-c/play/compare/v1.13.0...v1.14.0) (2026-10-21)
 
 
