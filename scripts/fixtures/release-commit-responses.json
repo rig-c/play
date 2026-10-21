@@ -1,0 +1,112 @@
+{
+  "provenance": "Fresh read-only live gh recordings for play#166, not a prior core capture. stdout/stderr are exact UTF-8 bytes from gh; tests replay them offline and do not call GitHub. HTTP status was independently recorded with gh api --include; raw responses remain private.",
+  "ghVersion": "gh version 2.65.0 (2025-01-06)\nhttps://github.com/cli/cli/releases/tag/v2.65.0\n",
+  "cases": [
+    {
+      "name": "git-v2.45.0",
+      "repo": "git/git",
+      "tag": "v2.45.0",
+      "ref": {
+        "argv": [
+          "gh",
+          "api",
+          "repos/git/git/git/ref/tags/v2.45.0"
+        ],
+        "recordedAt": "2026-10-21T14:49:28.639745+00:00",
+        "exit": 0,
+        "stdout": "{\"ref\":\"refs/tags/v2.45.0\",\"node_id\":\"MDM6UmVmMzY1MDI6cmVmcy90YWdzL3YyLjQ1LjA=\",\"url\":\"https://api.github.com/repos/git/git/git/refs/tags/v2.45.0\",\"object\":{\"sha\":\"8be58deda2ccce7d036072ec34439f9fad88204f\",\"type\":\"tag\",\"url\":\"https://api.github.com/repos/git/git/git/tags/8be58deda2ccce7d036072ec34439f9fad88204f\"}}",
+        "stderr": ""
+      },
+      "commitSha": "786a3e4b8d754d2b14b1208b98eeb0a554ef19a8",
+      "responses": [
+        {
+          "argv": [
+            "gh",
+            "api",
+            "repos/git/git/commits/tags%2Fv2.45.0",
+            "--jq",
+            ".sha"
+          ],
+          "recordedAt": "2026-10-21T14:49:29.503682+00:00",
+          "exit": 1,
+          "stdout": "{\"message\":\"No commit found for SHA: tags/v2.45.0\",\"documentation_url\":\"https://docs.github.com/rest/commits/commits#get-a-commit\",\"status\":\"422\"}",
+          "stderr": "gh: No commit found for SHA: tags/v2.45.0 (HTTP 422)\n",
+          "httpStatus": 422,
+          "stdoutSha256": "250716c94042004cfbaff1dc10298bab8fa6260e4b8fcd58a5011520cf168f7b",
+          "stderrSha256": "f7ba2285277b393b647a0709f504863f6e186e00dd8c3ffc35a27f37eb347789",
+          "rawResponseSha256": "74a6d72b2b3cfa26453449eeb438f9f4e22b31d05ffd6612aeeda17c5c5797c4"
+        },
+        {
+          "argv": [
+            "gh",
+            "api",
+            "repos/git/git/commits/refs%2Ftags%2Fv2.45.0",
+            "--jq",
+            ".sha"
+          ],
+          "recordedAt": "2026-10-21T14:49:30.280256+00:00",
+          "exit": 0,
+          "stdout": "786a3e4b8d754d2b14b1208b98eeb0a554ef19a8\n",
+          "stderr": "",
+          "httpStatus": 200,
+          "stdoutSha256": "9f3fac98833d22d6af16fc0083bc87e46a9bdfaf8c0c3afc0e1c58da804eba23",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "rawResponseSha256": "4403a86885d5fc5387ee3c0c60020e0a25be6b99d18174510b81c0e972a1eeb0"
+        }
+      ]
+    },
+    {
+      "name": "play-v1.14.0",
+      "repo": "rig-c/play",
+      "tag": "v1.14.0",
+      "ref": {
+        "argv": [
+          "gh",
+          "api",
+          "repos/rig-c/play/git/ref/tags/v1.14.0"
+        ],
+        "recordedAt": "2026-10-21T14:49:30.671844+00:00",
+        "exit": 0,
+        "stdout": "{\"ref\":\"refs/tags/v1.14.0\",\"node_id\":\"REF_kwDOT-a4p7FyZWZzL3RhZ3MvdjEuMTQuMA\",\"url\":\"https://api.github.com/repos/rig-c/play/git/refs/tags/v1.14.0\",\"object\":{\"sha\":\"8b18e0de69e980575535fe8240cbf68667d1f404\",\"type\":\"commit\",\"url\":\"https://api.github.com/repos/rig-c/play/git/commits/8b18e0de69e980575535fe8240cbf68667d1f404\"}}",
+        "stderr": ""
+      },
+      "commitSha": "8b18e0de69e980575535fe8240cbf68667d1f404",
+      "responses": [
+        {
+          "argv": [
+            "gh",
+            "api",
+            "repos/rig-c/play/commits/tags%2Fv1.14.0",
+            "--jq",
+            ".sha"
+          ],
+          "recordedAt": "2026-10-21T14:49:31.571062+00:00",
+          "exit": 0,
+          "stdout": "8b18e0de69e980575535fe8240cbf68667d1f404\n",
+          "stderr": "",
+          "httpStatus": 200,
+          "stdoutSha256": "edebcac8e2958c5a8161586567006bff893ca6c744a5231a6d78cd5482fda80e",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "rawResponseSha256": "b3d3c2041153700e90948abf8caffb808f8a220570ef9bd98211b43b49957d36"
+        },
+        {
+          "argv": [
+            "gh",
+            "api",
+            "repos/rig-c/play/commits/refs%2Ftags%2Fv1.14.0",
+            "--jq",
+            ".sha"
+          ],
+          "recordedAt": "2026-10-21T14:49:32.425935+00:00",
+          "exit": 0,
+          "stdout": "8b18e0de69e980575535fe8240cbf68667d1f404\n",
+          "stderr": "",
+          "httpStatus": 200,
+          "stdoutSha256": "edebcac8e2958c5a8161586567006bff893ca6c744a5231a6d78cd5482fda80e",
+          "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "rawResponseSha256": "747837a13441afca4dd3f662546a89ac53cd2cf0af46f20514a552d942a93b23"
+        }
+      ]
+    }
+  ]
+}

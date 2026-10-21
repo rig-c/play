@@ -113,8 +113,8 @@ refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
 (`RELEASE_TAG_UNRELEASED`), and a canonical version already served by npm
 (`RELEASE_ALREADY_PUBLISHED`). Only an explicit registry `E404` permits the
 retry; network, permission and unknown errors stop it. It resolves the explicit
-tag through `commits/tags%2FvX.Y.Z` to a full commit SHA, checks out that immutable
-SHA, fetches main's full history (unshallowing when needed),
+tag through `commits/refs%2Ftags%2FvX.Y.Z` to a full commit SHA, checks out that
+immutable SHA, fetches main's full history (unshallowing when needed),
 and requires that checked-out tag commit to be an ancestor of `origin/main`
 (`RELEASE_TAG_NOT_ON_MAIN` otherwise). History queries and fetch errors stop the
 retry; an unknown result never counts as ancestry. These checks run before
@@ -128,10 +128,17 @@ workflow beyond the build that `prepublishOnly` runs.
 Checkout source and workflow execution context are distinct. For **push, tag
 retry and alias-only repair**, before checkout or enabling publication, the
 workflow compares the run's `github.sha` context (the source `GITHUB_SHA` npm
-provenance records) with the resolved tag commit. The commits API resolves both
-lightweight and annotated tags to commits, not annotated tag objects; the
-explicit `tags%2F` reference avoids a same-named branch. API failures, empty or
-malformed responses refuse with `RELEASE_TAG_UNRESOLVED`; only a full 40-character
+provenance records) with the resolved tag commit. Use the full
+`refs%2Ftags%2F` reference to select the tag namespace and resolve a commit,
+including an annotated tag. The earlier claim that `tags%2F` also resolved
+annotated tags was unsupported: a fresh read-only recording of `git/git`
+`v2.45.0` returned HTTP 422 ("No commit found") for that spelling and HTTP 200
+with commit `786a3e4b8d754d2b14b1208b98eeb0a554ef19a8` for the full reference.
+The lightweight `rig-c/play` `v1.14.0` resolved to
+`8b18e0de69e980575535fe8240cbf68667d1f404` with either spelling. These are
+recorded observations of those tags, not a claim that both spellings are
+interchangeable. API failures, empty or malformed responses refuse with
+`RELEASE_TAG_UNRESOLVED`; only a full 40-character
 lowercase hexadecimal SHA is accepted. A missing or unequal run SHA refuses
 with `PROVENANCE_SHA_MISMATCH`, naming both SHAs and a repository-scoped recovery
 command. Successful paths check out the validated SHA, even if the tag moves
@@ -169,8 +176,13 @@ an already-published canonical version to the tag-retry path.
 Tag retry does not republish canonical or skip arbitrary aliases.
 
 The isolated decision checks run with `bun test scripts/release-workflow.test.ts`.
-They execute the workflow's shell bodies with mocked APIs and publish recorders;
-they do not prove production OIDC, provenance issuance or registry propagation.
+They execute the workflow's shell bodies with mocked APIs and publish recorders.
+`scripts/fixtures/release-commit-responses.json` preserves fresh live `gh --jq`
+stdout/stderr and exits for the two tags above; the offline mock replays the
+response matching the actual requested endpoint. The planted old-prefix copy
+refuses the annotated tag while the lightweight control still resolves. Other
+API, checkout and publish behavior remains synthetic; these checks do not prove
+production OIDC, provenance issuance or registry propagation.
 
 ## One-time setup (owner, GitHub)
 
