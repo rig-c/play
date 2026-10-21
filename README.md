@@ -1197,6 +1197,37 @@ artifact. Use the required nova-run guard and a unique `TEST_PORT` for a
 focused `bun run test tests/oracle.spec.ts --workers=1`; full-suite acceptance
 remains CI. Headless results are raster evidence, never device performance.
 
+## Pose-only benchmark
+
+```bash
+bun run fetch-assets
+bun run bench:pose
+bun run bench:pose --rig look --animation turn --counts 1,100 --warmup 60 --samples 300 --dt 0.016666666666666666
+```
+
+This browser-free Bun command reads the current TypeScript source and an existing compiled
+fixture (`look` by default), then measures actual `RigPlayer.advance(dt)` plus
+`posedFrame()` calls on 1 and 100 independent players. No images are loaded
+and no renderer is called. Missing fixtures fail by name with the
+`bun run fetch-assets` command. `--model <skeleton.model.json>` accepts another
+compiled model instead of `--rig`; `--skin <name>` selects its skin. The first
+animation is the default and loops. Each iteration calls `advance(dt)` then
+`posedFrame()` for one player before moving to the next player. JSON output
+records the runtime and version, manifest core pin, SHA-256 of the model bytes
+actually parsed, loop flag, iteration order, warmup and sample counts, step
+size, batch p50 milliseconds and p50 divided by player count. For sorted sample
+durations, p50 is the middle sample for an odd count and the arithmetic mean
+of the middle two for an even count. Model loading and player construction
+are outside the measured intervals. These are CPU pose
+and adapter timings, not rendered frame rate or device performance. Run timing
+comparisons through the required exclusive Nova runner on an otherwise idle
+machine.
+
+A/B measurements using a Vite-built library under Node and advancing all
+players before reading all their frames use a different runtime, build and
+iteration order. Their numbers and this current-source Bun command's numbers
+are not interchangeable.
+
 ## Benchmark: DOM, canvas and official WebGL
 
 ```bash

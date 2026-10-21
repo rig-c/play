@@ -147,6 +147,58 @@ export interface FrameSource {
   triangles: Map<string, number[][]>;
 }
 
+interface ClipPolygon {
+  end: string | null;
+  polygon: number[];
+}
+
+/** Temporary indexes only: none of these maps crosses into a returned frame. */
+interface FrameIndexes {
+  busy: boolean;
+  regions: Map<string, DrawnRegion>;
+  rows: Map<string, CoreSlotRow>;
+  z: Map<string, number>;
+  polygons: Map<string, ClipPolygon>;
+  shown: Map<string, RawPose['shown'][number]>;
+  cover: Map<string, PosedClip>;
+}
+
+function frameIndexes(): FrameIndexes {
+  return {
+    busy: false,
+    regions: new Map(), rows: new Map(), z: new Map(),
+    polygons: new Map(), shown: new Map(), cover: new Map(),
+  };
+}
+
+// A player owns its source (and replaces it on a skin change). A filter may
+// synchronously reenter frameOf with that same source: borrow a separate set
+// of indexes then, without replacing the outer call's indexes.
+const indexesOf = new WeakMap<FrameSource, FrameIndexes>();
+
+function acquireIndexes(source: FrameSource): FrameIndexes {
+  let indexes = indexesOf.get(source);
+  if (indexes === undefined) {
+    indexes = frameIndexes();
+    indexesOf.set(source, indexes);
+  } else if (indexes.busy) {
+    indexes = frameIndexes();
+  }
+  indexes.busy = true;
+  return indexes;
+}
+
+function releaseIndexes(indexes: FrameIndexes): void {
+  // Reuse the containers, never retain the previous pose's records.
+  indexes.regions.clear();
+  indexes.rows.clear();
+  indexes.z.clear();
+  indexes.polygons.clear();
+  indexes.shown.clear();
+  indexes.cover.clear();
+  indexes.busy = false;
+}
+
 /**
  * Builds the frame source for one view of a document — the view the track was
  * opened on (`underSkin` / `underNoSkin`), since which bones are active is a
@@ -242,9 +294,23 @@ function trianglesOf(source: FrameSource, drawn: RawDrawn): number[] {
  * @internal Exported for the frame gate's synthetic cover cases.
  */
 export function clipCover(pose: Pick<RawPose, 'clips' | 'shown' | 'drawOrder'>, active: ReadonlySet<string>, draws: (slot: string) => boolean = () => true): Map<string, PosedClip> {
-  const polygons = new Map(pose.clips.map((c) => [c[0], { end: c[2], polygon: c[3] }]));
-  const shownOf = new Map(pose.shown.map((s) => [s.slot, s]));
+  const polygons = new Map<string, ClipPolygon>();
+  const shownOf = new Map<string, RawPose['shown'][number]>();
   const cover = new Map<string, PosedClip>();
+  fillClipCover(pose, active, draws, polygons, shownOf, cover);
+  return cover;
+}
+
+function fillClipCover(
+  pose: Pick<RawPose, 'clips' | 'shown' | 'drawOrder'>,
+  active: ReadonlySet<string>,
+  draws: (slot: string) => boolean,
+  polygons: Map<string, ClipPolygon>,
+  shownOf: Map<string, RawPose['shown'][number]>,
+  cover: Map<string, PosedClip>,
+): void {
+  for (const clip of pose.clips) polygons.set(clip[0], { end: clip[2], polygon: clip[3] });
+  for (const shown of pose.shown) shownOf.set(shown.slot, shown);
   let current: { end: string | null; clip: PosedClip } | null = null;
   for (const slot of pose.drawOrder) {
     const shown = shownOf.get(slot);
@@ -262,7 +328,6 @@ export function clipCover(pose: Pick<RawPose, 'clips' | 'shown' | 'drawOrder'>, 
     if (current !== null) cover.set(slot, current.clip);
     if (current !== null && current.end === slot) current = null;
   }
-  return cover;
 }
 
 /**
@@ -294,58 +359,64 @@ export function frameOf(
 ): PosedFrame {
   const { drawn: regions, why } = drawnRegions(source.doc, pose.shown, pose.drawOrder, source.uv);
   if (regions === null) throw new CoreInputError(`the page UVs are not posed: ${why}`);
-  const regionOf = new Map(regions.map((r) => [r.slot, r]));
-  const rows = new Map<string, CoreSlotRow>(pose.slots.map((row) => [row[0], row]));
-  const z = new Map(pose.drawOrder.map((slot, index) => [slot, index]));
-  const cover = clipCover(pose, source.active, draws);
-  const [sr, sg, sb, sa] = color;
-  const order: PosedSlot[] = [];
-  for (const d of pose.drawn) {
-    if (!draws(d.slot)) continue;
-    const bone = source.boneOf.get(d.slot);
-    if (bone === undefined || !source.active.has(bone)) continue;
-    const found = regionOf.get(d.slot);
-    if (found === undefined) throw new CoreInputError(`slot "${d.slot}" drew "${d.attachment}", and no atlas region was resolved for it`);
-    const row = rows.get(d.slot);
-    if (row === undefined) throw new CoreInputError(`slot "${d.slot}" drew and has no slot row`);
-    const tint: [number, number, number, number] = [
-      channel(row[2], d.slot) * d.colour[0] * sr,
-      channel(row[3], d.slot) * d.colour[1] * sg,
-      channel(row[4], d.slot) * d.colour[2] * sb,
-      channel(row[5], d.slot) * d.colour[3] * sa,
-    ];
-    const darkRow = row[6];
-    const common = {
-      slot: d.slot,
-      z: z.get(d.slot) as number,
-      blend: (row[8] ?? 'Normal') as BlendMode,
-      tint,
-      ...(darkRow === null ? {} : { dark: [channel(darkRow[0], d.slot), channel(darkRow[1], d.slot), channel(darkRow[2], d.slot)] as [number, number, number] }),
-      ...(cover.has(d.slot) ? { clip: cover.get(d.slot) as PosedClip } : {}),
-    };
-    const page = source.pages.get(found.found.page.name);
-    if (d.kind === 'region') {
-      order.push({
-        ...common,
-        kind: 'region',
-        region: found.region,
-        corners: d.vertices,
-        page: found.found.page.name,
-        pma: page?.pma === true,
-        uvs: regionUvs(source, found),
-      });
-    } else {
-      order.push({
-        ...common,
-        kind: 'mesh',
-        page: found.found.page.name,
-        pma: page?.pma === true,
-        vertices: d.vertices,
-        uvs: meshUvs(source, found),
-        triangles: trianglesOf(source, d),
-        sequence: d.sequenceIndex,
-      });
+  const indexes = acquireIndexes(source);
+  try {
+    const { regions: regionOf, rows, z, cover } = indexes;
+    for (const region of regions) regionOf.set(region.slot, region);
+    for (const row of pose.slots) rows.set(row[0], row);
+    for (let i = 0; i < pose.drawOrder.length; i++) z.set(pose.drawOrder[i], i);
+    fillClipCover(pose, source.active, draws, indexes.polygons, indexes.shown, cover);
+    const [sr, sg, sb, sa] = color;
+    const order: PosedSlot[] = [];
+    for (const d of pose.drawn) {
+      if (!draws(d.slot)) continue;
+      const bone = source.boneOf.get(d.slot);
+      if (bone === undefined || !source.active.has(bone)) continue;
+      const found = regionOf.get(d.slot);
+      if (found === undefined) throw new CoreInputError(`slot "${d.slot}" drew "${d.attachment}", and no atlas region was resolved for it`);
+      const row = rows.get(d.slot);
+      if (row === undefined) throw new CoreInputError(`slot "${d.slot}" drew and has no slot row`);
+      const tint: [number, number, number, number] = [
+        channel(row[2], d.slot) * d.colour[0] * sr,
+        channel(row[3], d.slot) * d.colour[1] * sg,
+        channel(row[4], d.slot) * d.colour[2] * sb,
+        channel(row[5], d.slot) * d.colour[3] * sa,
+      ];
+      const darkRow = row[6];
+      const common = {
+        slot: d.slot,
+        z: z.get(d.slot) as number,
+        blend: (row[8] ?? 'Normal') as BlendMode,
+        tint,
+        ...(darkRow === null ? {} : { dark: [channel(darkRow[0], d.slot), channel(darkRow[1], d.slot), channel(darkRow[2], d.slot)] as [number, number, number] }),
+        ...(cover.has(d.slot) ? { clip: cover.get(d.slot) as PosedClip } : {}),
+      };
+      const page = source.pages.get(found.found.page.name);
+      if (d.kind === 'region') {
+        order.push({
+          ...common,
+          kind: 'region',
+          region: found.region,
+          corners: d.vertices,
+          page: found.found.page.name,
+          pma: page?.pma === true,
+          uvs: regionUvs(source, found),
+        });
+      } else {
+        order.push({
+          ...common,
+          kind: 'mesh',
+          page: found.found.page.name,
+          pma: page?.pma === true,
+          vertices: d.vertices,
+          uvs: meshUvs(source, found),
+          triangles: trianglesOf(source, d),
+          sequence: d.sequenceIndex,
+        });
+      }
     }
+    return { order };
+  } finally {
+    releaseIndexes(indexes);
   }
-  return { order };
 }

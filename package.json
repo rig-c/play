@@ -69,6 +69,7 @@
     "preview": "vite preview",
     "test": "playwright test",
     "bench": "bash scripts/fetch-assets.sh && node scripts/bench.mjs",
+    "bench:pose": "bun scripts/bench-pose.ts",
     "bench:dev": "bash scripts/fetch-assets.sh && vite --config bench/vite.config.ts",
     "bench:build": "bash scripts/fetch-assets.sh && vite build --config bench/vite.config.ts",
     "fetch-assets": "bash scripts/fetch-assets.sh"
