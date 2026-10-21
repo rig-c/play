@@ -470,27 +470,79 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
   rigc's format cannot express, that is a rigc issue — not a fixture made
   outside rigc.
 
-## Workflow
+## Working with the command post
 
-- Conventional Commits, English subject and body. Commit each finished unit
-  immediately. The subjects are load-bearing now: release-please reads them to
-  pick the next version and to write CHANGELOG.md.
-- Pushing to origin is fine (owner-confirmed), and **so is merging** (owner
-  decision, 2026-09-18; until v0.4.1 the release was the owner's click, and
-  v0.5.0 was the first cut made under this rule): a feature pull request once
-  its checks are green, and the `release: vX.Y.Z` pull request `release.yml`
-  keeps open after every push to `main`. Merging that one is the cut, and the
-  call belongs to the session that landed the work. Make it from the tree, not
-  from the generated diff: what `npm pack --dry-run` ships, whether the headline
-  change is reachable by a consumer, whether the release reversed itself — get a
-  green on the release commit first (RELEASING.md says how), and say in the
-  release notes what was not measured. Read the checks, then merge as a separate
-  command; never chain the two. After the cut, verify the published artifact,
-  not the workflow's word: the registry version, the provenance attestation, and
-  an import of the package by each of its two names from a clean directory. What
-  stays the owner's: issues filed by outside contributors, and anything that
-  leaves the repository (posts, contacts, spending). Never run `npm version` or
-  `npm publish` by hand — the publish happens in CI over OIDC.
+HQ assigns the issue and its scope; the authoring sub-commander implements,
+validates and reports it. These gates replace the former blanket permission to
+merge features and release-please PRs.
+
+- **One issue = one PR = one branch.** Start assigned work from current `main`
+  on `<agent>/<number>-slug`, link the issue in the PR, and keep its acceptance bars
+  and exclusions explicit. Record changes to the order on the issue.
+- **Open and report a feature PR; merge only after HQ's sign.** Green checks or
+  opening a PR do not supply that sign. Report the current head and outstanding
+  gates; do not silently expand the approved scope.
+- **AI review runs at most once per PR.** For a Codex-authored PR, independent
+  review must come from the Claude family; same-family Codex automatic review
+  is advisory only. HQ reads the diff directly when signing. If any AI review
+  has already run, request no additional review to satisfy the family boundary.
+  The authoring sub-commander judges every finding, adopts or rejects it with
+  evidence, and records each decision
+  in the PR and in report sections 3/4. HQ checks that these records are present;
+  it does not substitute its judgment for the author's finding-by-finding
+  decisions. This does not remove the separate HQ merge gate.
+- **Send a five-part report when work lands or stops:**
+  1. PR, current head SHA, and merge SHA when merged; otherwise the actual state.
+  2. Verification table: exact command, exit code and observed figures; name
+     skipped checks and their limits.
+  3. Claims contradicted by the current diff or measurements, with evidence,
+     including adopted review findings and their verification.
+  4. Rejected approaches and review findings, each with its reason.
+  5. `STOP` blockers and the next required action, or explicitly none.
+- **Read current evidence before reporting.** Use the actual
+  `git diff origin/main...HEAD`, `git status --short` and the run's raw output
+  for the reported head in the same turn. Name every tracked file touched.
+  Figures and names come from those sources, never recollection; an unrun check
+  or absent measurement stays unmeasured.
+- **HQ artifacts stay outside the public tree**, at the private location named
+  by the card. Public issues, PRs, commits, code and docs contain no private
+  local paths, account or machine identifiers, or private corpus names.
+  A card's prose cap does not remove evidence rows from tables.
+
+### Merge and release gates
+
+- **A release-please release PR may merge and cut only after HQ explicitly says
+  `LGTM #NNN` for that PR.** Landing a feature or green CI grants no release
+  autonomy. Follow RELEASING.md's artifact checks; never run `npm version` or
+  `npm publish` by hand. CI publishes over OIDC.
+- **Approve only a held run for the PR's current head.** Read the current PR
+  head and the selected run's `head_sha` immediately before approving; refuse
+  stale runs. Use `gh api -X POST
+  "repos/rig-c/play/actions/runs/${RUN_ID:?}/approve"` for that verified run.
+  Run approval permits CI to execute; it is not HQ's merge or release sign.
+- **An armed auto-merge PR must not receive pushes**, including a merge from
+  `main` to resolve conflicts. First run `gh pr merge <PR> --disable-auto` and
+  verify it is disabled. Then make and push the change, validate the new head,
+  report it to HQ, and obtain renewed HQ sign before rearming. An old sign or
+  old-head checks cannot authorize the new head.
+- Read required checks and the applicable HQ sign, then merge in a separate
+  command; never chain check success into a merge. Read back the merged state
+  and merge SHA. After an authorized release, verify registry versions,
+  provenance and clean imports for every published name, not only workflow
+  success, and report what was not measured.
+
+### Commits and cleanup
+
+- Use Conventional Commits with English subjects and bodies; release-please
+  reads the subjects for versions and CHANGELOG.md. Stage explicit paths with
+  `git add -- <path>`, never `git add -A`; preserve other owners' work.
+- Each contributing agent's commits and the final squash carry that agent's
+  own `Co-Authored-By` trailer; read back the resulting commit to verify it.
+  Keep private relational signatures out of commits and public documents.
+- For `rm`, use an explicit literal target or a required-variable guard such as
+  `rm -rf -- "${OUTPUT_DIR:?}"`; never delete through an unchecked variable.
+- Outside-contributor issue decisions and external posts, contacts and spending
+  remain with the owner. A work assignment does not grant those permissions.
 
 ## Known backlog
 
