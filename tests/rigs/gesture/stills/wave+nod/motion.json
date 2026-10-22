@@ -1,0 +1,63 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "gesture",
+  "cut": "test-gesture",
+  "easings": {},
+  "animations": {
+    "swing": {
+      "duration": 1,
+      "loop": true,
+      "note": "Sways the torso and keys the shoulder, a bone the wave set draws.",
+      "tracks": [
+        {
+          "bone": "torso",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                12
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "shoulder",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                -30
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

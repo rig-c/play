@@ -1,0 +1,106 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "gesture",
+  "images": "parts",
+  "skeleton": {
+    "x": -200,
+    "y": 0,
+    "width": 400,
+    "height": 420
+  },
+  "bones": [
+    {
+      "name": "root",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "torso",
+      "parent": "root",
+      "rotation": 8,
+      "x": 0,
+      "y": 110
+    },
+    {
+      "name": "head",
+      "parent": "torso",
+      "x": 0,
+      "y": 170
+    },
+    {
+      "name": "shoulder",
+      "parent": "torso",
+      "rotation": 42,
+      "x": 70,
+      "y": 130
+    },
+    {
+      "name": "elbow",
+      "parent": "shoulder",
+      "rotation": 45,
+      "x": 100,
+      "y": 0
+    }
+  ],
+  "slots": [
+    {
+      "name": "body",
+      "bone": "torso",
+      "attachment": "body"
+    },
+    {
+      "name": "arm_upper",
+      "bone": "shoulder",
+      "attachment": "arm_upper_wave"
+    },
+    {
+      "name": "arm_lower",
+      "bone": "elbow",
+      "attachment": "arm_lower_wave"
+    },
+    {
+      "name": "head",
+      "bone": "head",
+      "attachment": "head"
+    }
+  ],
+  "skins": {
+    "default": {
+      "body": {
+        "body": {
+          "image": "body.png"
+        }
+      },
+      "arm_upper": {
+        "arm_upper": {
+          "image": "arm_upper.png",
+          "x": 50
+        },
+        "arm_upper_wave": {
+          "image": "arm_upper_wave.png",
+          "x": 50
+        }
+      },
+      "arm_lower": {
+        "arm_lower": {
+          "image": "arm_lower.png",
+          "x": 46
+        },
+        "arm_lower_wave": {
+          "image": "arm_lower_wave.png",
+          "x": 46
+        }
+      },
+      "head": {
+        "head": {
+          "image": "head.png",
+          "y": 40
+        },
+        "head_nod": {
+          "image": "head_nod.png",
+          "y": 40
+        }
+      }
+    }
+  }
+}

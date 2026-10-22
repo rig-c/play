@@ -272,6 +272,8 @@ export interface RigPlayHarness {
   darkDomPose(time: number): Promise<number>;
   setsProbe(): Promise<SetsProbeResult>;
   multiSetsProbe(): Promise<MultiSetsProbeFixture[]>;
+  drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; still: string }>): Promise<DrawnMatchCombo[]>;
+  drawnRulesProbe(): Promise<DrawnRulesProbeResult>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
 }
@@ -403,6 +405,48 @@ export interface MultiSetsProbeFixture {
     noneSets: readonly string[];
   };
   inactiveZeroPoseDiffs: number;
+}
+
+export interface DrawnMatchCombo {
+  sets: string[];
+  still: string;
+  /** Bones the two poses name differently (should be none). */
+  boneNameDiffs: string[];
+  /** Max |Δ| over every bone's a, b, c, d (matrix) and worldX, worldY (world units). */
+  matrixMaxAbs: number;
+  positionMaxAbs: number;
+  /** Max |Δ| of every bone's world rotation atan2(c, a), degrees. */
+  rotationMaxDeg: number;
+  /** The worst bone by rotation, `name: play vs still`. */
+  worstBone: string;
+  /** Slot identity (slot → attachment key, or why not drawn) in posed draw order, where the two differ. */
+  slotDiffs: string[];
+  drawnSlots: number;
+  /** The same with `drawn` stripped from sets.json (a planted copy): must not match. */
+  stripped: { rotationMaxDeg: number; worstBone: string; slotDiffs: number };
+  /** The frame with drawnLength / registration / threshold stripped equals the frame with them. */
+  notPosedKeysIgnored: boolean;
+}
+
+export interface DrawnRulesProbeResult {
+  overlapError: string;
+  overlapUnchanged: boolean;
+  unknownSetKeyError: string;
+  unknownDocumentKeyError: string;
+  unknownBoneError: string;
+  declaredDrawn: Record<string, Record<string, number> | null>;
+  /** Mid-clip (`swing` at 0.5) with `wave`: undrawn bones vs a control player, max |Δ| matrix and position. */
+  midClipUndrawnMaxAbs: number;
+  /** shoulder world rotation less torso's, degrees (the drawn local, 42, overriding the clip's key). */
+  midClipShoulderOverTorso: number;
+  midClipRestoreNextFrame: boolean;
+  tracksModeRestoreNextFrame: boolean;
+  /** Setup pose after setSets([]) equals a fresh player's setup pose after setSets([]) (and a never-set draw). */
+  setupRestore: boolean;
+  /** No set and slot-only sets on `gesture` give the same frame as before #170 would: a stripped-drawn copy, whole frame JSON. */
+  slotOnlyIdentical: boolean;
+  /** `adjust` runs after drawn: an adjust writing shoulder rotation wins. */
+  adjustAfterDrawn: number;
 }
 
 export interface SetsProbeResult {
@@ -7924,6 +7968,249 @@ async function multiSetsProbe(): Promise<MultiSetsProbeFixture[]> {
   return out;
 }
 
+/** Loads `rig` with its sets.json rewritten by `edit` (a planted copy; nothing on disk changes). */
+async function loadRigWithSets(rig: string, edit: (sets: Record<string, unknown>) => unknown): Promise<ModelAssets> {
+  return loadRig(rig, {
+    fetch: async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const response = await fetch(input, init);
+      if (!url.endsWith('/sets.json') || !response.ok) return response;
+      return new Response(JSON.stringify(edit((await response.json()) as Record<string, unknown>)), { status: 200 });
+    },
+  });
+}
+
+/** Strips `keys` from every set of a sets.json document. */
+function withoutSetKeys(doc: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const sets = doc.sets as Record<string, Record<string, unknown>>;
+  const out: Record<string, unknown> = {};
+  for (const [name, set] of Object.entries(sets)) {
+    const copy = { ...set };
+    for (const key of keys) delete copy[key];
+    out[name] = copy;
+  }
+  const top: Record<string, unknown> = { ...doc, sets: out };
+  if (keys.includes('threshold')) delete top.threshold;
+  return top;
+}
+
+/**
+ * A set's `drawn` bones (#170): for each combination, `rig` with `setSets`
+ * against the setup pose of the reference still made by @rig-c/parts'
+ * `stillRigForSet` (`check --set`'s still), bone by bone and slot by slot;
+ * then the same against a planted copy with `drawn` stripped, which must not
+ * match.
+ */
+async function drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; still: string }>): Promise<DrawnMatchCombo[]> {
+  const out: DrawnMatchCombo[] = [];
+  const assets = await loadRig(rig);
+  const stripped = await loadRigWithSets(rig, (doc) => withoutSetKeys(doc, ['drawn']));
+  const unposed = await loadRigWithSets(rig, (doc) => withoutSetKeys(doc, ['drawnLength', 'registration', 'threshold']));
+  const roots: HTMLElement[] = [];
+  const players: RigPlayer[] = [];
+  const make = (a: ModelAssets): RigPlayer => {
+    const root = makeGlRoot();
+    roots.push(root);
+    const p = new RigPlayer(root, a, { mode: 'canvas' });
+    players.push(p);
+    return p;
+  };
+  const rotationOf = (b: { a: number; c: number }): number => (Math.atan2(b.c, b.a) * 180) / Math.PI;
+  const angleDiff = (x: number, y: number): number => Math.abs((((x - y) % 360) + 540) % 360 - 180);
+  // Slot identity: every slot in posed draw order with its resolved attachment key and why it is not drawn.
+  const describe = (p: RigPlayer): Array<{ slot: string; what: string }> =>
+    p.slotIdentity().slots.map((e) => ({ slot: e.slot, what: e.attachment ?? `(${e.reason})` }));
+  const stillsLoaded: ModelAssets[] = [];
+  try {
+    for (const combo of combos) {
+      const stillAssets = await loadRig(combo.still);
+      stillsLoaded.push(stillAssets);
+      const read = stillAssets.document as ReadDocument;
+      const stillView = underNoSkin(read.doc);
+      const stillPose = poseRawSetup(stillView);
+      const stillOrder = describe(make(stillAssets));
+      const compare = (a: ModelAssets) => {
+        const p = make(a);
+        p.setSets(combo.sets);
+        const names = new Set(stillPose.bones.map((b) => b.name));
+        const boneNameDiffs: string[] = [];
+        let matrixMaxAbs = 0;
+        let positionMaxAbs = 0;
+        let rotationMaxDeg = 0;
+        let worstBone = '';
+        for (const ref of stillPose.bones) {
+          let got;
+          try {
+            got = p.bone(ref.name);
+          } catch {
+            boneNameDiffs.push(ref.name);
+            continue;
+          }
+          matrixMaxAbs = Math.max(matrixMaxAbs, Math.abs(got.a - ref.a), Math.abs(got.b - ref.b), Math.abs(got.c - ref.c), Math.abs(got.d - ref.d));
+          positionMaxAbs = Math.max(positionMaxAbs, Math.abs(got.x - ref.worldX), Math.abs(got.y - ref.worldY));
+          const d = angleDiff(rotationOf(got), rotationOf(ref));
+          if (d > rotationMaxDeg) {
+            rotationMaxDeg = d;
+            worstBone = `${ref.name}: ${rotationOf(got).toFixed(4)} vs ${rotationOf(ref).toFixed(4)}`;
+          }
+        }
+        const mine = describe(p);
+        const slotDiffs: string[] = [];
+        const n = Math.max(mine.length, stillOrder.length);
+        for (let i = 0; i < n; i++) {
+          const x = mine[i];
+          const y = stillOrder[i];
+          if (x?.slot !== y?.slot || x?.what !== y?.what) slotDiffs.push(`#${i}: ${x?.slot}=${x?.what} vs ${y?.slot}=${y?.what}`);
+        }
+        return { p, boneNameDiffs, matrixMaxAbs, positionMaxAbs, rotationMaxDeg, worstBone, slotDiffs };
+      };
+      const main = compare(assets);
+      const plant = compare(stripped);
+      const unposedPlayer = make(unposed);
+      unposedPlayer.setSets(combo.sets);
+      const json = (p: RigPlayer): string => JSON.stringify(p.posedFrame());
+      out.push({
+        sets: combo.sets,
+        still: combo.still,
+        boneNameDiffs: main.boneNameDiffs,
+        matrixMaxAbs: main.matrixMaxAbs,
+        positionMaxAbs: main.positionMaxAbs,
+        rotationMaxDeg: main.rotationMaxDeg,
+        worstBone: main.worstBone,
+        slotDiffs: main.slotDiffs,
+        drawnSlots: stillOrder.length,
+        stripped: { rotationMaxDeg: plant.rotationMaxDeg, worstBone: plant.worstBone, slotDiffs: plant.slotDiffs.length },
+        notPosedKeysIgnored: json(unposedPlayer) === json(main.p),
+      });
+    }
+  } finally {
+    for (const p of players) p.dispose();
+    for (const r of roots) r.remove();
+    for (const a of stillsLoaded) a.dispose();
+    assets.dispose();
+    stripped.dispose();
+    unposed.dispose();
+  }
+  return out;
+}
+
+/** The rules around `drawn` on the public `gesture` rig (#170). */
+async function drawnRulesProbe(): Promise<DrawnRulesProbeResult> {
+  const assets = await loadRig('gesture');
+  const slotOnly = await loadRigWithSets('gesture', (doc) => withoutSetKeys(doc, ['drawn']));
+  const roots: HTMLElement[] = [];
+  const players: RigPlayer[] = [];
+  const make = (a: ModelAssets = assets, tracks = false): RigPlayer => {
+    const root = makeGlRoot();
+    roots.push(root);
+    const p = new RigPlayer(root, a, { mode: 'canvas', tracks });
+    players.push(p);
+    return p;
+  };
+  const json = (p: RigPlayer): string => JSON.stringify(p.posedFrame());
+  const catchLoad = async (edit: (doc: Record<string, unknown>) => unknown): Promise<string> => {
+    try {
+      (await loadRigWithSets('gesture', edit)).dispose();
+      return '';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+  try {
+    // Two sets drawing one bone are refused by name, nothing changed.
+    const o = make();
+    o.setSets(['wave']);
+    const before = { sets: [...o.activeSets], frame: json(o), gen: o.generation };
+    let overlapError = '';
+    try { o.setSets(['wave', 'elbow_only']); } catch (e) { overlapError = (e as Error).message; }
+    const overlapUnchanged = JSON.stringify(o.activeSets) === JSON.stringify(before.sets) && json(o) === before.frame && o.generation === before.gen;
+
+    const sets = (doc: Record<string, unknown>) => doc.sets as Record<string, Record<string, unknown>>;
+    const unknownSetKeyError = await catchLoad((doc) => ({ ...doc, sets: { ...sets(doc), wave: { ...sets(doc).wave, bogus: 1 } } }));
+    const unknownDocumentKeyError = await catchLoad((doc) => ({ ...doc, bogus: 1 }));
+    const unknownBoneError = await catchLoad((doc) => ({ ...doc, sets: { ...sets(doc), wave: { ...sets(doc).wave, drawn: { no_such_bone: 1 } } } }));
+    const declaredDrawn = Object.fromEntries(make().sets().map((s) => [s.name, s.drawn === undefined ? null : { ...s.drawn }]));
+
+    // Mid-clip.
+    const midClip = (tracks: boolean) => {
+      const p = make(assets, tracks);
+      const c = make(assets, tracks);
+      for (const q of [p, c]) { q.play('swing'); q.advance(0.5); }
+      p.setSets(['wave']);
+      let undrawnMax = 0;
+      for (const name of ['root', 'torso', 'head']) {
+        const x = p.bone(name);
+        const y = c.bone(name);
+        undrawnMax = Math.max(undrawnMax, Math.abs(x.a - y.a), Math.abs(x.b - y.b), Math.abs(x.c - y.c), Math.abs(x.d - y.d), Math.abs(x.x - y.x), Math.abs(x.y - y.y));
+      }
+      const rot = (b: { a: number; c: number }): number => (Math.atan2(b.c, b.a) * 180) / Math.PI;
+      const shoulderOverTorso = rot(p.bone('shoulder')) - rot(p.bone('torso'));
+      p.advance(1 / 60);
+      c.advance(1 / 60);
+      p.setSets([]);
+      p.advance(1 / 60);
+      c.advance(1 / 60);
+      return { undrawnMax, shoulderOverTorso, restored: json(p) === json(c) };
+    };
+    const single = midClip(false);
+    const tracksMode = midClip(true);
+
+    // Setup restore: drawn on and off before play equals a player that only cleared.
+    const r = make();
+    r.setSets(['wave', 'nod']);
+    r.setSets([]);
+    const fresh = make();
+    fresh.setSets([]);
+    const setupRestore = json(r) === json(fresh);
+
+    // Slot-only sets: a drawn-stripped copy behaves exactly as sets did before #170 (same frame as a set with no bones).
+    const a1 = make(slotOnly);
+    const a2 = make(slotOnly);
+    a1.setSets(['wave']);
+    a2.play('swing');
+    a2.advance(0.25);
+    a2.setSets(['wave', 'nod']);
+    const b1 = make(slotOnly);
+    b1.setSet('wave');
+    const b2 = make(slotOnly);
+    b2.play('swing');
+    b2.advance(0.25);
+    b2.setSet('wave');
+    b2.addSet('nod');
+    const slotOnlyIdentical = json(a1) === json(b1) && json(a2) === json(b2);
+
+    // adjust runs after drawn.
+    const adj = make();
+    adj.adjust = (bones) => { bones.bone('shoulder').rotation = 0; };
+    adj.setSets(['wave']);
+    adj.play('swing');
+    adj.advance(0.5);
+    const rot = (b: { a: number; c: number }): number => (Math.atan2(b.c, b.a) * 180) / Math.PI;
+    const adjustAfterDrawn = rot(adj.bone('shoulder')) - rot(adj.bone('torso'));
+
+    return {
+      overlapError,
+      overlapUnchanged,
+      unknownSetKeyError,
+      unknownDocumentKeyError,
+      unknownBoneError,
+      declaredDrawn,
+      midClipUndrawnMaxAbs: Math.max(single.undrawnMax, tracksMode.undrawnMax),
+      midClipShoulderOverTorso: single.shoulderOverTorso,
+      midClipRestoreNextFrame: single.restored,
+      tracksModeRestoreNextFrame: tracksMode.restored,
+      setupRestore,
+      slotOnlyIdentical,
+      adjustAfterDrawn,
+    };
+  } finally {
+    for (const p of players) p.dispose();
+    for (const r of roots) r.remove();
+    assets.dispose();
+    slotOnly.dispose();
+  }
+}
+
 /**
  * Snapshot-backed deterministic seek (#141):
  * 1. Oracle: seek in forward, backward (warm and cold), random (warm and cold),
@@ -9094,6 +9381,8 @@ window.rigPlayHarness = {
   pmaStage,
   setsProbe,
   multiSetsProbe,
+  drawnMatchProbe,
+  drawnRulesProbe,
   seekSnapshotProbe,
   slotIdentityProbe,
 };

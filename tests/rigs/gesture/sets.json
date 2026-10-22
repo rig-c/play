@@ -1,0 +1,40 @@
+{
+  "spec": "rig-parts-sets/1",
+  "sets": {
+    "wave": {
+      "slots": {
+        "arm_upper": "arm_upper_wave",
+        "arm_lower": "arm_lower_wave"
+      },
+      "drawn": {
+        "shoulder": 50,
+        "elbow": 95
+      },
+      "drawnLength": {
+        "shoulder": 1.0,
+        "elbow": 1.0
+      },
+      "registration": {
+        "offset": [
+          0,
+          0
+        ],
+        "scale": 1
+      }
+    },
+    "nod": {
+      "slots": {
+        "head": "head_nod"
+      },
+      "drawn": {
+        "head": 105
+      }
+    },
+    "elbow_only": {
+      "slots": {},
+      "drawn": {
+        "elbow": 10
+      }
+    }
+  }
+}

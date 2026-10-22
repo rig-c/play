@@ -580,6 +580,36 @@ one* (`setSets([name])`) and `setSet(null)` is `setSets([])`; an unknown or
 repeated name throws by name. `slotIdentity()` reports the list as `sets`
 beside `set`.
 
+**Drawn bones** (#170): a set from `@rig-c/parts` that replaces a limb
+(a *gesture* subset set) carries `drawn` — the world rotation, in degrees
+(CCW, Y up), each of its bones was painted at — and its attachments are
+placed in the frame of the bones posed there:
+
+```json
+"wave": {
+  "slots": { "arm_upper": "arm_upper_wave", "arm_lower": "arm_lower_wave" },
+  "drawn": { "shoulder": 50, "elbow": 95 }
+}
+```
+
+While such a set is active its bones are posed at those angles, the way
+`rig-parts check --set` poses them: in document order, each drawn bone's
+local rotation is the drawn angle less its world rotation at local 0 under
+its already-posed parents (no constraint applied), computed once when the set
+is activated. On a track that local rotation replaces the clip's rotation
+of that bone on every pose, before `adjust` (so `adjust` still has the last
+word); every other bone keeps playing. Activating or clearing a drawn set
+poses the held pose again at the same time. Two active sets drawing the same
+bone are refused by name, as two sets touching one slot are. A `drawn` naming
+a bone the document does not have is refused when `sets.json` is loaded.
+
+`sets.json` keys are read strictly. Besides `slots`, `hides` and `drawn`, a
+set may carry `drawnLength`, `registration` and `threshold`, which parts
+writes and which place nothing under `check --set`: play reads past them by
+name and gives them no meaning. Any other key, on a set or on the document
+(which takes `spec`, `sets` and `threshold`), is refused by name rather than
+ignored.
+
 To switch one driver's set while another stays — a new viseme while a gesture
 holds — name the new list in one call (`setSets(['viseme_a', 'gesture_chin'])`)
 or `removeSet` then `addSet`; the first re-poses once, the second twice.

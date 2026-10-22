@@ -168,6 +168,46 @@ test('setSets / addSet / removeSet compose disjoint attachment sets as the union
   }
 });
 
+test('a set\'s drawn bones pose as @rig-c/parts check --set poses them, and the rules around drawn hold (#170)', async ({ page }) => {
+  const combos = await page.evaluate(() =>
+    window.rigPlayHarness.drawnMatchProbe('gesture', [
+      { sets: ['wave'], still: 'gesture-still-wave' },
+      { sets: ['nod'], still: 'gesture-still-nod' },
+      { sets: ['wave', 'nod'], still: 'gesture-still-wave+nod' },
+    ]),
+  );
+  for (const c of combos) {
+    const label = c.sets.join('+');
+    expect(c.boneNameDiffs, label).toEqual([]);
+    expect(c.slotDiffs, label).toEqual([]);
+    expect(c.drawnSlots, label).toBe(4);
+    expect(c.rotationMaxDeg, `${label} worst ${c.worstBone}`).toBeLessThanOrEqual(1e-3);
+    expect(c.positionMaxAbs, label).toBeLessThanOrEqual(1e-3);
+    expect(c.matrixMaxAbs, label).toBeLessThanOrEqual(1e-5);
+    // The planted copy without drawn does not match.
+    expect(c.stripped.rotationMaxDeg, `${label} stripped worst ${c.stripped.worstBone}`).toBeGreaterThanOrEqual(1);
+    // drawnLength / registration / threshold move nothing.
+    expect(c.notPosedKeysIgnored, label).toBe(true);
+  }
+
+  const rules = await page.evaluate(() => window.rigPlayHarness.drawnRulesProbe());
+  expect(rules.overlapError).toContain('"wave"');
+  expect(rules.overlapError).toContain('"elbow_only"');
+  expect(rules.overlapError).toContain('bone "elbow"');
+  expect(rules.overlapUnchanged).toBe(true);
+  expect(rules.unknownSetKeyError).toContain('"bogus"');
+  expect(rules.unknownDocumentKeyError).toContain('"bogus"');
+  expect(rules.unknownBoneError).toContain('no_such_bone');
+  expect(rules.declaredDrawn).toEqual({ wave: { shoulder: 50, elbow: 95 }, nod: { head: 105 }, elbow_only: { elbow: 10 } });
+  expect(rules.midClipUndrawnMaxAbs).toBeLessThanOrEqual(1e-9);
+  expect(rules.midClipShoulderOverTorso).toBeCloseTo(42, 4);
+  expect(rules.midClipRestoreNextFrame).toBe(true);
+  expect(rules.tracksModeRestoreNextFrame).toBe(true);
+  expect(rules.setupRestore).toBe(true);
+  expect(rules.slotOnlyIdentical).toBe(true);
+  expect(rules.adjustAfterDrawn).toBeCloseTo(0, 4);
+});
+
 test('snapshot-backed seek matches cold replay at tolerance 0 across forward, backward, random, repeated, and off-grid seeks, in O(1) warm time, and invalidates on setSet (#141)', async ({ page }) => {
   const probe = await page.evaluate(() => window.rigPlayHarness.seekSnapshotProbe());
 

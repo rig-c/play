@@ -66,6 +66,8 @@ build() {
   for dir in parts art; do
     if [ -d "$src/$dir" ]; then cp -R "$src/$dir" "$out/$dir"; fi
   done
+  # A reference still (tests/rigs/<rig>/stills/<sets>/, #170) draws its rig's parts.
+  if [ ! -d "$out/parts" ] && [ -n "${PARTS_FROM:-}" ]; then cp -R "$PARTS_FROM" "$out/parts"; fi
   if ! (cd "$out" && "$RIGC" build --rig rig.json --motion motion.json --out . "$@" > build.log 2>&1); then
     cat "$out/build.log" >&2
     exit 1
@@ -132,7 +134,7 @@ test_rig() {
   shift 2
   local out="$RIGS_DEST/$name"
   local stamp
-  stamp="$RIGC_TAG $(digest "$TEST_RIGS_SRC/$rig")"
+  stamp="$RIGC_TAG $(digest "$TEST_RIGS_SRC/$rig")${PARTS_FROM:+ $(digest "$PARTS_FROM")}"
   if have "$out" && [ "$(cat "$out/.source" 2>/dev/null || true)" = "$stamp" ]; then
     echo "have test rig $name"
     return
@@ -184,5 +186,9 @@ rm -rf "$RIGS_DEST/sets-packed/parts"
 test_rig talk talk
 test_rig talk talk-packed --pack
 rm -rf "$RIGS_DEST/talk-packed/parts"
+test_rig gesture gesture
+for still in wave nod wave+nod; do
+  PARTS_FROM="$TEST_RIGS_SRC/gesture/parts" test_rig "gesture/stills/$still" "gesture-still-$still"
+done
 rm -f "$RIGS_DEST/named/art/named.atlas"
 echo "test rigs ready → $RIGS_DEST"
