@@ -261,8 +261,8 @@ export interface PoseBounds {
 /**
  * Why a slot in `SlotIdentitySnapshot.slots` is not drawn (`reason !== null`),
  * or `null` when it is drawn in `posedFrame().order`:
- * - `'set-hide'`: hidden by the active attachment set (`set.hides` or a
- *   `<base>_still` companion of a slot the active set covers or hides).
+ * - `'set-hide'`: hidden by an active attachment set (`set.hides` or a
+ *   `<base>_still` companion of a slot an active set covers or hides).
  * - `'timeline-null'`: an attachment timeline (or slider attachment timeline)
  *   keyed the slot to `null` at the current time.
  * - `'no-attachment'`: the slot has no drawable attachment at this pose
@@ -295,8 +295,10 @@ export interface SlotIdentity {
 export interface SlotIdentitySnapshot {
   /** Monotonic pose generation counter matching `player.generation` and `player.posedFrame().generation`. */
   readonly generation: number;
-  /** Currently active attachment set (`player.set`), or `null`. */
+  /** The one active attachment set (`player.set`), or `null` when none or several are active. */
   readonly set: string | null;
+  /** Every active attachment set (`player.activeSets`), in `sets.json` declaration order. */
+  readonly sets: readonly string[];
   /** Currently active skin (`player.skin ?? null`), or `null` when only `'default'` is active. */
   readonly skin: string | null;
   /** Every slot of the skeleton in the posed draw order (`z = 0 .. slots.length - 1`), hidden/null ones included. */
@@ -317,6 +319,35 @@ function hiddenBySet(slotName: string, set: RigSet): boolean {
     if (base in set.slots || set.hides.includes(base)) return true;
   }
   return false;
+}
+
+/**
+ * The slots `set` touches on `view`: every slot it covers plus every slot it
+ * hides (`hides` and `<base>_still` companions). Two active sets must touch
+ * disjoint slots (#168).
+ */
+function touchedBySet(view: CompiledDocument, set: RigSet): ReadonlySet<string> {
+  const touched = new Set<string>();
+  for (const slot of view.slots) {
+    if (slot.name in set.slots || hiddenBySet(slot.name, set)) touched.add(slot.name);
+  }
+  return touched;
+}
+
+/**
+ * One set equivalent to `sets` applied together, or `null` for none. One set is
+ * returned as it is; several, already checked disjoint, merge their `slots` and
+ * `hides` (a slot one set touches no other set names, so the merge hides and
+ * covers exactly what each set does alone and does not depend on order).
+ */
+function composeSets(sets: readonly RigSet[]): RigSet | null {
+  if (sets.length === 0) return null;
+  if (sets.length === 1) return sets[0];
+  return {
+    name: sets.map((s) => s.name).join('+'),
+    slots: Object.assign({}, ...sets.map((s) => s.slots)) as Record<string, string>,
+    hides: sets.flatMap((s) => s.hides),
+  };
 }
 
 /**
@@ -730,7 +761,10 @@ export class RigPlayer {
   private cachedIdentityGen = -1;
   private readonly setList: readonly RigSet[];
   private readonly setsByName: ReadonlyMap<string, RigSet>;
+  /** The active sets in declaration order (#168); `activeSet` is their composition. */
+  private activeList: readonly RigSet[] = [];
   private activeSet: RigSet | null = null;
+  private readonly touchedSets = new Map<string, ReadonlySet<string>>();
   private adjustFn: BoneAdjust | null = null;
   /** Current preview patches, reapplied through the public core API on replay; no edit history. */
   private readonly physicsPatches = new Map<string, PhysicsParameterPatch>();
@@ -1340,9 +1374,18 @@ export class RigPlayer {
     return this.setList;
   }
 
-  /** The currently active attachment set's name, or `null` when the base attachments are active. */
+  /**
+   * The active attachment set's name when exactly one is active; `null` when
+   * the base attachments are active or when several sets are (read
+   * `activeSets` for the list).
+   */
   get set(): string | null {
-    return this.activeSet?.name ?? null;
+    return this.activeList.length === 1 ? this.activeList[0].name : null;
+  }
+
+  /** Every active attachment set's name, in `sets.json` declaration order (`[]` when none). */
+  get activeSets(): readonly string[] {
+    return this.activeList.map((s) => s.name);
   }
 
   /**
@@ -1357,6 +1400,9 @@ export class RigPlayer {
    * frames untouched; when no set is active (`null`), track evaluation runs
    * with zero overhead and produces byte-identical poses.
    *
+   * `setSet(name)` means exactly this one set: any other active sets are
+   * cleared (`setSets([name])`), and `setSet(null)` is `setSets([])`.
+   *
    * A name not in `sets.json` throws by name; a build without `sets.json` has
    * `sets()` empty and `setSet` throws.
    */
@@ -1364,27 +1410,102 @@ export class RigPlayer {
     if (this.setList.length === 0) {
       throw new Error(`cannot setSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
-    if (name === null) {
-      this.activeSet = null;
-      this.clearSeekCache();
-      const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
-      this.rawPose = base;
-      this.pose = base;
-      this.poseGeneration++;
-      this.cachedIdentity = null;
-      return;
+    this.activate(name === null ? [] : [this.namedSet(name)]);
+  }
+
+  /**
+   * Makes exactly `names` the active attachment sets (#168), together: each
+   * set covers and hides its slots as it does alone, provided no two of them
+   * touch the same slot (cover it, hide it, or hide it as a `<base>_still`
+   * companion). Composition does not depend on the order of `names`. An
+   * unknown name, a repeated name or two sets touching one slot throw by name
+   * and leave the active sets as they were; `[]` restores the base.
+   */
+  setSets(names: readonly string[]): void {
+    if (this.setList.length === 0) {
+      throw new Error(`cannot setSets(${JSON.stringify(names)}): this model has no sets.json`);
     }
+    const sets = names.map((name) => this.namedSet(name));
+    for (let i = 0; i < sets.length; i++) {
+      for (let j = 0; j < i; j++) {
+        if (sets[i] === sets[j]) throw new Error(`set ${JSON.stringify(sets[i].name)} is named twice in setSets`);
+      }
+    }
+    this.activate(sets);
+  }
+
+  /**
+   * Activates `name` beside the sets already active (#168): a set already
+   * active is left as it is; one touching a slot an active set touches throws
+   * by name (the slot and both sets) and changes nothing.
+   */
+  addSet(name: string): void {
+    if (this.setList.length === 0) {
+      throw new Error(`cannot addSet(${JSON.stringify(name)}): this model has no sets.json`);
+    }
+    const found = this.namedSet(name);
+    if (this.activeList.includes(found)) return;
+    this.activate([...this.activeList, found]);
+  }
+
+  /**
+   * Deactivates `name`, keeping every other active set (#168). An unknown name
+   * throws by name; a set that is not active is left as it is.
+   */
+  removeSet(name: string): void {
+    if (this.setList.length === 0) {
+      throw new Error(`cannot removeSet(${JSON.stringify(name)}): this model has no sets.json`);
+    }
+    const found = this.namedSet(name);
+    if (!this.activeList.includes(found)) return;
+    this.activate(this.activeList.filter((s) => s !== found));
+  }
+
+  /** The declared set named `name`, or a throw naming it and the available sets. */
+  private namedSet(name: string): RigSet {
     const found = this.setsByName.get(name);
     if (found === undefined) {
       throw new Error(
         `no set named ${JSON.stringify(name)} in sets.json (available: ${this.setList.map((s) => s.name).join(', ')})`,
       );
     }
-    this.activeSet = found;
+    return found;
+  }
+
+  /** The slots `set` touches, computed once per set. */
+  private touched(set: RigSet): ReadonlySet<string> {
+    let touched = this.touchedSets.get(set.name);
+    if (touched === undefined) {
+      touched = touchedBySet(this.view, set);
+      this.touchedSets.set(set.name, touched);
+    }
+    return touched;
+  }
+
+  /**
+   * Makes `sets` (distinct) the active sets: refuses any two touching one slot
+   * before changing anything, then applies their composition to the held pose.
+   */
+  private activate(sets: readonly RigSet[]): void {
+    for (let i = 0; i < sets.length; i++) {
+      for (let j = 0; j < i; j++) {
+        const other = this.touched(sets[j]);
+        for (const slot of this.touched(sets[i])) {
+          if (other.has(slot)) {
+            throw new Error(
+              `sets ${JSON.stringify(sets[j].name)} and ${JSON.stringify(sets[i].name)} both touch slot ${JSON.stringify(slot)}; ` +
+                'active sets must cover and hide disjoint slots',
+            );
+          }
+        }
+      }
+    }
+    this.activeList = this.setList.filter((s) => sets.includes(s));
+    this.activeSet = composeSets(this.activeList);
     this.clearSeekCache();
     const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
     this.rawPose = base;
-    this.pose = applySetToPose(this.view, base, found);
+    this.pose = this.activeSet === null ? base : applySetToPose(this.view, base, this.activeSet);
     this.poseGeneration++;
     this.cachedIdentity = null;
   }
@@ -1633,7 +1754,8 @@ export class RigPlayer {
     }
     const snapshot: SlotIdentitySnapshot = Object.freeze({
       generation: this.poseGeneration,
-      set: this.activeSet?.name ?? null,
+      set: this.set,
+      sets: Object.freeze(this.activeSets),
       skin: this.skinName ?? null,
       slots: Object.freeze(slots),
     });

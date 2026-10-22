@@ -123,6 +123,51 @@ test('sets() reads sets.json and setSet(name | null) switches attachment sets at
   expect(probe.inactiveSetZeroPoseDiffs).toBe(0);
 });
 
+test('setSets / addSet / removeSet compose disjoint attachment sets as the union of each alone and refuse an overlap by name (#168)', async ({ page }) => {
+  const fixtures = await page.evaluate(() => window.rigPlayHarness.multiSetsProbe());
+  expect(fixtures.map((f) => f.fixture)).toEqual(['talk', 'talk-packed']);
+  for (const fx of fixtures) {
+    // Bar 1: both active pose exactly the union of each alone, base elsewhere.
+    expect(fx.unionDiffs).toEqual({ setup: [], 'chat@0.5': [], 'chat@0.5 tracks': [] });
+    expect(fx.unionSlots).toEqual(['body', 'arm_upper', 'arm_lower', 'head', 'mouth']);
+    expect(fx.unionPixelsMatchDirect).toBe(true);
+    // Order independence.
+    expect(fx.orderDiffs).toEqual([]);
+    for (const active of fx.activeSetsAfterEachOrdering) expect(active).toEqual(['viseme_o', 'gesture_chin']);
+    // Bar 2: every overlap refused by name (the slot and both sets), nothing changed.
+    const expectedSlot: Record<string, string> = {
+      'viseme_o+viseme_a': 'mouth',
+      'viseme_o+mouth_rest': 'mouth_still',
+      'gesture_chin+arm_hide': 'arm_upper',
+      'viseme_o+talk_point': 'mouth',
+      'gesture_chin+talk_point': 'arm_lower',
+    };
+    expect(fx.overlaps).toHaveLength(10);
+    for (const o of fx.overlaps) {
+      const [a, b] = o.pair.split('+');
+      expect(o.error, `${o.pair} via ${o.route}`).toContain(`"${a}"`);
+      expect(o.error, `${o.pair} via ${o.route}`).toContain(`"${b}"`);
+      expect(o.error, `${o.pair} via ${o.route}`).toContain(`slot "${expectedSlot[o.pair]}"`);
+      expect(o.unchanged, `${o.pair} via ${o.route}`).toBe(true);
+    }
+    expect(fx.duplicateError).toContain('"viseme_o"');
+    expect(fx.unknownError).toContain('no_such_set');
+    // Bar 3: the empty list and setSet(null) restore the base byte-identically.
+    expect(fx.restoreEmptyFrame).toBe(true);
+    expect(fx.restoreEmptyPixels).toBe(true);
+    expect(fx.restoreNullFrame).toBe(true);
+    expect(fx.restoreNullPixels).toBe(true);
+    expect(fx.midTrackRestoreNextFrame).toBe(true);
+    expect(fx.tracksModeRestoreNextFrame).toBe(true);
+    expect(fx.inactiveZeroPoseDiffs).toBe(0);
+    // slotIdentity() reports the active list; `set` names a set only when exactly one is active.
+    expect(fx.identity.noneSets).toEqual([]);
+    expect(fx.identity.both).toEqual({ set: null, sets: ['viseme_o', 'gesture_chin'], hidden: ['mouth_still'] });
+    expect(fx.identity.afterRemove).toEqual({ set: 'gesture_chin', sets: ['gesture_chin'], activeSets: ['gesture_chin'] });
+    expect(fx.identity.afterSetSet).toEqual({ set: 'viseme_a', sets: ['viseme_a'] });
+  }
+});
+
 test('snapshot-backed seek matches cold replay at tolerance 0 across forward, backward, random, repeated, and off-grid seeks, in O(1) warm time, and invalidates on setSet (#141)', async ({ page }) => {
   const probe = await page.evaluate(() => window.rigPlayHarness.seekSnapshotProbe());
 

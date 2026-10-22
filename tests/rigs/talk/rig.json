@@ -1,0 +1,179 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "talk",
+  "images": "parts",
+  "skeleton": {
+    "x": -200,
+    "y": 0,
+    "width": 400,
+    "height": 420
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "torso",
+      "parent": "root",
+      "x": 0,
+      "y": 110
+    },
+    {
+      "name": "head",
+      "parent": "torso",
+      "x": 0,
+      "y": 160
+    },
+    {
+      "name": "shoulder",
+      "parent": "torso",
+      "x": 95,
+      "y": 80
+    },
+    {
+      "name": "elbow",
+      "parent": "shoulder",
+      "x": 0,
+      "y": -95
+    }
+  ],
+  "invariants": {
+    "meshSlots": 1,
+    "meshTriangles": 2
+  },
+  "slots": [
+    {
+      "name": "body",
+      "bone": "torso",
+      "attachment": "body"
+    },
+    {
+      "name": "arm_upper",
+      "bone": "shoulder",
+      "attachment": "arm_upper"
+    },
+    {
+      "name": "arm_lower",
+      "bone": "elbow",
+      "attachment": "arm_lower"
+    },
+    {
+      "name": "head",
+      "bone": "head",
+      "attachment": "head"
+    },
+    {
+      "name": "mouth",
+      "bone": "head",
+      "attachment": "mouth_rest"
+    },
+    {
+      "name": "mouth_still",
+      "bone": "head",
+      "attachment": "mouth_still"
+    }
+  ],
+  "skins": {
+    "default": {
+      "body": {
+        "body": {
+          "image": "body.png"
+        }
+      },
+      "arm_upper": {
+        "arm_upper": {
+          "image": "arm_upper.png",
+          "y": -45
+        },
+        "arm_upper_raised": {
+          "image": "arm_upper_raised.png",
+          "y": -45,
+          "rotation": 30
+        }
+      },
+      "arm_lower": {
+        "arm_lower": {
+          "image": "arm_lower.png",
+          "y": -45
+        },
+        "arm_lower_track": {
+          "image": "arm_lower_track.png",
+          "y": -45
+        },
+        "arm_lower_chin": {
+          "type": "mesh",
+          "image": "arm_lower_chin.png",
+          "hull": 4,
+          "uvs": [
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1
+          ],
+          "vertices": [
+            -20,
+            0,
+            20,
+            0,
+            20,
+            -96,
+            -20,
+            -96
+          ],
+          "triangles": [
+            0,
+            1,
+            2,
+            0,
+            2,
+            3
+          ]
+        },
+        "arm_lower_point": {
+          "image": "arm_lower_point.png",
+          "y": -45,
+          "rotation": -40
+        }
+      },
+      "head": {
+        "head": {
+          "image": "head.png"
+        }
+      },
+      "mouth": {
+        "mouth_rest": {
+          "image": "mouth_rest.png",
+          "y": -35
+        },
+        "mouth_track": {
+          "image": "mouth_track.png",
+          "y": -35
+        },
+        "mouth_o": {
+          "image": "mouth_o.png",
+          "y": -35
+        },
+        "mouth_a": {
+          "image": "mouth_a.png",
+          "y": -35
+        }
+      },
+      "mouth_still": {
+        "mouth_still": {
+          "image": "mouth_still.png",
+          "x": 40,
+          "y": -50
+        },
+        "mouth_still_alt": {
+          "image": "mouth_still_alt.png",
+          "x": 40,
+          "y": -50
+        }
+      }
+    }
+  }
+}

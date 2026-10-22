@@ -181,5 +181,8 @@ test_rig draw draw
 test_rig sets sets
 test_rig sets sets-packed --pack
 rm -rf "$RIGS_DEST/sets-packed/parts"
+test_rig talk talk
+test_rig talk talk-packed --pack
+rm -rf "$RIGS_DEST/talk-packed/parts"
 rm -f "$RIGS_DEST/named/art/named.atlas"
 echo "test rigs ready → $RIGS_DEST"

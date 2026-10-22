@@ -1,0 +1,43 @@
+{
+  "spec": "rig-parts-sets/1",
+  "sets": {
+    "viseme_o": {
+      "slots": {
+        "mouth": "mouth_o"
+      },
+      "hides": []
+    },
+    "viseme_a": {
+      "slots": {
+        "mouth": "mouth_a"
+      },
+      "hides": []
+    },
+    "gesture_chin": {
+      "slots": {
+        "arm_upper": "arm_upper_raised",
+        "arm_lower": "arm_lower_chin"
+      },
+      "hides": []
+    },
+    "mouth_rest": {
+      "slots": {
+        "mouth_still": "mouth_still_alt"
+      },
+      "hides": []
+    },
+    "talk_point": {
+      "slots": {
+        "mouth": "mouth_a",
+        "arm_lower": "arm_lower_point"
+      },
+      "hides": []
+    },
+    "arm_hide": {
+      "slots": {},
+      "hides": [
+        "arm_upper"
+      ]
+    }
+  }
+}

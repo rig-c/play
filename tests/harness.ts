@@ -271,6 +271,7 @@ export interface RigPlayHarness {
   darkTintProbe(): Promise<DarkTintProbeResult>;
   darkDomPose(time: number): Promise<number>;
   setsProbe(): Promise<SetsProbeResult>;
+  multiSetsProbe(): Promise<MultiSetsProbeFixture[]>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
 }
@@ -371,6 +372,37 @@ export interface SeekSnapshotProbeResult {
     validSkinSwitchDiffs: number;
     validAdjustSwitchDiffs: number;
   };
+}
+
+export interface MultiSetsProbeFixture {
+  fixture: string;
+  /** Per pose (setup, chat@0.5 single track, chat@0.5 tracks): slots whose entry in both-active differs from its source (viseme alone, gesture alone, or base). */
+  unionDiffs: Record<string, string[]>;
+  /** Slot names drawn with both sets active, setup pose. */
+  unionSlots: string[];
+  /** Canvas bytes with both active equal a direct setup pose carrying both overrides. */
+  unionPixelsMatchDirect: boolean;
+  /** Orderings whose frame or canvas bytes differ from setSets([viseme_o, gesture_chin]). */
+  orderDiffs: string[];
+  activeSetsAfterEachOrdering: string[][];
+  /** For each overlapping pair and route: the error and whether state stayed the same. */
+  overlaps: Array<{ pair: string; route: string; error: string; unchanged: boolean }>;
+  duplicateError: string;
+  unknownError: string;
+  /** Restores: frame JSON / canvas bytes equal to base. */
+  restoreEmptyFrame: boolean;
+  restoreEmptyPixels: boolean;
+  restoreNullFrame: boolean;
+  restoreNullPixels: boolean;
+  midTrackRestoreNextFrame: boolean;
+  tracksModeRestoreNextFrame: boolean;
+  identity: {
+    both: { set: string | null; sets: readonly string[]; hidden: string[] };
+    afterRemove: { set: string | null; sets: readonly string[]; activeSets: readonly string[] };
+    afterSetSet: { set: string | null; sets: readonly string[] };
+    noneSets: readonly string[];
+  };
+  inactiveZeroPoseDiffs: number;
 }
 
 export interface SetsProbeResult {
@@ -7642,6 +7674,257 @@ async function setsProbe(): Promise<SetsProbeResult> {
 }
 
 /**
+ * Several attachment sets active at once (#168) on the public `talk` rig
+ * (`talk`, `talk-packed`): a mouth viseme set and an arm gesture set compose
+ * as the union of each alone; every overlapping pair is refused by name with
+ * nothing changed; the empty list and `setSet(null)` restore the base.
+ * Each set's touched slots are read here from `sets()` (covers, hides and the
+ * `<base>_still` companions), independently of the player's own bookkeeping.
+ */
+async function multiSetsProbe(): Promise<MultiSetsProbeFixture[]> {
+  const out: MultiSetsProbeFixture[] = [];
+  for (const fixture of ['talk', 'talk-packed']) {
+    const assets = await loadRig(fixture);
+    const root = makeGlRoot();
+    const players: RigPlayer[] = [];
+    const make = (tracks = false): RigPlayer => {
+      const p = new RigPlayer(makeGlRoot(), assets, { mode: 'canvas', tracks });
+      players.push(p);
+      return p;
+    };
+    const player = new RigPlayer(root, assets, { mode: 'canvas' });
+    players.push(player);
+    const canvas = player.renderer as CanvasRenderer;
+    canvas.backend = 'canvas2d';
+    canvas.pixelRatio = 1;
+    canvas.viewport = { x: -160, y: 0, width: 320, height: 460 };
+    const readPixels = (): Uint8ClampedArray => {
+      const ctx = canvas.canvas.getContext('2d');
+      if (!ctx) throw new Error('no 2d context');
+      return new Uint8ClampedArray(ctx.getImageData(0, 0, canvas.canvas.width, canvas.canvas.height).data);
+    };
+    const drawPixels = (p: RigPlayer): Uint8ClampedArray => {
+      canvas.render(p.posedFrame());
+      return readPixels();
+    };
+    const sameBytes = (a: Uint8ClampedArray, b: Uint8ClampedArray): boolean =>
+      a.length === b.length && a.every((v, i) => v === b[i]);
+    const frameJson = (p: RigPlayer): string => {
+      const { generation: _generation, ...rest } = p.posedFrame();
+      return JSON.stringify(rest);
+    };
+    const entries = (p: RigPlayer): Map<string, string> =>
+      new Map(p.posedFrame().order.map((e) => [e.slot, JSON.stringify(e)]));
+
+    const read = assets.document as ReadDocument;
+    const slotNames = read.doc.slots.map((s) => s.name);
+    const byName = new Map(player.sets().map((s) => [s.name, s]));
+    const touched = (name: string): Set<string> => {
+      const set = byName.get(name);
+      if (set === undefined) throw new Error(`fixture has no set ${name}`);
+      const t = new Set<string>([...Object.keys(set.slots), ...set.hides]);
+      for (const base of [...t]) {
+        const still = `${base}_still`;
+        if (slotNames.includes(still) && !(still in set.slots)) t.add(still);
+      }
+      return t;
+    };
+    // The base at setup comes from the untouched document posed directly: a
+    // player that has neither played nor set a set holds no pose yet.
+    const baseView = underNoSkin(read.doc);
+    const setupBase = frameOf(frameSource(baseView, read.parsed), poseRawSetup(baseView));
+    const V = 'viseme_o';
+    const G = 'gesture_chin';
+    const tV = touched(V);
+    const tG = touched(G);
+
+    // B1: union, at setup and mid-track, on one track and on tracks.
+    const unionDiffs: Record<string, string[]> = {};
+    const poses: Array<[string, (p: RigPlayer) => void, boolean]> = [
+      ['setup', () => {}, false],
+      ['chat@0.5', (p) => { p.play('chat'); p.advance(0.5); }, false],
+      ['chat@0.5 tracks', (p) => { p.play('chat'); p.advance(0.5); }, true],
+    ];
+    for (const [label, drive, tracks] of poses) {
+      const [base, v, g, both] = [make(tracks), make(tracks), make(tracks), make(tracks)];
+      for (const p of [base, v, g, both]) drive(p);
+      v.setSets([V]);
+      g.setSets([G]);
+      both.setSets([V, G]);
+      const eb = tracks || label !== 'setup' ? entries(base) : new Map(setupBase.order.map((e) => [e.slot, JSON.stringify(e)]));
+      const ev = entries(v);
+      const eg = entries(g);
+      const e2 = entries(both);
+      const diffs: string[] = [];
+      for (const slot of slotNames) {
+        const source = tV.has(slot) ? ev : tG.has(slot) ? eg : eb;
+        if (source.get(slot) !== e2.get(slot)) diffs.push(`${slot}: ${String(e2.get(slot))} != ${String(source.get(slot))}`);
+      }
+      const drawnOrder = both.posedFrame().order.map((e) => e.slot);
+      const expectedOrder = [...eb.keys()];
+      const unionOrder = slotNames.filter((slot) => (tV.has(slot) ? ev : tG.has(slot) ? eg : eb).has(slot));
+      const sortByDraw = (names: string[]): string[] =>
+        [...names].sort((a, b) => read.doc.slots.findIndex((s) => s.name === a) - read.doc.slots.findIndex((s) => s.name === b));
+      if (JSON.stringify(sortByDraw(drawnOrder)) !== JSON.stringify(sortByDraw(unionOrder))) {
+        diffs.push(`drawn ${drawnOrder.join(',')} != union ${unionOrder.join(',')} (base ${expectedOrder.join(',')})`);
+      }
+      unionDiffs[label] = diffs;
+    }
+
+    player.setSets([V, G]);
+    const unionSlots = player.posedFrame().order.map((e) => e.slot);
+    const bothPixels = drawPixels(player);
+    const directView = underNoSkin({
+      ...read.doc,
+      slots: read.doc.slots.map((s) => {
+        if (s.name === 'mouth') return { ...s, setup: 'mouth_o' };
+        if (s.name === 'mouth_still') return { ...s, setup: null };
+        if (s.name === 'arm_upper') return { ...s, setup: 'arm_upper_raised' };
+        if (s.name === 'arm_lower') return { ...s, setup: 'arm_lower_chin' };
+        return s;
+      }),
+    });
+    canvas.render(frameOf(frameSource(directView, read.parsed), poseRawSetup(directView)));
+    const unionPixelsMatchDirect = sameBytes(bothPixels, readPixels());
+
+    // B2: order independence.
+    const refJson = frameJson(player);
+    const orderDiffs: string[] = [];
+    const activeSetsAfterEachOrdering: string[][] = [];
+    const orderings: Array<[string, (p: RigPlayer) => void]> = [
+      ['setSets([G, V])', (p) => p.setSets([G, V])],
+      ['addSet(V), addSet(G)', (p) => { p.addSet(V); p.addSet(G); }],
+      ['addSet(G), addSet(V)', (p) => { p.addSet(G); p.addSet(V); }],
+      ['setSet(V), addSet(G)', (p) => { p.setSet(V); p.addSet(G); }],
+    ];
+    activeSetsAfterEachOrdering.push([...player.activeSets]);
+    for (const [label, how] of orderings) {
+      const p = make();
+      how(p);
+      activeSetsAfterEachOrdering.push([...p.activeSets]);
+      if (frameJson(p) !== refJson) orderDiffs.push(`${label}: frame`);
+      if (!sameBytes(drawPixels(p), bothPixels)) orderDiffs.push(`${label}: pixels`);
+    }
+
+    // B3: overlaps refused by name, nothing changed.
+    const overlaps: MultiSetsProbeFixture['overlaps'] = [];
+    const pairs: Array<[string, string]> = [
+      ['viseme_o', 'viseme_a'],
+      ['viseme_o', 'mouth_rest'],
+      ['gesture_chin', 'arm_hide'],
+      ['viseme_o', 'talk_point'],
+      ['gesture_chin', 'talk_point'],
+    ];
+    for (const [a, b] of pairs) {
+      for (const route of ['setSets', 'addSet'] as const) {
+        const p = make();
+        p.play('chat');
+        p.advance(0.25);
+        if (route === 'addSet') p.setSets([a]);
+        const before = { sets: [...p.activeSets], frame: frameJson(p), gen: p.generation };
+        let error = '';
+        try {
+          if (route === 'setSets') p.setSets([a, b]);
+          else p.addSet(b);
+        } catch (e) {
+          error = (e as Error).message;
+        }
+        const unchanged =
+          JSON.stringify(p.activeSets) === JSON.stringify(before.sets) && frameJson(p) === before.frame && p.generation === before.gen;
+        overlaps.push({ pair: `${a}+${b}`, route, error, unchanged });
+      }
+    }
+    let duplicateError = '';
+    try { make().setSets([V, V]); } catch (e) { duplicateError = (e as Error).message; }
+    let unknownError = '';
+    try { make().setSets([V, 'no_such_set']); } catch (e) { unknownError = (e as Error).message; }
+
+    // B4: restore.
+    const baseJson = JSON.stringify(setupBase);
+    canvas.render(setupBase);
+    const basePixels = readPixels();
+    const r1 = make();
+    r1.setSets([V, G]);
+    r1.setSets([]);
+    const restoreEmptyFrame = frameJson(r1) === baseJson;
+    const restoreEmptyPixels = sameBytes(drawPixels(r1), basePixels);
+    const r2 = make();
+    r2.setSets([V, G]);
+    r2.setSet(null);
+    const restoreNullFrame = frameJson(r2) === baseJson;
+    const restoreNullPixels = sameBytes(drawPixels(r2), basePixels);
+    const midTrack = (tracks: boolean): boolean => {
+      const p = make(tracks);
+      const c = make(tracks);
+      for (const q of [p, c]) { q.play('chat'); q.advance(0.5); }
+      p.setSets([V, G]);
+      p.advance(1 / 60);
+      c.advance(1 / 60);
+      p.setSets([]);
+      p.advance(1 / 60);
+      c.advance(1 / 60);
+      return frameJson(p) === frameJson(c);
+    };
+    const midTrackRestoreNextFrame = midTrack(false);
+    const tracksModeRestoreNextFrame = midTrack(true);
+
+    // B5: identity.
+    const idp = make();
+    const noneSets = idp.slotIdentity().sets;
+    idp.setSets([G, V]);
+    const snapBoth = idp.slotIdentity();
+    const both = {
+      set: snapBoth.set,
+      sets: snapBoth.sets,
+      hidden: snapBoth.slots.filter((x) => x.reason === 'set-hide').map((x) => x.slot),
+    };
+    idp.removeSet(V);
+    const afterRemove = { set: idp.slotIdentity().set, sets: idp.slotIdentity().sets, activeSets: idp.activeSets };
+    idp.addSet(V);
+    idp.setSet('viseme_a');
+    const afterSetSet = { set: idp.slotIdentity().set, sets: idp.slotIdentity().sets };
+
+    // No set: zero pose difference against a player that never touched sets.
+    const zA = make();
+    const zB = make();
+    zA.setSets([V, G]);
+    zA.setSets([]);
+    zA.play('chat');
+    zB.play('chat');
+    let inactiveZeroPoseDiffs = 0;
+    for (let i = 0; i < 60; i++) {
+      zA.advance(1 / 60);
+      zB.advance(1 / 60);
+      if (frameJson(zA) !== frameJson(zB)) inactiveZeroPoseDiffs++;
+    }
+
+    out.push({
+      fixture,
+      unionDiffs,
+      unionSlots,
+      unionPixelsMatchDirect,
+      orderDiffs,
+      activeSetsAfterEachOrdering,
+      overlaps,
+      duplicateError,
+      unknownError,
+      restoreEmptyFrame,
+      restoreEmptyPixels,
+      restoreNullFrame,
+      restoreNullPixels,
+      midTrackRestoreNextFrame,
+      tracksModeRestoreNextFrame,
+      identity: { both, afterRemove, afterSetSet, noneSets },
+      inactiveZeroPoseDiffs,
+    });
+    for (const p of players) p.dispose();
+    root.remove();
+    assets.dispose();
+  }
+  return out;
+}
+
+/**
  * Snapshot-backed deterministic seek (#141):
  * 1. Oracle: seek in forward, backward (warm and cold), random (warm and cold),
  *    repeated, and off-grid order equals the 1.11.1 cold-replay reference
@@ -8323,6 +8606,7 @@ async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
   const cloneSnap = (s: SlotIdentitySnapshot): SlotIdentitySnapshot => ({
     generation: s.generation,
     set: s.set,
+    sets: s.sets,
     skin: s.skin,
     slots: s.slots.map((entry) => ({ ...entry })),
   });
@@ -8809,6 +9093,7 @@ window.rigPlayHarness = {
   pmaDerivationProbe,
   pmaStage,
   setsProbe,
+  multiSetsProbe,
   seekSnapshotProbe,
   slotIdentityProbe,
 };

@@ -463,7 +463,11 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
   `sets.json` (`rig-parts-sets/1`), a mesh base slot with a companion
   `face_still` slot, an uncovered `body` slot keyed by the track, and a `prop`
   slot replaced by one set and hidden by the other: `setsProbe` in
-  `tests/player.spec.ts` and the *sets switch* parity cells (#134). A premultiplied page
+  `tests/player.spec.ts` and the *sets switch* parity cells (#134). `talk` — a
+  mouth viseme set and an arm gesture set (one replacing a mesh) on disjoint
+  slots, with three sets that overlap them by a covered slot, a hidden slot and
+  a `<base>_still` companion, and a `chat` clip keying both covered slots:
+  `multiSetsProbe` in `tests/player.spec.ts` (#168). A premultiplied page
   reaches a rigc build only through `--atlas-in` (its packer writes
   `pma: false`), so `tests/pma.spec.ts` makes its premultiplied twin of the
   figure's page in the harness, as it always has. If a spec needs something

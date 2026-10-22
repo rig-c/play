@@ -1,0 +1,102 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "talk",
+  "cut": "test-talk",
+  "easings": {},
+  "animations": {
+    "chat": {
+      "duration": 1,
+      "loop": true,
+      "note": "Keys the mouth and the lower arm (both covered by sets) at t=0.5 while swaying the torso and the shoulder.",
+      "tracks": [
+        {
+          "bone": "torso",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                12,
+                6
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "shoulder",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 0.5,
+              "v": [
+                25
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "slot": "mouth",
+          "property": "attachment",
+          "keys": [
+            {
+              "t": 0,
+              "v": "mouth_rest"
+            },
+            {
+              "t": 0.5,
+              "v": "mouth_track"
+            },
+            {
+              "t": 1,
+              "v": "mouth_rest"
+            }
+          ]
+        },
+        {
+          "slot": "arm_lower",
+          "property": "attachment",
+          "keys": [
+            {
+              "t": 0,
+              "v": "arm_lower"
+            },
+            {
+              "t": 0.5,
+              "v": "arm_lower_track"
+            },
+            {
+              "t": 1,
+              "v": "arm_lower"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
