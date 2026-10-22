@@ -556,6 +556,34 @@ active (`null`), track evaluation runs with zero extra work and produces
 byte-identical poses. An unknown set name throws by name; on a build without
 `sets.json`, `sets()` is empty (`[]`) and `setSet` throws.
 
+**Several sets at once** (#168): sets that touch disjoint slots can be active
+together — a mouth viseme driven by audio beside an arm gesture driven by
+input, without building every combination as its own set:
+
+```ts
+player.setSets(['viseme_o', 'gesture_chin']); // exactly these, together
+player.removeSet('viseme_o');                 // the gesture stays
+player.addSet('viseme_a');                    // beside the active ones; already active = no change
+player.activeSets;                            // ['viseme_a', 'gesture_chin'] in sets.json order
+player.set;                                   // null: several are active (one active → its name)
+player.setSets([]);                           // restore base / track attachments
+```
+
+A set *touches* every slot it covers, every slot it `hides` and the
+`<base>_still` companion it hides. Two active sets touching the same slot are
+refused by name — `sets "viseme_o" and "talk_point" both touch slot "mouth"` —
+and nothing changes; precedence is never guessed. Disjoint sets compose as the
+union of each alone, whatever the order they were named or added in, and every
+rule above (applied to the held pose, after track evaluation, uncovered slots
+untouched) holds for the composition. `setSet(name)` keeps meaning *exactly this
+one* (`setSets([name])`) and `setSet(null)` is `setSets([])`; an unknown or
+repeated name throws by name. `slotIdentity()` reports the list as `sets`
+beside `set`.
+
+To switch one driver's set while another stays — a new viseme while a gesture
+holds — name the new list in one call (`setSets(['viseme_a', 'gesture_chin'])`)
+or `removeSet` then `addSet`; the first re-poses once, the second twice.
+
 ### Slot identity snapshot (`slotIdentity()`)
 
 To inspect which attachment key, owning skin and visibility state each slot
@@ -566,7 +594,8 @@ holds on the current frame — for a parts explorer or review overlay — withou
 const snap = player.slotIdentity();
 // {
 //   generation: number,              // matches player.generation and player.posedFrame().generation
-//   set: string | null,              // active set name (player.set)
+//   set: string | null,              // the one active set (player.set); null when none or several
+//   sets: readonly string[],         // every active set (player.activeSets), sets.json order
 //   skin: string | null,             // active skin name (player.skin ?? null)
 //   slots: readonly [                // every slot in posed draw order (z = 0 .. slots.length - 1)
 //     {
@@ -589,7 +618,7 @@ ones included) appears in `snap.slots`:
   and the skin that owns it (`skin`).
 - Non-drawn slots report `attachment: null`, `skin: null`, and why they are
   absent from `posedFrame().order`:
-  - `'set-hide'` — hidden by the active attachment set (`set.hides` or a
+  - `'set-hide'` — hidden by an active attachment set (`set.hides` or a
     `<base>_still` companion of a slot the set covers or hides).
   - `'timeline-null'` — cleared by an active attachment timeline key (`null`).
   - `'no-attachment'` — no attachment in the setup pose or under the active skin

@@ -355,3 +355,21 @@ write('sets', 'face_still.png', 57, 57, paint(57, 57, ellipse(57, 57, 4), look([
 write('sets', 'prop_wand.png', 65, 145, paint(65, 145, roundedRect(65, 145, 5, 16), look([70, 185, 95], { period: 10 })));
 write('sets', 'prop_star.png', 97, 97, paint(97, 97, ellipse(97, 97, 5), look([250, 150, 45], { stripe: 24, period: 8 })));
 
+
+// --- talk: a mouth viseme set and an arm gesture set active together (#168) ---
+
+console.log('talk:');
+write('talk', 'body.png', 161, 209, paint(161, 209, roundedRect(161, 209, 6, 28), look([70, 110, 190], { period: 14 })));
+write('talk', 'head.png', 141, 141, paint(141, 141, ellipse(141, 141, 6), look([235, 195, 155], { stripe: 14, period: 12 })));
+write('talk', 'mouth_rest.png', 57, 31, paint(57, 31, ellipse(57, 31, 4), look([190, 80, 90], { stripe: 12, period: 8 })));
+write('talk', 'mouth_track.png', 57, 31, paint(57, 31, ellipse(57, 31, 4), look([225, 95, 95], { stripe: 18, period: 10 })));
+write('talk', 'mouth_o.png', 41, 41, paint(41, 41, ellipse(41, 41, 4), look([155, 40, 60], { stripe: 16, period: 8 })));
+write('talk', 'mouth_a.png', 61, 45, paint(61, 45, ellipse(61, 45, 4), look([245, 210, 65], { stripe: 22, period: 10 })));
+write('talk', 'mouth_still.png', 37, 17, paint(37, 17, ellipse(37, 17, 3), look([210, 50, 70], { stripe: 16, period: 8 })));
+write('talk', 'mouth_still_alt.png', 37, 17, paint(37, 17, ellipse(37, 17, 3), look([60, 60, 70], { stripe: 10, period: 6 })));
+write('talk', 'arm_upper.png', 45, 105, paint(45, 105, roundedRect(45, 105, 5, 16), look([70, 185, 95], { period: 10 })));
+write('talk', 'arm_upper_raised.png', 45, 105, paint(45, 105, roundedRect(45, 105, 5, 16), look([155, 95, 220], { stripe: 20, period: 10 })));
+write('talk', 'arm_lower.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([40, 165, 150], { period: 12 })));
+write('talk', 'arm_lower_track.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([250, 150, 45], { stripe: 24, period: 8 })));
+write('talk', 'arm_lower_chin.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([95, 160, 240], { stripe: 18, period: 10 })));
+write('talk', 'arm_lower_point.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([235, 120, 180], { stripe: 14, period: 8 })));
