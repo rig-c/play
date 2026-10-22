@@ -206,6 +206,7 @@ test('a set\'s drawn bones pose as @rig-c/parts check --set poses them, and the 
   expect(rules.setupRestore).toBe(true);
   expect(rules.slotOnlyIdentical).toBe(true);
   expect(rules.adjustAfterDrawn).toBeCloseTo(0, 4);
+  expect(rules.skinChangeKeepsDrawn).toBe(true);
 });
 
 test('snapshot-backed seek matches cold replay at tolerance 0 across forward, backward, random, repeated, and off-grid seeks, in O(1) warm time, and invalidates on setSet (#141)', async ({ page }) => {

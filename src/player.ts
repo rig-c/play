@@ -1398,8 +1398,7 @@ export class RigPlayer {
       this.reopen();
       this.stepTo(time);
     } else if (this.rawPose !== null) {
-      this.setup = poseRawSetup(this.view);
-      this.setRawPose(this.setup);
+      this.setRawPose(this.drawnSetup());
     } else {
       this.poseGeneration++;
       this.cachedIdentity = null;
@@ -1527,18 +1526,20 @@ export class RigPlayer {
       this.setRawPose(stepper.step(0));
       return;
     }
+    this.setRawPose(this.drawnSetup());
+  }
+
+  /** The setup pose with the active sets' drawn bones at their rotations (#170); the plain setup pose when none draws. */
+  private drawnSetup(): RawPose {
     const setup = this.setup ?? (this.setup = poseRawSetup(this.view));
-    this.setRawPose(
-      this.drawnPose === null
-        ? setup
-        : poseRawSetup({
-            ...this.view,
-            bones: this.view.bones.map((b) => {
-              const rotation = this.drawnPose?.get(b.name);
-              return rotation === undefined ? b : { ...b, rotation };
-            }),
-          }),
-    );
+    if (this.drawnPose === null) return setup;
+    return poseRawSetup({
+      ...this.view,
+      bones: this.view.bones.map((b) => {
+        const rotation = this.drawnPose?.get(b.name);
+        return rotation === undefined ? b : { ...b, rotation };
+      }),
+    });
   }
 
   /** The slots `set` touches, computed once per set. */

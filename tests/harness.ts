@@ -447,6 +447,8 @@ export interface DrawnRulesProbeResult {
   slotOnlyIdentical: boolean;
   /** `adjust` runs after drawn: an adjust writing shoulder rotation wins. */
   adjustAfterDrawn: number;
+  /** A skin change before play keeps the drawn pose: frame JSON equal to a player that never changed skin. */
+  skinChangeKeepsDrawn: boolean;
 }
 
 export interface SetsProbeResult {
@@ -8188,6 +8190,15 @@ async function drawnRulesProbe(): Promise<DrawnRulesProbeResult> {
     const rot = (b: { a: number; c: number }): number => (Math.atan2(b.c, b.a) * 180) / Math.PI;
     const adjustAfterDrawn = rot(adj.bone('shoulder')) - rot(adj.bone('torso'));
 
+    // A skin change before play re-poses the setup pose with the drawn bones still drawn.
+    const sk = make();
+    sk.setSets(['wave']);
+    sk.skin = 'default';
+    sk.skin = undefined;
+    const skRef = make();
+    skRef.setSets(['wave']);
+    const skinChangeKeepsDrawn = json(sk) === json(skRef);
+
     return {
       overlapError,
       overlapUnchanged,
@@ -8202,6 +8213,7 @@ async function drawnRulesProbe(): Promise<DrawnRulesProbeResult> {
       setupRestore,
       slotOnlyIdentical,
       adjustAfterDrawn,
+      skinChangeKeepsDrawn,
     };
   } finally {
     for (const p of players) p.dispose();
