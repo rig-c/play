@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.15.0](https://github.com/rig-c/play/compare/v1.14.1...v1.15.0) (2026-10-22)
+
+
+### Features
+
+* **sets:** activate several attachment sets at once when they touch disjoint slots ([#169](https://github.com/rig-c/play/issues/169)) ([2b6edbf](https://github.com/rig-c/play/commit/2b6edbf2044a8bda0509908e2b5db5180cad2ded)), closes [#168](https://github.com/rig-c/play/issues/168)
+* **sets:** pose a set's drawn bones as @rig-c/parts check --set does ([#172](https://github.com/rig-c/play/issues/172)) ([5223755](https://github.com/rig-c/play/commit/5223755c37034d8df88b6f65693b2a42a428f1fa)), closes [#170](https://github.com/rig-c/play/issues/170)
+
 ## [1.14.1](https://github.com/rig-c/play/compare/v1.14.0...v1.14.1) (2026-10-21)
 
 
