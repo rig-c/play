@@ -467,7 +467,13 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
   mouth viseme set and an arm gesture set (one replacing a mesh) on disjoint
   slots, with three sets that overlap them by a covered slot, a hidden slot and
   a `<base>_still` companion, and a `chat` clip keying both covered slots:
-  `multiSetsProbe` in `tests/player.spec.ts` (#168). A premultiplied page
+  `multiSetsProbe` in `tests/player.spec.ts` (#168). `gesture` — an arm set
+  and a head set with `drawn` bone angles, a set drawing a bone the arm set
+  draws, and a `swing` clip keying a drawn bone, with its reference stills
+  under `stills/` (made by `@rig-c/parts`' own `stillRigForSet` through
+  `tests/rigs/make_drawn_stills.ts`, committed, built as
+  `gesture-still-<sets>`): `drawnMatchProbe` and `drawnRulesProbe` in
+  `tests/player.spec.ts` (#170). A premultiplied page
   reaches a rigc build only through `--atlas-in` (its packer writes
   `pma: false`), so `tests/pma.spec.ts` makes its premultiplied twin of the
   figure's page in the harness, as it always has. If a spec needs something

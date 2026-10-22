@@ -334,6 +334,42 @@ function touchedBySet(view: CompiledDocument, set: RigSet): ReadonlySet<string> 
   return touched;
 }
 
+/** Degrees into (-180, 180]. */
+function normaliseDegrees(deg: number): number {
+  let v = ((deg % 360) + 360) % 360;
+  if (v > 180) v -= 360;
+  return v;
+}
+
+/**
+ * The local rotations that put `drawn`'s bones at their world rotations at
+ * the setup pose (#170), the way `@rig-c/parts` poses a set for `check --set`
+ * (`poseRigBonesForDrawn`): bones in document order, each drawn bone's local
+ * rotation the drawn angle less its world rotation at local 0, under its
+ * already-posed parents, with no constraint applied. A bone hanging from a
+ * stopped link's drawn twin `<link>_d` reads its parent as `<link>`, as
+ * parts reads it (parts #404).
+ */
+function drawnLocals(view: CompiledDocument, drawn: Readonly<Record<string, number>>): ReadonlyMap<string, number> {
+  const names = new Set(view.bones.map((b) => b.name));
+  const realParent = (parent: string | undefined): string | undefined =>
+    parent !== undefined && parent.endsWith('_d') && names.has(parent.slice(0, -2)) ? parent.slice(0, -2) : parent;
+  const bones = view.bones.map((b) => ({ ...b, parent: realParent(b.parent) }));
+  const locals = new Map<string, number>();
+  for (let i = 0; i < bones.length; i++) {
+    const target = drawn[bones[i].name];
+    if (target === undefined) continue;
+    bones[i] = { ...bones[i], rotation: 0 };
+    const pose = poseRawSetup({ ...view, bones, slots: [], constraints: [] });
+    const world = pose.bones.find((b) => b.name === bones[i].name);
+    if (world === undefined) throw new Error(`drawn bone ${JSON.stringify(bones[i].name)} was not posed`);
+    const rotation = normaliseDegrees(target - normaliseDegrees((Math.atan2(world.c, world.a) * 180) / Math.PI));
+    bones[i] = { ...bones[i], rotation };
+    locals.set(bones[i].name, rotation);
+  }
+  return locals;
+}
+
 /**
  * One set equivalent to `sets` applied together, or `null` for none. One set is
  * returned as it is; several, already checked disjoint, merge their `slots` and
@@ -343,10 +379,12 @@ function touchedBySet(view: CompiledDocument, set: RigSet): ReadonlySet<string> 
 function composeSets(sets: readonly RigSet[]): RigSet | null {
   if (sets.length === 0) return null;
   if (sets.length === 1) return sets[0];
+  const drawn = sets.filter((s) => s.drawn !== undefined);
   return {
     name: sets.map((s) => s.name).join('+'),
     slots: Object.assign({}, ...sets.map((s) => s.slots)) as Record<string, string>,
     hides: sets.flatMap((s) => s.hides),
+    ...(drawn.length === 0 ? {} : { drawn: Object.assign({}, ...drawn.map((s) => s.drawn)) as Record<string, number> }),
   };
 }
 
@@ -765,6 +803,8 @@ export class RigPlayer {
   private activeList: readonly RigSet[] = [];
   private activeSet: RigSet | null = null;
   private readonly touchedSets = new Map<string, ReadonlySet<string>>();
+  /** The active sets' drawn bones as local rotations, applied before `adjust` on every pose (#170); null when none draws. */
+  private drawnPose: ReadonlyMap<string, number> | null = null;
   private adjustFn: BoneAdjust | null = null;
   /** Current preview patches, reapplied through the public core API on replay; no edit history. */
   private readonly physicsPatches = new Map<string, PhysicsParameterPatch>();
@@ -775,6 +815,7 @@ export class RigPlayer {
   private draws: (slot: string) => boolean = () => true;
   /** Handed to every track the player opens; reads the current `adjust` so setting it later needs no reopen. */
   private readonly adjustHook: CoreLocalAdjust = (locals, ctx) => {
+    if (this.drawnPose !== null) for (const [bone, rotation] of this.drawnPose) locals.bone(bone).rotation = rotation;
     if (this.adjustFn !== null) this.adjustFn(locals, ctx);
   };
   private readonly listeners = {
@@ -1357,8 +1398,7 @@ export class RigPlayer {
       this.reopen();
       this.stepTo(time);
     } else if (this.rawPose !== null) {
-      this.setup = poseRawSetup(this.view);
-      this.setRawPose(this.setup);
+      this.setRawPose(this.drawnSetup());
     } else {
       this.poseGeneration++;
       this.cachedIdentity = null;
@@ -1399,6 +1439,9 @@ export class RigPlayer {
    * Uncovered slots keep their track attachments, mesh deforms and sequence
    * frames untouched; when no set is active (`null`), track evaluation runs
    * with zero overhead and produces byte-identical poses.
+   *
+   * A set with `drawn` (#170) also poses its bones at those world angles, as
+   * `@rig-c/parts check --set` does, replacing a clip's rotation of them.
    *
    * `setSet(name)` means exactly this one set: any other active sets are
    * cleared (`setSets([name])`), and `setSet(null)` is `setSets([])`.
@@ -1472,6 +1515,33 @@ export class RigPlayer {
     return found;
   }
 
+  /**
+   * Poses again after the drawn bones changed (#170): through the tracks at
+   * the same time when the player has played, else the setup pose with the
+   * drawn bones at their rotations.
+   */
+  private reposeDrawn(): void {
+    const stepper = this.tracks ?? this.track;
+    if (stepper !== null && this.pose !== null) {
+      this.setRawPose(stepper.step(0));
+      return;
+    }
+    this.setRawPose(this.drawnSetup());
+  }
+
+  /** The setup pose with the active sets' drawn bones at their rotations (#170); the plain setup pose when none draws. */
+  private drawnSetup(): RawPose {
+    const setup = this.setup ?? (this.setup = poseRawSetup(this.view));
+    if (this.drawnPose === null) return setup;
+    return poseRawSetup({
+      ...this.view,
+      bones: this.view.bones.map((b) => {
+        const rotation = this.drawnPose?.get(b.name);
+        return rotation === undefined ? b : { ...b, rotation };
+      }),
+    });
+  }
+
   /** The slots `set` touches, computed once per set. */
   private touched(set: RigSet): ReadonlySet<string> {
     let touched = this.touchedSets.get(set.name);
@@ -1498,11 +1568,27 @@ export class RigPlayer {
             );
           }
         }
+        const otherDrawn = sets[j].drawn;
+        for (const bone of Object.keys(sets[i].drawn ?? {})) {
+          if (otherDrawn !== undefined && bone in otherDrawn) {
+            throw new Error(
+              `sets ${JSON.stringify(sets[j].name)} and ${JSON.stringify(sets[i].name)} both pose bone ${JSON.stringify(bone)}; ` +
+                'active sets must draw disjoint bones',
+            );
+          }
+        }
       }
     }
+    const drawnBefore = this.activeSet?.drawn;
     this.activeList = this.setList.filter((s) => sets.includes(s));
     this.activeSet = composeSets(this.activeList);
     this.clearSeekCache();
+    const drawn = this.activeSet?.drawn;
+    if (drawn !== drawnBefore && !(drawn === undefined && drawnBefore === undefined)) {
+      this.drawnPose = drawn === undefined ? null : drawnLocals(this.view, drawn);
+      this.reposeDrawn();
+      return;
+    }
     const base = this.rawPose ?? (this.setup ?? (this.setup = poseRawSetup(this.view)));
     this.rawPose = base;
     this.pose = this.activeSet === null ? base : applySetToPose(this.view, base, this.activeSet);

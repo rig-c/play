@@ -64,6 +64,13 @@ export interface RigSet {
   readonly slots: Readonly<Record<string, string>>;
   /** Slots the set hides (`null` attachment while the set is active). */
   readonly hides: readonly string[];
+  /**
+   * The world rotations (degrees, CCW, Y up) the set's art was painted at,
+   * by bone (`@rig-c/parts` gesture sets, parts #465 / #476): while the set is
+   * active those bones are posed at these angles (#170). Absent when the set
+   * declares none.
+   */
+  readonly drawn?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -158,6 +165,17 @@ export function readSetupMesh(assets: ModelAssets, target: SetupMeshTarget): Set
 
 const SETS_SPECS = ['spine-parts-sets/1', 'rig-parts-sets/1'] as const;
 
+/**
+ * Keys `@rig-c/parts` writes that place nothing: `check --set` poses a set by
+ * its `slots`, `hides` and `drawn` alone, so these are read past by name and
+ * given no meaning here (#170). `drawnLength` and `registration` record how a
+ * skeleton-placed set's painting was measured; `threshold` is the yaw/pitch
+ * band a pose dial switches a face set at. Any other key is refused by name.
+ */
+const SET_KEYS_NOT_POSED = ['drawnLength', 'registration', 'threshold'] as const;
+const SET_KEYS = ['slots', 'hides', 'drawn', ...SET_KEYS_NOT_POSED] as const;
+const SETS_DOCUMENT_KEYS = ['spec', 'sets', 'threshold'] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -183,10 +201,16 @@ export function readSetsText(text: string, where: string, doc: CompiledDocument)
       `${where}: spec is ${JSON.stringify(raw.spec)}, not "${SETS_SPECS[0]}" or "${SETS_SPECS[1]}"`,
     );
   }
+  for (const key of Object.keys(raw)) {
+    if (!(SETS_DOCUMENT_KEYS as readonly string[]).includes(key)) {
+      throw new Error(`${where}: unknown key ${JSON.stringify(key)} (known: ${SETS_DOCUMENT_KEYS.join(', ')})`);
+    }
+  }
   if (!isRecord(raw.sets) && !Array.isArray(raw.sets)) {
     throw new Error(`${where}: "sets" must be an object or an array`);
   }
   const knownSlots = new Set(doc.slots.map((slot) => slot.name));
+  const knownBones = new Set(doc.bones.map((bone) => bone.name));
   const attachmentsBySlot = new Map<string, Set<string>>();
   for (const skin of doc.skins) {
     for (const [slotName, table] of Object.entries(skin.attachments)) {
@@ -224,6 +248,12 @@ export function readSetsText(text: string, where: string, doc: CompiledDocument)
       throw new Error(`${where}: duplicate set "${name}"`);
     }
     seenNames.add(name);
+    for (const key of Object.keys(item)) {
+      if (Array.isArray(raw.sets) && key === 'name') continue;
+      if (!(SET_KEYS as readonly string[]).includes(key)) {
+        throw new Error(`${where}: set "${name}" has unknown key ${JSON.stringify(key)} (known: ${SET_KEYS.join(', ')})`);
+      }
+    }
     if (!isRecord(item.slots)) {
       throw new Error(`${where}: set "${name}" must have a "slots" object`);
     }
@@ -258,11 +288,28 @@ export function readSetsText(text: string, where: string, doc: CompiledDocument)
         if (!hides.includes(hidden)) hides.push(hidden);
       }
     }
+    let drawn: Record<string, number> | undefined;
+    if (item.drawn !== undefined) {
+      if (!isRecord(item.drawn)) {
+        throw new Error(`${where}: set "${name}" "drawn" must be an object of bone name → degrees`);
+      }
+      drawn = {};
+      for (const [boneName, degrees] of Object.entries(item.drawn)) {
+        if (!knownBones.has(boneName)) {
+          throw new Error(`${where}: set "${name}" draws unknown bone "${boneName}"`);
+        }
+        if (typeof degrees !== 'number' || !Number.isFinite(degrees)) {
+          throw new Error(`${where}: set "${name}" drawn bone "${boneName}" must be a finite number of degrees`);
+        }
+        drawn[boneName] = degrees;
+      }
+    }
     out.push(
       Object.freeze({
         name,
         slots: Object.freeze(slots),
         hides: Object.freeze(hides),
+        ...(drawn === undefined || Object.keys(drawn).length === 0 ? {} : { drawn: Object.freeze(drawn) }),
       }),
     );
   }

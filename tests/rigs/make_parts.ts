@@ -373,3 +373,14 @@ write('talk', 'arm_lower.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14),
 write('talk', 'arm_lower_track.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([250, 150, 45], { stripe: 24, period: 8 })));
 write('talk', 'arm_lower_chin.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([95, 160, 240], { stripe: 18, period: 10 })));
 write('talk', 'arm_lower_point.png', 41, 97, paint(41, 97, roundedRect(41, 97, 5, 14), look([235, 120, 180], { stripe: 14, period: 8 })));
+
+// --- gesture: an arm set painted at drawn bone angles, and a nod (#170) ---
+
+console.log('gesture:');
+write('gesture', 'body.png', 161, 209, paint(161, 209, roundedRect(161, 209, 6, 28), look([70, 110, 190], { period: 14 })));
+write('gesture', 'head.png', 121, 121, paint(121, 121, ellipse(121, 121, 6), look([235, 195, 155], { stripe: 14, period: 12 })));
+write('gesture', 'head_nod.png', 121, 121, paint(121, 121, ellipse(121, 121, 6), look([245, 210, 65], { stripe: 22, period: 10 })));
+write('gesture', 'arm_upper.png', 105, 41, paint(105, 41, roundedRect(105, 41, 5, 14), look([70, 185, 95], { period: 10 })));
+write('gesture', 'arm_upper_wave.png', 105, 41, paint(105, 41, roundedRect(105, 41, 5, 14), look([155, 95, 220], { stripe: 20, period: 10 })));
+write('gesture', 'arm_lower.png', 97, 37, paint(97, 37, roundedRect(97, 37, 5, 12), look([40, 165, 150], { period: 12 })));
+write('gesture', 'arm_lower_wave.png', 97, 37, paint(97, 37, roundedRect(97, 37, 5, 12), look([250, 150, 45], { stripe: 24, period: 8 })));
