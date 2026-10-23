@@ -643,6 +643,63 @@ physics state) and nothing when no physics hangs under a re-posed bone. Three li
 - A later `seek` replays from the start with the sets then active, as it
   always has, so it does not reproduce a carried switch.
 
+**Easing a drawn set in and out** (#174). A drawn set snaps its bones to the
+drawn angles in one frame. `ease` turns them there over a duration instead,
+and swaps the attachments halfway, the way an alternate drawing takes over
+at a middle angle:
+
+```ts
+player.setSets(['wave_r'], { ease: 0.5 });   // also setSet, addSet, removeSet
+player.setSets([], { ease: 0.5 });           // and back
+```
+
+- **The curve.** Each bone whose drawn rotation the call adds, removes or
+  changes turns from what it shows to its new local rotation along the
+  shorter way: `start + shortestΔ(start, end) · smoothstep(u)`, with
+  `u = elapsed / ease`. Going on, the start is the clip's value at the time
+  (it moves with the clip) and the end the drawn local; going off, the start
+  is the drawn local and the end the clip's value. So the progress from start
+  to end never leaves `[0, 1]` and never turns back, while the clip plays
+  underneath. On `@rig-c/parts`' public wind example with its gesture set
+  (`wave_r`, 0.5 s), it is 0 to 1 and non-decreasing on every frame, on and
+  off; on a clip that holds the arm still, the sleeve's world angle goes
+  −119.32° → −110° and back with no overshoot.
+- **The swap.** The held pose draws the attachments it showed until the frame
+  whose `u` is nearest ½, then the set's (a tie goes to the later frame; the
+  next step is predicted from the current one, so a constant `dt` lands on
+  the nearest frame). On the wind example at `frame(1/60)`, 0.5 s swaps on
+  frame 15 and 0.25 s on frame 8. `activeSets`, `set` and `slotIdentity().sets`
+  name the call's sets from the call on; `slotIdentity().slots` reports what
+  the pose draws, so before the swap it shows the previous attachments.
+- **The end.** On the frame the elapsed time reaches `ease`, the player is in
+  exactly the instant switch's state: from then on every bone matches an
+  instant switch made at the same frame (0° measured) and the slot identity
+  too.
+- **Time.** The elapsed time is the player's step (`dt × timeScale`): a
+  paused player, or a step of 0, holds the ease where it is. Before `play`
+  there is nothing to step and the switch is instant; so is a call that
+  re-poses no bone. A `seek` or a skin change lands an ease in flight at
+  once.
+- **A call during an ease** starts a new one from the angles shown (no jump:
+  reversing a 0.5 s ease at 0.3 makes no frame-to-frame step larger than the
+  ease's own), and the attachment swap starts again from what is drawn. A
+  call without `ease` during an ease lands it at once.
+- `ease: 0`, or no `ease`, is the instant switch, frame for frame. Anything
+  but a finite number at or above 0 is refused by name before anything
+  changes.
+
+With physics: `ease` and `physics: 'carry'` carry the chains under the eased
+bones on every eased frame — before each step, the turn the frame's blend
+makes is read as #173's switch is (a trial pose at the previous time) and
+the chains are moved by it — so the ease's own turn is not read as motion.
+`physics: 'reset'` with `ease` restarts them once, at the call. On `drape`
+(0.5 s raise, sleeve tips in the arm's frame): the ease alone moves the
+sleeve up to 30 units a frame relative to the arm (the chain reads the turn
+as motion), ease + carry at most 3.9 on the `idle` clip (its idle ranges are
+1.5 hanging and 4.2 raised) and 2.3 on `shift` (0.85 and 0.07), where
+gravity re-settles the chain in the turning arm's frame (with gravity at 0,
+0.83 against 0.84).
+
 `sets.json` keys are read strictly. Besides `slots`, `hides` and `drawn`, a
 set may carry `drawnLength`, `registration` and `threshold`, which parts
 writes and which place nothing under `check --set`: play reads past them by

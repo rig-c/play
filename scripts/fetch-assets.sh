@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # Builds every rig the demo, the test suite and the benchmark read, with the
-# pinned rig-c devDependency's `rigc build`. Two sources, nothing fetched that
-# is licence-bound:
+# pinned rig-c devDependency's `rigc build`. Three sources:
 #
 # - rigc's gallery rigs, from the rigc tag below (each one's art is rigc's own
 #   procedural drawing — its make_parts.ts);
 # - this repository's test rigs, `tests/rigs/<name>/` (rig.json, motion.json
 #   and parts painted by tests/rigs/make_parts.ts), which carry what no gallery
 #   rig does and the renderer specs need: a clipping attachment, additive
-#   slots, a region turned on its page (CLAUDE.md, *Testing*).
+#   slots, a region turned on its page (CLAUDE.md, *Testing*);
+# - `@rig-c/parts`' public `wind` example with its gesture set (`wind-wave`,
+#   #174), built by the pinned `@rig-c/parts` devDependency from its tag's
+#   config and the pinned public examples repository's painting and layers. The
+#   painting carries its own licence (the examples repository's README); it is
+#   fetched to build a test fixture under the gitignored public/rigs/, which
+#   neither npm nor any page deploys.
 #
 # Each build lands in `public/rigs/<name>/` with everything side by side:
 # `skeleton.model.json` (what the player loads), the Spine pair `rigc build`
@@ -63,7 +68,7 @@ build() {
   mkdir -p "$out"
   cp "$src/rig.json" "$src/motion.json" "$out/"
   if [ -f "$src/sets.json" ]; then cp "$src/sets.json" "$out/sets.json"; fi
-  for dir in parts art; do
+  for dir in parts art images; do
     if [ -d "$src/$dir" ]; then cp -R "$src/$dir" "$out/$dir"; fi
   done
   # A reference still (tests/rigs/<rig>/stills/<sets>/, #170) draws its rig's parts.
@@ -191,5 +196,69 @@ test_rig drape drape
 for still in wave nod wave+nod; do
   PARTS_FROM="$TEST_RIGS_SRC/gesture/parts" test_rig "gesture/stills/$still" "gesture-still-$still"
 done
+# --- the public wave build (#174) ---------------------------------------------
+#
+# `@rig-c/parts`' wind example with its drawn gesture set `wave_r`
+# (examples/wind/config.wave.json, parts #670/#672): its light half (config,
+# pose, proposal, expected-wave/) from the parts tag, its heavy half (painting,
+# See-through layers) from rig-c/examples (formerly parts-examples) at the commit parts' own
+# scripts/fetch-examples.sh pins, built by the `@rig-c/parts` devDependency of
+# the same version (`rig-parts build`, the call parts' chain suite makes), then
+# compiled here like every other rig. The build's rig.json, motion.json and
+# sets.json must be byte-identical to the tag's expected-wave/, or nothing is
+# written. It takes minutes, so it is stamped like the test rigs.
+PARTS_TAG="v1.60.0"
+PARTS_EXAMPLES_COMMIT="ba99e403d4058fc1cfe40699bdcde8aaf00a90c0"
+WAVE_OUT="$RIGS_DEST/wind-wave"
+WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG examples $PARTS_EXAMPLES_COMMIT"
+RIG_PARTS="$ROOT/node_modules/.bin/rig-parts"
+if have "$WAVE_OUT" && [ "$(cat "$WAVE_OUT/.source" 2>/dev/null || true)" = "$WAVE_STAMP" ]; then
+  echo "have test rig wind-wave"
+else
+  require_rigc
+  parts_installed="$(node -p "require('$ROOT/node_modules/@rig-c/parts/package.json').version" 2>/dev/null || true)"
+  parts_expected="$(node -p "require('$ROOT/package.json').devDependencies['@rig-c/parts']")"
+  if [ ! -x "$RIG_PARTS" ] || [ "$parts_installed" != "${PARTS_TAG#v}" ] || [ "$parts_expected" != "${PARTS_TAG#v}" ]; then
+    echo "fixture pin mismatch: parts tag $PARTS_TAG, manifest $parts_expected, installed ${parts_installed:-none} — run bun install first" >&2
+    exit 1
+  fi
+  WAVE_WORK="$(mktemp -d)"
+  trap 'rm -rf "$WAVE_WORK"' EXIT
+  echo "fetching @rig-c/parts $PARTS_TAG wind example and rig-c/examples ${PARTS_EXAMPLES_COMMIT:0:7} wind inputs"
+  mkdir -p "$WAVE_WORK/parts" "$WAVE_WORK/heavy"
+  # A codeload tarball's top folder is named after the repository as it is named
+  # now (parts-examples is served as rig-c/examples), so it is read, not assumed.
+  fetch_dir() { # <url> <path under the top folder> <dest>
+    local tgz="$WAVE_WORK/fetch.tgz" top
+    curl -fsSL "$1" -o "$tgz"
+    top="$(tar -tzf "$tgz" | sed -n 1p | cut -d/ -f1)"
+    tar -xzf "$tgz" -C "$3" --strip-components=1 "$top/$2"
+    rm -f "$tgz"
+  }
+  fetch_dir "https://codeload.github.com/rig-c/parts/tar.gz/refs/tags/$PARTS_TAG" examples/wind "$WAVE_WORK/parts"
+  fetch_dir "https://codeload.github.com/rig-c/examples/tar.gz/$PARTS_EXAMPLES_COMMIT" wind "$WAVE_WORK/heavy"
+  # parts' layout: examples/wind/inputs/{painting.png, st_input_*.png, layers/{full,head}}.
+  WAVE_EX="$WAVE_WORK/parts/examples/wind"
+  mkdir -p "$WAVE_EX/inputs"
+  cp "$WAVE_WORK/heavy/wind/painting.png" "$WAVE_WORK/heavy/wind/inputs/"*.png "$WAVE_EX/inputs/"
+  cp -R "$WAVE_WORK/heavy/wind/layers" "$WAVE_EX/inputs/layers"
+  echo "building test rig wind-wave (rig-parts build, a few minutes)"
+  if ! (cd "$WAVE_WORK/parts" && "$RIG_PARTS" build --config examples/wind/config.wave.json \
+    --source examples/wind/inputs/painting.png --full examples/wind/inputs/layers/full \
+    --head examples/wind/inputs/layers/head --out "$WAVE_WORK/out" > "$WAVE_WORK/parts.log" 2>&1); then
+    tail -n 20 "$WAVE_WORK/parts.log" >&2
+    exit 1
+  fi
+  for f in rig.json motion.json sets.json; do
+    if ! cmp -s "$WAVE_WORK/out/rig/$f" "$WAVE_EX/expected-wave/$f"; then
+      echo "wind-wave: the build's $f is not parts $PARTS_TAG's expected-wave/$f" >&2
+      exit 1
+    fi
+  done
+  build "$WAVE_WORK/out/rig" "$WAVE_OUT"
+  rm -rf "$WAVE_WORK"
+  trap - EXIT
+  printf '%s' "$WAVE_STAMP" > "$WAVE_OUT/.source"
+fi
 rm -f "$RIGS_DEST/named/art/named.atlas"
 echo "test rigs ready → $RIGS_DEST"
