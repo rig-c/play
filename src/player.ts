@@ -1679,6 +1679,8 @@ export class RigPlayer {
       }
       // M = W_new ∘ W_old⁻¹, as [a, b, c, d, x, y].
       const det = o.a * o.d - o.b * o.c;
+      // A zero-scale anchor has no inverse: its chains are left as they are, as without the option, rather than written NaN.
+      if (!Number.isFinite(det) || det === 0) continue;
       const ia = o.d / det;
       const ib = -o.b / det;
       const ic = -o.c / det;
