@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.0](https://github.com/rig-c/play/compare/v1.15.0...v1.16.0) (2026-10-23)
+
+
+### Features
+
+* **sets:** carry or reset the physics under bones a set switch re-poses ([#175](https://github.com/rig-c/play/issues/175)) ([8670318](https://github.com/rig-c/play/commit/86703185002042cd177015fdeb6cb864fc68b59a))
+
 ## [1.15.0](https://github.com/rig-c/play/compare/v1.14.1...v1.15.0) (2026-10-22)
 
 
