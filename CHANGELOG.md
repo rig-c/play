@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/rig-c/play/compare/v1.16.0...v1.17.0) (2026-10-23)
+
+
+### Features
+
+* **sets:** ease a drawn set's bones in and out, swapping attachments at the midpoint ([#177](https://github.com/rig-c/play/issues/177)) ([568a8ae](https://github.com/rig-c/play/commit/568a8ae43af027155eb304344120d34723729b7c))
+
 ## [1.16.0](https://github.com/rig-c/play/compare/v1.15.0...v1.16.0) (2026-10-23)
 
 
