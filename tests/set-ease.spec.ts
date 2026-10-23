@@ -141,6 +141,9 @@ test('an eased set switch turns the drawn bones and swaps at the midpoint (#174)
       // (ii) gravity off: no impulse beyond the idle's own motion.
       const g0 = d('none', 'g0');
       expect(d('ease+carry', 'g0').maxAct, `${mode}/${clip} B7(ii) ease+carry with gravity 0`).toBeLessThanOrEqual(Math.max(g0.R, g0.Rafter));
+      // The same two on the way back.
+      expect(d('ease+carry').maxDeact, `${mode}/${clip} B7(i) deactivation`).toBeLessThanOrEqual(d('carry').maxDeact);
+      expect(d('ease+carry', 'g0').maxDeact, `${mode}/${clip} B7(ii) deactivation`).toBeLessThanOrEqual(Math.max(g0.R, g0.Rafter));
       for (const option of ['carry', 'ease', 'ease+carry', 'ease+reset']) expect(Number.isFinite(d(option).maxAct)).toBe(true);
     }
   }
