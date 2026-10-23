@@ -201,7 +201,7 @@ done
 # `@rig-c/parts`' wind example with its drawn gesture set `wave_r`
 # (examples/wind/config.wave.json, parts #670/#672): its light half (config,
 # pose, proposal, expected-wave/) from the parts tag, its heavy half (painting,
-# See-through layers) from rig-c/parts-examples at the commit parts' own
+# See-through layers) from rig-c/examples (formerly parts-examples) at the commit parts' own
 # scripts/fetch-examples.sh pins, built by the `@rig-c/parts` devDependency of
 # the same version (`rig-parts build`, the call parts' chain suite makes), then
 # compiled here like every other rig. The build's rig.json, motion.json and
@@ -224,12 +224,19 @@ else
   fi
   WAVE_WORK="$(mktemp -d)"
   trap 'rm -rf "$WAVE_WORK"' EXIT
-  echo "fetching @rig-c/parts $PARTS_TAG wind example and rig-c/parts-examples ${PARTS_EXAMPLES_COMMIT:0:7} wind inputs"
+  echo "fetching @rig-c/parts $PARTS_TAG wind example and rig-c/examples ${PARTS_EXAMPLES_COMMIT:0:7} wind inputs"
   mkdir -p "$WAVE_WORK/parts" "$WAVE_WORK/heavy"
-  curl -fsSL "https://codeload.github.com/rig-c/parts/tar.gz/refs/tags/$PARTS_TAG" \
-    | tar -xz -C "$WAVE_WORK/parts" --strip-components=1 "parts-${PARTS_TAG#v}/examples/wind"
-  curl -fsSL "https://codeload.github.com/rig-c/parts-examples/tar.gz/$PARTS_EXAMPLES_COMMIT" \
-    | tar -xz -C "$WAVE_WORK/heavy" --strip-components=1 "parts-examples-$PARTS_EXAMPLES_COMMIT/wind"
+  # A codeload tarball's top folder is named after the repository as it is named
+  # now (parts-examples is served as rig-c/examples), so it is read, not assumed.
+  fetch_dir() { # <url> <path under the top folder> <dest>
+    local tgz="$WAVE_WORK/fetch.tgz" top
+    curl -fsSL "$1" -o "$tgz"
+    top="$(tar -tzf "$tgz" | sed -n 1p | cut -d/ -f1)"
+    tar -xzf "$tgz" -C "$3" --strip-components=1 "$top/$2"
+    rm -f "$tgz"
+  }
+  fetch_dir "https://codeload.github.com/rig-c/parts/tar.gz/refs/tags/$PARTS_TAG" examples/wind "$WAVE_WORK/parts"
+  fetch_dir "https://codeload.github.com/rig-c/examples/tar.gz/$PARTS_EXAMPLES_COMMIT" wind "$WAVE_WORK/heavy"
   # parts' layout: examples/wind/inputs/{painting.png, st_input_*.png, layers/{full,head}}.
   WAVE_EX="$WAVE_WORK/parts/examples/wind"
   mkdir -p "$WAVE_EX/inputs"
