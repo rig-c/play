@@ -95,16 +95,16 @@ test('the README minimal page loads, fits, rasters at screen size and plays', as
   expect(second.transforms).not.toBe(first.transforms);
 });
 
-test('the README wind slider pushes the chain, and dragging moves the rig', async ({ page }) => {
-  // Asserts, written before the first run: the README's *Wind, gravity and
-  // dragging the rig* block, appended to the minimal page and pointed at the
+test('the reference wind slider pushes the chain, and dragging moves the rig', async ({ page }) => {
+  // Asserts, written before the first run: docs/REFERENCE.md's *Wind, gravity
+  // and dragging the rig* block, appended to the minimal page and pointed at the
   // `cloth` test rig, adds a slider; at 0 the chain hangs, and with the slider
   // at −1 the links' centre moves more than 10 px left within 1.5 s; dragging
   // the stage 60 px right moves the root 60 px right.
-  const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
-  const section = readme.slice(readme.indexOf('### Wind, gravity and dragging the rig'));
+  const reference = readFileSync(resolve(repoRoot, 'docs', 'REFERENCE.md'), 'utf8');
+  const section = reference.slice(reference.indexOf('### Wind, gravity and dragging the rig'));
   const snippet = /```ts\n([\s\S]*?)\n```/.exec(section)?.[1];
-  if (!snippet) throw new Error('README: no ts block under "Wind, gravity and dragging the rig"');
+  if (!snippet) throw new Error('docs/REFERENCE.md: no ts block under "Wind, gravity and dragging the rig"');
   const html = page$html
     .replace('rigs/look/skeleton.model.json', 'rigs/cloth/skeleton.model.json')
     .replace('</script>', `${snippet}\n</script>`);

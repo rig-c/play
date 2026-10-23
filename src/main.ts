@@ -4,7 +4,7 @@ import { loadModel, type ModelAssets } from './loadModel.js';
 import { type RenderMode, RigPlayer } from './player.js';
 
 /**
- * The demo, and the perf oracle (README): rigc's gallery rigs, built by
+ * The demo, and the perf oracle (docs/BENCHMARK.md): rigc's gallery rigs, built by
  * `rigc build` into `public/rigs/<name>/` (scripts/fetch-assets.sh), loaded
  * with `loadModel` and played by `RigPlayer`.
  */

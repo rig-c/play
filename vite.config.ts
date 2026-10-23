@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 /**
  * Three build entries:
  *
- * - `index.html` — the demo (and the perf oracle; see README). `?rig=` also
+ * - `index.html` — the demo (and the perf oracle; see docs/BENCHMARK.md). `?rig=` also
  *   reaches the repository's test rigs (tests/rigs/), which the parity and
  *   invariant scenes draw.
  * - `wind.html` — the wind page (#124): a rig named by `?model=` under wind

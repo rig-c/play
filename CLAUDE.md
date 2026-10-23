@@ -10,8 +10,8 @@ by CSS `matrix()`, mesh slots on small per-part canvases (canvas2d or WebGL-blit
 backend), interleaved in one stacking context. It loads the compiled model
 document `rigc build` writes (`skeleton.model.json`, `rigc-compiled/3`), poses it
 through `rig-c/core`, and draws each pose as a `PosedFrame`. Production since
-v0.3.0; the model path since #60. Read README.md for architecture and measured
-numbers. `rig-play` and `spine-html` are the same package under earlier names.
+v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
+`docs/BENCHMARK.md`, for architecture and measured numbers. `rig-play` and `spine-html` are the same package under earlier names.
 
 ## Measurement rules (hard-won — do not relearn these)
 
@@ -377,7 +377,7 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
   `tests/oracle.spec.ts` additionally compares all three renderer paths with
   official WebGL reading the paired Spine export and original PNGs. Its pose
   preflight, composite/alpha bars and measured floors are documented in
-  README's independent oracle section. Do not replace an unexplained mismatch
+  `docs/TESTING.md`'s independent oracle section. Do not replace an unexplained mismatch
   with a broader limit or infer platform independence from A/B alone.
 - Rendering is tested through the demo (`?rig=` names a gallery build or a
   test rig); the **loading path and the renderer probes go through
@@ -455,7 +455,7 @@ numbers. `rig-play` and `spine-html` are the same package under earlier names.
   chain hanging from an anchor, each link answering wind and gravity, with a
   still mesh on the anchor: `tests/environment.spec.ts` (the environment and
   the rig's motion the page sets, #121), the *cloth under a side gust* parity
-  cells and the README's wind example. `draw` — opaque colour squares with
+  cells and `docs/REFERENCE.md`'s wind example. `draw` — opaque colour squares with
   Multiply/Screen slots, a keyed draw-order swap, named skins changing one
   region, a small window, a far inverse clip and an undrawn far attachment:
   `tests/draw-contract.spec.ts`, which pins the blend formula, visible DOM
