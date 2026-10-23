@@ -384,3 +384,14 @@ write('gesture', 'arm_upper.png', 105, 41, paint(105, 41, roundedRect(105, 41, 5
 write('gesture', 'arm_upper_wave.png', 105, 41, paint(105, 41, roundedRect(105, 41, 5, 14), look([155, 95, 220], { stripe: 20, period: 10 })));
 write('gesture', 'arm_lower.png', 97, 37, paint(97, 37, roundedRect(97, 37, 5, 12), look([40, 165, 150], { period: 12 })));
 write('gesture', 'arm_lower_wave.png', 97, 37, paint(97, 37, roundedRect(97, 37, 5, 12), look([250, 150, 45], { stripe: 24, period: 8 })));
+
+// --- drape: cloth chains under a drawn arm and under a bone no set poses (#173) ---
+// A sleeve chain hangs from the forearm, which the `raise` set turns through the
+// shoulder; a skirt chain hangs from the hip, which no set poses (the control).
+
+console.log('drape:');
+write('drape', 'body.png', 161, 209, paint(161, 209, roundedRect(161, 209, 6, 28), look([70, 110, 190], { period: 14 })));
+write('drape', 'arm_upper.png', 105, 41, paint(105, 41, roundedRect(105, 41, 5, 14), look([70, 185, 95], { period: 10 })));
+write('drape', 'arm_lower.png', 97, 37, paint(97, 37, roundedRect(97, 37, 5, 12), look([40, 165, 150], { period: 12 })));
+write('drape', 'sleeve.png', 81, 29, paint(81, 29, roundedRect(81, 29, 4, 10), look([90, 160, 210], { period: 10 })));
+write('drape', 'skirt.png', 81, 29, paint(81, 29, roundedRect(81, 29, 4, 10), look([210, 120, 80], { period: 10 })));

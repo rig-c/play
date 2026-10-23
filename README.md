@@ -603,6 +603,46 @@ poses the held pose again at the same time. Two active sets drawing the same
 bone are refused by name, as two sets touching one slot are. A `drawn` naming
 a bone the document does not have is refused when `sets.json` is loaded.
 
+**Physics under a drawn bone** (#173). A physics chain hung from a bone a set
+re-poses — a sleeve under a raised arm — reads the jump to the drawn angle as
+motion: the constraint remembers where its bone was and pointed, so the
+switch kicks it (on the test rig `drape`, a 110° raise throws the sleeve's
+tip about 297 units off the arm in the switch itself, against an idle
+frame-to-frame range of 1.5). Every set call takes an option for the chains
+under the bones the switch re-poses:
+
+```ts
+player.setSets(['raise'], { physics: 'carry' }); // also setSet, addSet, removeSet
+```
+
+- `'carry'` moves each affected constraint's remembered state by the rigid
+  turn of its deepest re-posed ancestor, so the chain keeps its pose relative
+  to the arm and goes on swinging from there (the switch itself moves the
+  sleeve 0 relative to the arm; gravity then re-settles it in the turned pose,
+  which is physics and not the switch).
+- `'reset'` restarts each affected constraint at the new pose, as a physics
+  `reset` key does: the chain snaps straight along its bones (17 units on the
+  same raise) and settles from there.
+- Absent, nothing changes: today's behaviour, frame for frame. This stays the
+  default.
+
+`'carry'` is recommended: on `drape` it moves the sleeve 0 relative to the arm
+at the switch and 0 at the deactivation, where `'reset'` moves it 17 units at
+the switch and 118 at the deactivation (no option: 297 and 298).
+
+A constraint is affected when its bone is a bone whose drawn rotation the call
+adds, removes or changes, or a descendant of one; every other chain is not
+touched. The option does nothing before `play` (the setup pose carries no
+physics state) and nothing when no physics hangs under a re-posed bone. Three limits:
+
+- Carry moves the positions and direction the constraint remembers; a
+  constraint with `x`/`y` keeps its translation offsets along the world axes,
+  unturned.
+- A drawn bone nested under a carried chain reads its new world from the
+  chain's state before the carry.
+- A later `seek` replays from the start with the sets then active, as it
+  always has, so it does not reproduce a carried switch.
+
 `sets.json` keys are read strictly. Besides `slots`, `hides` and `drawn`, a
 set may carry `drawnLength`, `registration` and `threshold`, which parts
 writes and which place nothing under `check --set`: play reads past them by

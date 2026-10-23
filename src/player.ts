@@ -250,6 +250,46 @@ export interface BoneWorld {
  */
 export type SlotFilter = readonly string[] | ((slot: string) => boolean);
 
+/**
+ * What a set call (`setSet`, `setSets`, `addSet`, `removeSet`) does with the
+ * physics hung under the bones the switch re-poses (#173). Only a switch that
+ * changes a set's `drawn` re-poses bones, so only then does it apply.
+ *
+ * - absent: nothing — the constraints read the jump as motion, as before.
+ * - `'carry'`: each affected constraint's state is moved by the rigid turn its
+ *   deepest re-posed ancestor makes, so the chain keeps its pose relative to
+ *   the bone and does not snap.
+ * - `'reset'`: each affected constraint starts again at the new pose, as a
+ *   physics `reset` key restarts it.
+ */
+export interface SetActivationOptions {
+  physics?: 'carry' | 'reset';
+}
+
+/** `options.physics` of a set call, checked before anything changes. */
+function setPhysicsOption(call: string, options: SetActivationOptions | undefined): 'carry' | 'reset' | undefined {
+  if (options === undefined) return undefined;
+  if (options === null || typeof options !== 'object') {
+    throw new Error(`${call}: options must be an object like { physics: 'carry' }, got ${JSON.stringify(options)}`);
+  }
+  const physics = options.physics;
+  if (physics === undefined || physics === 'carry' || physics === 'reset') return physics;
+  throw new Error(`${call}: options.physics must be 'carry' or 'reset', got ${JSON.stringify(physics)}`);
+}
+
+/** The bones whose drawn rotation differs between `before` and `after` (added, removed or changed). */
+function drawnChanged(before: ReadonlyMap<string, number> | null, after: ReadonlyMap<string, number> | null): Set<string> {
+  const changed = new Set<string>();
+  if (before !== null) for (const [bone, rotation] of before) if (after?.get(bone) !== rotation) changed.add(bone);
+  if (after !== null) for (const [bone, rotation] of after) if (before?.get(bone) !== rotation) changed.add(bone);
+  return changed;
+}
+
+/** The physics context a live stepper carries from step to step. */
+function physicsContextOf(stepper: LiveTrack | LiveTracks): PhysicsContextInternal {
+  return 'first' in stepper ? (stepper as unknown as TrackInternal).track.ctx : (stepper as unknown as TracksInternal).path.ctx;
+}
+
 /** A box in world units, Y up: `y` is the bottom edge. */
 export interface PoseBounds {
   x: number;
@@ -805,6 +845,8 @@ export class RigPlayer {
   private readonly touchedSets = new Map<string, ReadonlySet<string>>();
   /** The active sets' drawn bones as local rotations, applied before `adjust` on every pose (#170); null when none draws. */
   private drawnPose: ReadonlyMap<string, number> | null = null;
+  /** Test-only (#173's planted control): `carry` maps every state through the identity instead of the anchor's turn. Not API. */
+  private carryPlant = false;
   private adjustFn: BoneAdjust | null = null;
   /** Current preview patches, reapplied through the public core API on replay; no edit history. */
   private readonly physicsPatches = new Map<string, PhysicsParameterPatch>();
@@ -1449,11 +1491,12 @@ export class RigPlayer {
    * A name not in `sets.json` throws by name; a build without `sets.json` has
    * `sets()` empty and `setSet` throws.
    */
-  setSet(name: string | null): void {
+  setSet(name: string | null, options?: SetActivationOptions): void {
     if (this.setList.length === 0) {
       throw new Error(`cannot setSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
-    this.activate(name === null ? [] : [this.namedSet(name)]);
+    const physics = setPhysicsOption('setSet', options);
+    this.activate(name === null ? [] : [this.namedSet(name)], physics);
   }
 
   /**
@@ -1463,18 +1506,32 @@ export class RigPlayer {
    * companion). Composition does not depend on the order of `names`. An
    * unknown name, a repeated name or two sets touching one slot throw by name
    * and leave the active sets as they were; `[]` restores the base.
+   *
+   * `options.physics` (#173) decides what a switch that re-poses `drawn` bones
+   * does to the physics constraints hung under them — on a bone whose drawn
+   * rotation this call adds, removes or changes, or on a descendant of one:
+   * `'carry'` moves each one's remembered state (where its bone was and
+   * pointed) by the rigid turn of its deepest re-posed ancestor, so the chain
+   * keeps its pose relative to the bone; `'reset'` restarts each one at the
+   * new pose, as a physics `reset` key does. Absent, the constraints read the
+   * jump as motion and kick, as they always have. Anything else throws before
+   * anything changes. Nothing to do before `play` or when no physics hangs
+   * under a re-posed bone. A later `seek` replays from the start with the sets
+   * then active and does not reproduce a carried switch. `setSet`, `addSet`
+   * and `removeSet` take the same option.
    */
-  setSets(names: readonly string[]): void {
+  setSets(names: readonly string[], options?: SetActivationOptions): void {
     if (this.setList.length === 0) {
       throw new Error(`cannot setSets(${JSON.stringify(names)}): this model has no sets.json`);
     }
+    const physics = setPhysicsOption('setSets', options);
     const sets = names.map((name) => this.namedSet(name));
     for (let i = 0; i < sets.length; i++) {
       for (let j = 0; j < i; j++) {
         if (sets[i] === sets[j]) throw new Error(`set ${JSON.stringify(sets[i].name)} is named twice in setSets`);
       }
     }
-    this.activate(sets);
+    this.activate(sets, physics);
   }
 
   /**
@@ -1482,26 +1539,28 @@ export class RigPlayer {
    * active is left as it is; one touching a slot an active set touches throws
    * by name (the slot and both sets) and changes nothing.
    */
-  addSet(name: string): void {
+  addSet(name: string, options?: SetActivationOptions): void {
     if (this.setList.length === 0) {
       throw new Error(`cannot addSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
+    const physics = setPhysicsOption('addSet', options);
     const found = this.namedSet(name);
     if (this.activeList.includes(found)) return;
-    this.activate([...this.activeList, found]);
+    this.activate([...this.activeList, found], physics);
   }
 
   /**
    * Deactivates `name`, keeping every other active set (#168). An unknown name
    * throws by name; a set that is not active is left as it is.
    */
-  removeSet(name: string): void {
+  removeSet(name: string, options?: SetActivationOptions): void {
     if (this.setList.length === 0) {
       throw new Error(`cannot removeSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
+    const physics = setPhysicsOption('removeSet', options);
     const found = this.namedSet(name);
     if (!this.activeList.includes(found)) return;
-    this.activate(this.activeList.filter((s) => s !== found));
+    this.activate(this.activeList.filter((s) => s !== found), physics);
   }
 
   /** The declared set named `name`, or a throw naming it and the available sets. */
@@ -1553,10 +1612,108 @@ export class RigPlayer {
   }
 
   /**
+   * The physics under the bones a set switch re-poses (#173), before the
+   * repose step: the drawn rotations went from `before` to `after` (already
+   * `drawnPose`), and every physics constraint whose bone is one of the
+   * changed bones or a descendant of one is carried or reset. Nothing to do
+   * before `play` (the setup pose carries no physics state) or when no
+   * constraint hangs under a changed bone.
+   */
+  private handOverPhysics(before: ReadonlyMap<string, number> | null, after: ReadonlyMap<string, number> | null, mode: 'carry' | 'reset'): void {
+    const stepper = this.tracks ?? this.track;
+    if (stepper === null || this.pose === null || this.rawPose === null) return;
+    const changed = drawnChanged(before, after);
+    if (changed.size === 0) return;
+    const parentOf = new Map(this.view.bones.map((b) => [b.name, b.parent]));
+    /** The deepest changed bone on the way from `bone` to the root (itself included). */
+    const anchorOf = (bone: string): string | undefined => {
+      for (let b: string | undefined = bone; b !== undefined; b = parentOf.get(b)) if (changed.has(b)) return b;
+      return undefined;
+    };
+    const ctx = physicsContextOf(stepper);
+    const affected: Array<{ name: string; anchor: string }> = [];
+    for (const c of this.view.constraints) {
+      if (c.kind !== 'physics') continue;
+      const bone = (c.record as { bone?: string } | undefined)?.bone;
+      const anchor = bone === undefined ? undefined : anchorOf(bone);
+      if (anchor === undefined) continue;
+      const state = ctx.states.get(c.name);
+      // A constraint not updated yet, or pending, takes its bone as it finds it on its next update.
+      if (state === undefined || state.pending) continue;
+      affected.push({ name: c.name, anchor });
+    }
+    if (affected.length === 0) return;
+    if (mode === 'reset') {
+      for (const { name } of affected) {
+        const s = ctx.states.get(name) as PhysicsStateInternal;
+        s.remaining = 0;
+        s.lastTime = ctx.time;
+        s.pending = true;
+        s.xOffset = s.xLag = s.xVelocity = 0;
+        s.yOffset = s.yLag = s.yVelocity = 0;
+        s.rotateOffset = s.rotateLag = s.rotateVelocity = 0;
+        s.scaleOffset = s.scaleLag = s.scaleVelocity = 0;
+      }
+      return;
+    }
+    // carry: W_old from the held pose, W_new from a trial step(0) under the new drawn rotations, undone.
+    const anchors = new Set(affected.map((a) => a.anchor));
+    const worlds = (pose: RawPose): Map<string, RawPose['bones'][number]> => {
+      const out = new Map<string, RawPose['bones'][number]>();
+      for (const b of pose.bones) if (anchors.has(b.name)) out.set(b.name, b);
+      return out;
+    };
+    const old = worlds(this.rawPose);
+    const snapshot = captureStepperState(stepper);
+    const now = worlds(stepper.step(0));
+    // The restore puts copies back: the states are read again by name below.
+    restoreStepperState(stepper, snapshot);
+    const maps = new Map<string, readonly [number, number, number, number, number, number]>();
+    for (const anchor of anchors) {
+      const o = old.get(anchor);
+      const n = now.get(anchor);
+      if (o === undefined || n === undefined) continue;
+      if (this.carryPlant) {
+        maps.set(anchor, [1, 0, 0, 1, 0, 0]);
+        continue;
+      }
+      // M = W_new ∘ W_old⁻¹, as [a, b, c, d, x, y].
+      const det = o.a * o.d - o.b * o.c;
+      // A zero-scale anchor has no inverse: its chains are left as they are, as without the option, rather than written NaN.
+      if (!Number.isFinite(det) || det === 0) continue;
+      const ia = o.d / det;
+      const ib = -o.b / det;
+      const ic = -o.c / det;
+      const id = o.a / det;
+      const a = n.a * ia + n.b * ic;
+      const b = n.a * ib + n.b * id;
+      const c = n.c * ia + n.d * ic;
+      const d = n.c * ib + n.d * id;
+      maps.set(anchor, [a, b, c, d, n.worldX - (a * o.worldX + b * o.worldY), n.worldY - (c * o.worldX + d * o.worldY)]);
+    }
+    const states = physicsContextOf(stepper).states;
+    for (const { name, anchor } of affected) {
+      const m = maps.get(anchor);
+      const s = states.get(name);
+      if (m === undefined || s === undefined) continue;
+      const [a, b, c, d, x, y] = m;
+      const ux = s.ux;
+      s.ux = a * ux + b * s.uy + x;
+      s.uy = c * ux + d * s.uy + y;
+      const cx = s.cx;
+      s.cx = a * cx + b * s.cy + x;
+      s.cy = c * cx + d * s.cy + y;
+      const tx = s.tx;
+      s.tx = a * tx + b * s.ty;
+      s.ty = c * tx + d * s.ty;
+    }
+  }
+
+  /**
    * Makes `sets` (distinct) the active sets: refuses any two touching one slot
    * before changing anything, then applies their composition to the held pose.
    */
-  private activate(sets: readonly RigSet[]): void {
+  private activate(sets: readonly RigSet[], physics?: 'carry' | 'reset'): void {
     for (let i = 0; i < sets.length; i++) {
       for (let j = 0; j < i; j++) {
         const other = this.touched(sets[j]);
@@ -1585,7 +1742,9 @@ export class RigPlayer {
     this.clearSeekCache();
     const drawn = this.activeSet?.drawn;
     if (drawn !== drawnBefore && !(drawn === undefined && drawnBefore === undefined)) {
+      const posedBefore = this.drawnPose;
       this.drawnPose = drawn === undefined ? null : drawnLocals(this.view, drawn);
+      if (physics !== undefined) this.handOverPhysics(posedBefore, this.drawnPose, physics);
       this.reposeDrawn();
       return;
     }

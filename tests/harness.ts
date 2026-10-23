@@ -1,4 +1,5 @@
 import { liveCoreProbe } from './liveCoreProbe';
+import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
 import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
@@ -274,6 +275,7 @@ export interface RigPlayHarness {
   multiSetsProbe(): Promise<MultiSetsProbeFixture[]>;
   drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; still: string }>): Promise<DrawnMatchCombo[]>;
   drawnRulesProbe(): Promise<DrawnRulesProbeResult>;
+  setPhysicsProbe(): Promise<SetPhysicsProbeResult>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
 }
@@ -9395,6 +9397,7 @@ window.rigPlayHarness = {
   multiSetsProbe,
   drawnMatchProbe,
   drawnRulesProbe,
+  setPhysicsProbe,
   seekSnapshotProbe,
   slotIdentityProbe,
 };

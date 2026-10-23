@@ -1,0 +1,11 @@
+{
+  "spec": "rig-parts-sets/1",
+  "sets": {
+    "raise": {
+      "slots": {},
+      "drawn": {
+        "shoulder": 20
+      }
+    }
+  }
+}
