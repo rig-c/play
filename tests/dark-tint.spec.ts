@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 /**
  * Two-colour (dark) tint (#106). The canvas mode's GL path draws it, the DOM
- * mode and the canvas mode's canvas2d fallback do not (README, *Coming from
+ * mode and the canvas mode's canvas2d fallback do not (docs/MIGRATION.md, *Coming from
  * spine-html 0.8*), and until this spec nothing held either half.
  *
  * The `duo` test rig keys only the dark half of each slot's tint, over an

@@ -6554,7 +6554,7 @@ let darkDomState: { player: RigPlayer; root: HTMLElement; assets: ModelAssets } 
 /**
  * The DOM mode over the same rig, posed at `time` and left on the page for the
  * spec to capture: two poses that differ only in the dark colour must capture
- * the same, because the DOM mode does not draw it (README).
+ * the same, because the DOM mode does not draw it (docs/MIGRATION.md).
  */
 async function darkDomPose(time: number): Promise<number> {
   if (darkDomState) {
