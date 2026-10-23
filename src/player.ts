@@ -264,6 +264,53 @@ export type SlotFilter = readonly string[] | ((slot: string) => boolean);
  */
 export interface SetActivationOptions {
   physics?: 'carry' | 'reset';
+  /**
+   * Seconds over which the switch eases the bones it re-poses (#174), instead
+   * of snapping them: each covered bone whose drawn rotation this call adds,
+   * removes or changes turns from the local it shows to its new one (the
+   * drawn local, or the clip's value when its set goes) along the shorter
+   * way, by smoothstep(elapsed / ease), and the attachments swap on the frame
+   * nearest the middle. A finite number at or above 0; `0` or absent is the
+   * instant switch. See `setSets`.
+   */
+  ease?: number;
+}
+
+/** `options.ease` of a set call, checked before anything changes: 0 when absent. */
+function setEaseOption(call: string, options: SetActivationOptions | undefined): number {
+  const ease = options?.ease;
+  if (ease === undefined) return 0;
+  if (typeof ease !== 'number' || !Number.isFinite(ease) || ease < 0) {
+    throw new Error(`${call}: options.ease must be a finite number of seconds at or above 0, got ${typeof ease === 'number' ? String(ease) : JSON.stringify(ease)}`);
+  }
+  return ease;
+}
+
+/**
+ * An eased set switch in flight (#174). Each eased bone turns from `from` to
+ * `to`, each a fixed local rotation or `null` for the clip's value at the
+ * time; `clip` holds the clip's local of each eased bone as the last pose
+ * read it, before the override.
+ */
+interface SetEase {
+  readonly duration: number;
+  elapsed: number;
+  readonly bones: ReadonlyMap<string, { readonly from: number | null; readonly to: number | null }>;
+  readonly clip: Map<string, number>;
+  /** The composition drawn until the swap: the one shown when the call was made. */
+  readonly fromSet: RigSet | null;
+  swapped: boolean;
+  readonly physics: 'carry' | 'reset' | undefined;
+}
+
+/** u = elapsed / duration, clamped to [0, 1]. */
+function easeProgress(ease: SetEase): number {
+  return Math.min(Math.max(ease.elapsed / ease.duration, 0), 1);
+}
+
+/** smoothstep(u) = u²(3 − 2u): 0 → 1, flat at both ends, never outside [0, 1]. */
+function smoothstep(u: number): number {
+  return u * u * (3 - 2 * u);
 }
 
 /** `options.physics` of a set call, checked before anything changes. */
@@ -847,6 +894,12 @@ export class RigPlayer {
   private drawnPose: ReadonlyMap<string, number> | null = null;
   /** Test-only (#173's planted control): `carry` maps every state through the identity instead of the anchor's turn. Not API. */
   private carryPlant = false;
+  /** An eased set switch in flight (#174), or null. */
+  private easing: SetEase | null = null;
+  /** The last positive step `advance` took: what predicts the next one when an ease starts. */
+  private lastStep = 0;
+  /** Test-only (#174's planted controls): swap the attachments at u = 0, or ease by w = 1.2u (1 at u = 1). Not API. */
+  private easePlant: 'swap-at-0' | 'overshoot' | null = null;
   private adjustFn: BoneAdjust | null = null;
   /** Current preview patches, reapplied through the public core API on replay; no edit history. */
   private readonly physicsPatches = new Map<string, PhysicsParameterPatch>();
@@ -857,7 +910,8 @@ export class RigPlayer {
   private draws: (slot: string) => boolean = () => true;
   /** Handed to every track the player opens; reads the current `adjust` so setting it later needs no reopen. */
   private readonly adjustHook: CoreLocalAdjust = (locals, ctx) => {
-    if (this.drawnPose !== null) for (const [bone, rotation] of this.drawnPose) locals.bone(bone).rotation = rotation;
+    if (this.easing !== null) this.applyEase(this.easing, locals);
+    else if (this.drawnPose !== null) for (const [bone, rotation] of this.drawnPose) locals.bone(bone).rotation = rotation;
     if (this.adjustFn !== null) this.adjustFn(locals, ctx);
   };
   private readonly listeners = {
@@ -1087,11 +1141,12 @@ export class RigPlayer {
     return tracks;
   }
 
-  /** Stores `raw` and applies `activeSet` when one is active. Zero work when `activeSet === null`. */
+  /** Stores `raw` and applies the shown set (`activeSet`, or before an ease's swap the composition it eases from). Zero work when none. */
   private setRawPose(raw: RawPose): void {
     this.rawPose = raw;
     this.heldParameters = null;
-    this.pose = this.activeSet === null ? raw : applySetToPose(this.view, raw, this.activeSet);
+    const set = this.shownSet();
+    this.pose = set === null ? raw : applySetToPose(this.view, raw, set);
     this.poseGeneration++;
     this.cachedIdentity = null;
   }
@@ -1222,6 +1277,8 @@ export class RigPlayer {
     if (this.animation === null) throw new Error('seek before play: no animation is open');
     if (!(time >= 0) || !Number.isFinite(time)) throw new Error(`seek time must be a finite time at or above 0, got ${String(time)}`);
     if (this.beyondBase) throw new Error('seek is defined for a single animation on track 0; after a mix, another track, a queue or a clear the player cannot replay to a time — step it forward with frame/advance instead');
+    // A replay has no history to ease through: an eased switch in flight lands at once.
+    this.easing = null;
     const cache = this.ensureSeekCache();
     const stepper = this.tracks ?? (this.track as LiveTrack);
     const exactHit = cache.exact.get(time);
@@ -1389,6 +1446,8 @@ export class RigPlayer {
     if (this.pose === null) return;
     const step = dt * this.timeScale;
     if (this.paused || !(step > 0)) return;
+    this.lastStep = step;
+    if (this.easing !== null) this.advanceEase(this.easing, step);
     const tracks = this.tracks;
     if (tracks !== null) {
       const before: Array<TrackEntryView | null> = [];
@@ -1434,6 +1493,7 @@ export class RigPlayer {
     this.source = frameSource(view, this.read.parsed);
     this.skinName = name;
     this.setup = null;
+    this.easing = null;
     this.clearSeekCache();
     if (this.animation !== null && (this.track !== null || this.tracks !== null)) {
       const time = this.time;
@@ -1496,7 +1556,8 @@ export class RigPlayer {
       throw new Error(`cannot setSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
     const physics = setPhysicsOption('setSet', options);
-    this.activate(name === null ? [] : [this.namedSet(name)], physics);
+    const ease = setEaseOption('setSet', options);
+    this.activate(name === null ? [] : [this.namedSet(name)], physics, ease);
   }
 
   /**
@@ -1519,19 +1580,42 @@ export class RigPlayer {
    * under a re-posed bone. A later `seek` replays from the start with the sets
    * then active and does not reproduce a carried switch. `setSet`, `addSet`
    * and `removeSet` take the same option.
+   *
+   * `options.ease` (#174, seconds, a finite number at or above 0) eases the
+   * bones the call re-poses instead of snapping them. Each bone whose drawn
+   * rotation the call adds, removes or changes turns from what it shows to
+   * its new local rotation along the shorter way, as
+   * `start + shortestΔ(start, end) · smoothstep(elapsed / ease)`: going on,
+   * from the clip's value at the time to the drawn local; going off, from the
+   * drawn local to the clip's value. The attachments the pose draws stay the
+   * previous ones until the frame whose `elapsed / ease` is nearest ½ (the
+   * next step predicted from the current one; a tie goes to the later frame),
+   * then become the call's; `activeSets` and `slotIdentity().sets` name the
+   * call's sets at once, while `slotIdentity().slots` follows what is drawn.
+   * On the frame the elapsed time reaches `ease` the player is in exactly the
+   * instant switch's state. The elapsed time is the player's step
+   * (`dt × timeScale`), so a paused player or a zero step holds the ease;
+   * before `play`, or when no bone's rotation changes, the switch is instant.
+   * A call during an ease eases again from the angles shown (a call without
+   * `ease` lands it at once), and `seek` or a skin change lands it at once.
+   * With `physics: 'carry'` the chains under the eased bones are carried on
+   * every eased frame, by the turn that frame's blend makes; with `'reset'`
+   * they restart once, at the call. `0` or absent is the instant switch on
+   * the same code path; anything else throws by name before anything changes.
    */
   setSets(names: readonly string[], options?: SetActivationOptions): void {
     if (this.setList.length === 0) {
       throw new Error(`cannot setSets(${JSON.stringify(names)}): this model has no sets.json`);
     }
     const physics = setPhysicsOption('setSets', options);
+    const ease = setEaseOption('setSets', options);
     const sets = names.map((name) => this.namedSet(name));
     for (let i = 0; i < sets.length; i++) {
       for (let j = 0; j < i; j++) {
         if (sets[i] === sets[j]) throw new Error(`set ${JSON.stringify(sets[i].name)} is named twice in setSets`);
       }
     }
-    this.activate(sets, physics);
+    this.activate(sets, physics, ease);
   }
 
   /**
@@ -1544,9 +1628,10 @@ export class RigPlayer {
       throw new Error(`cannot addSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
     const physics = setPhysicsOption('addSet', options);
+    const ease = setEaseOption('addSet', options);
     const found = this.namedSet(name);
     if (this.activeList.includes(found)) return;
-    this.activate([...this.activeList, found], physics);
+    this.activate([...this.activeList, found], physics, ease);
   }
 
   /**
@@ -1558,9 +1643,10 @@ export class RigPlayer {
       throw new Error(`cannot removeSet(${JSON.stringify(name)}): this model has no sets.json`);
     }
     const physics = setPhysicsOption('removeSet', options);
+    const ease = setEaseOption('removeSet', options);
     const found = this.namedSet(name);
     if (!this.activeList.includes(found)) return;
-    this.activate(this.activeList.filter((s) => s !== found), physics);
+    this.activate(this.activeList.filter((s) => s !== found), physics, ease);
   }
 
   /** The declared set named `name`, or a throw naming it and the available sets. */
@@ -1613,16 +1699,16 @@ export class RigPlayer {
 
   /**
    * The physics under the bones a set switch re-poses (#173), before the
-   * repose step: the drawn rotations went from `before` to `after` (already
-   * `drawnPose`), and every physics constraint whose bone is one of the
+   * repose step: the `changed` bones' rotations went from what the held pose
+   * shows to what the player now applies (`drawnPose`, or an ease's next
+   * blend, #174), and every physics constraint whose bone is one of the
    * changed bones or a descendant of one is carried or reset. Nothing to do
    * before `play` (the setup pose carries no physics state) or when no
    * constraint hangs under a changed bone.
    */
-  private handOverPhysics(before: ReadonlyMap<string, number> | null, after: ReadonlyMap<string, number> | null, mode: 'carry' | 'reset'): void {
+  private handOverPhysics(changed: ReadonlySet<string>, mode: 'carry' | 'reset'): void {
     const stepper = this.tracks ?? this.track;
     if (stepper === null || this.pose === null || this.rawPose === null) return;
-    const changed = drawnChanged(before, after);
     if (changed.size === 0) return;
     const parentOf = new Map(this.view.bones.map((b) => [b.name, b.parent]));
     /** The deepest changed bone on the way from `bone` to the root (itself included). */
@@ -1710,10 +1796,120 @@ export class RigPlayer {
   }
 
   /**
+   * The composition the held pose draws: `activeSet`, except before an ease's
+   * swap (#174), when it is the composition the ease started from.
+   */
+  private shownSet(): RigSet | null {
+    const easing = this.easing;
+    return easing === null || easing.swapped ? this.activeSet : easing.fromSet;
+  }
+
+  /** The local an eased bone shows at the ease's current progress, given the clip's local `clip`. */
+  private easedLocal(easing: SetEase, from: number | null, to: number | null, clip: number): number {
+    const start = from ?? clip;
+    const end = to ?? clip;
+    const u = easeProgress(easing);
+    const w = this.easePlant === 'overshoot' ? (u < 1 ? 1.2 * u : 1) : smoothstep(u);
+    return start + normaliseDegrees(end - start) * w;
+  }
+
+  /**
+   * The ease's part of `adjustHook` (#174): every drawn bone the ease does not
+   * turn takes its drawn local, as without an ease; every eased bone reads
+   * the clip's local (what the timelines left) and then takes its blend.
+   */
+  private applyEase(easing: SetEase, locals: Parameters<CoreLocalAdjust>[0]): void {
+    for (const bone of easing.bones.keys()) easing.clip.set(bone, locals.bone(bone).rotation);
+    if (this.drawnPose !== null) {
+      for (const [bone, rotation] of this.drawnPose) if (!easing.bones.has(bone)) locals.bone(bone).rotation = rotation;
+    }
+    for (const [bone, { from, to }] of easing.bones) {
+      locals.bone(bone).rotation = this.easedLocal(easing, from, to, easing.clip.get(bone) as number);
+    }
+  }
+
+  /**
+   * Starts an eased switch (#174) to the sets already made active, from what
+   * the held pose shows: an eased bone's start is the local it shows (fixed),
+   * or the clip's value for a bone that showed the clip's; its end is the new
+   * drawn local, or the clip's value for a bone whose set went. Returns false,
+   * changing nothing, when there is nothing to ease — before `play` (no step
+   * to ease over) or when no bone's rotation changes — and the call is then
+   * an instant one.
+   */
+  private startEase(duration: number, shownBefore: RigSet | null, drawn: Readonly<Record<string, number>> | undefined, physics: 'carry' | 'reset' | undefined): boolean {
+    const stepper = this.tracks ?? this.track;
+    if (stepper === null || this.pose === null) return false;
+    const before = this.drawnPose;
+    const after = drawn === undefined ? null : drawnLocals(this.view, drawn);
+    const previous = this.easing;
+    const candidates = drawnChanged(before, after);
+    if (previous !== null) for (const bone of previous.bones.keys()) candidates.add(bone);
+    const bones = new Map<string, { from: number | null; to: number | null }>();
+    for (const bone of candidates) {
+      const to = after?.get(bone) ?? null;
+      let from: number | null;
+      const eased = previous?.bones.get(bone);
+      if (previous !== null && eased !== undefined) {
+        // Mid-ease: what it shows now. At u = 0 that is the previous start, the clip's value included.
+        from = previous.elapsed > 0 ? this.easedLocal(previous, eased.from, eased.to, previous.clip.get(bone) as number) : eased.from;
+      } else {
+        from = before?.get(bone) ?? null;
+      }
+      if (from === to) continue;
+      bones.set(bone, { from, to });
+    }
+    if (bones.size === 0) return false;
+    const easing: SetEase = {
+      duration,
+      elapsed: 0,
+      bones,
+      clip: new Map(),
+      fromSet: shownBefore,
+      swapped: false,
+      physics,
+    };
+    // The call's own pose is u = 0; it is the swap frame only when the next step, predicted by the last one, passes farther from ½.
+    if (this.easePlant === 'swap-at-0' || this.swapsNow(0, this.lastStep / duration)) easing.swapped = true;
+    this.easing = easing;
+    this.drawnPose = after;
+    // `reset` restarts the chains under the eased bones once, at the start; `carry` runs on every eased frame (`advanceEase`).
+    if (physics === 'reset') this.handOverPhysics(new Set(bones.keys()), 'reset');
+    this.reposeDrawn();
+    return true;
+  }
+
+  /**
+   * Whether the frame at progress `u` is the one nearest ½, the next frame
+   * being at `next`: it is when `u` reached ½ or the next one would be
+   * farther from it; a tie (within 1e-9) goes to the later frame.
+   */
+  private swapsNow(u: number, next: number): boolean {
+    if (u >= 0.5) return true;
+    return next > u && 0.5 - u < next - 0.5 - 1e-9;
+  }
+
+  /**
+   * One step of an eased switch (#174), before the track steps: the elapsed
+   * time advances by the step, the attachments swap when this is the frame
+   * nearest ½ (`swapsNow`, the next step predicted by this one), and the
+   * ease ends — the instant switch's state, `drawnPose` alone — on the frame
+   * it reaches its duration. With `physics: 'carry'`, the chains under the
+   * eased bones are carried by the turn this frame's blend makes, read by a
+   * trial `step(0)` at the previous time (`handOverPhysics`).
+   */
+  private advanceEase(easing: SetEase, step: number): void {
+    easing.elapsed += step;
+    if (easing.elapsed >= easing.duration) this.easing = null;
+    else if (!easing.swapped && this.swapsNow(easing.elapsed / easing.duration, (easing.elapsed + step) / easing.duration)) easing.swapped = true;
+    if (easing.physics === 'carry') this.handOverPhysics(new Set(easing.bones.keys()), 'carry');
+  }
+
+  /**
    * Makes `sets` (distinct) the active sets: refuses any two touching one slot
    * before changing anything, then applies their composition to the held pose.
    */
-  private activate(sets: readonly RigSet[], physics?: 'carry' | 'reset'): void {
+  private activate(sets: readonly RigSet[], physics?: 'carry' | 'reset', ease = 0): void {
     for (let i = 0; i < sets.length; i++) {
       for (let j = 0; j < i; j++) {
         const other = this.touched(sets[j]);
@@ -1737,14 +1933,28 @@ export class RigPlayer {
       }
     }
     const drawnBefore = this.activeSet?.drawn;
+    const shownBefore = this.shownSet();
     this.activeList = this.setList.filter((s) => sets.includes(s));
     this.activeSet = composeSets(this.activeList);
     this.clearSeekCache();
     const drawn = this.activeSet?.drawn;
+    if (ease > 0 && this.startEase(ease, shownBefore, drawn, physics)) return;
+    const easing = this.easing;
+    if (easing !== null) {
+      // An instant call during an ease lands every eased bone at once, from what it shows.
+      this.easing = null;
+      const posedBefore = this.drawnPose;
+      this.drawnPose = drawn === undefined ? null : drawnLocals(this.view, drawn);
+      const changed = drawnChanged(posedBefore, this.drawnPose);
+      for (const bone of easing.bones.keys()) changed.add(bone);
+      if (physics !== undefined) this.handOverPhysics(changed, physics);
+      this.reposeDrawn();
+      return;
+    }
     if (drawn !== drawnBefore && !(drawn === undefined && drawnBefore === undefined)) {
       const posedBefore = this.drawnPose;
       this.drawnPose = drawn === undefined ? null : drawnLocals(this.view, drawn);
-      if (physics !== undefined) this.handOverPhysics(posedBefore, this.drawnPose, physics);
+      if (physics !== undefined) this.handOverPhysics(drawnChanged(posedBefore, this.drawnPose), physics);
       this.reposeDrawn();
       return;
     }
@@ -1944,9 +2154,11 @@ export class RigPlayer {
     const setupShownSlots = new Set(setupPose.shown.map((s) => s.slot));
     const rawRowBySlot = new Map(raw.slots.map((r) => [r[0], r]));
     const slots: SlotIdentity[] = [];
+    // The attachments the pose draws: before an ease's swap (#174), the composition it eases from.
+    const shownSet = this.shownSet();
     for (let z = 0; z < pose.drawOrder.length; z++) {
       const slotName = pose.drawOrder[z];
-      if (this.activeSet !== null && hiddenBySet(slotName, this.activeSet)) {
+      if (shownSet !== null && hiddenBySet(slotName, shownSet)) {
         slots.push(Object.freeze({
           slot: slotName,
           z,
@@ -1983,7 +2195,7 @@ export class RigPlayer {
         continue;
       }
       const rawRow = rawRowBySlot.get(slotName);
-      const overriddenBySet = this.activeSet !== null && slotName in this.activeSet.slots;
+      const overriddenBySet = shownSet !== null && slotName in shownSet.slots;
       const setupHadAttachment = setupShownSlots.has(slotName);
       const isTimelineNull =
         !overriddenBySet &&
@@ -2053,6 +2265,7 @@ export class RigPlayer {
     this.renderer.dispose();
     this.clearSeekCache();
     this.cachedIdentity = null;
+    this.easing = null;
     this.tracks = null;
     this.track = null;
     this.pose = null;

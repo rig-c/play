@@ -84,7 +84,7 @@ const STEP = 1 / 60;
 const SLEEVE = ['sleeve_1', 'sleeve_2', 'sleeve_3'];
 const SKIRT = ['skirt_1', 'skirt_2', 'skirt_3'];
 
-function makeRoot(): HTMLElement {
+export function makeRoot(): HTMLElement {
   const root = document.createElement('div');
   root.style.position = 'absolute';
   root.style.left = '0';
@@ -93,7 +93,7 @@ function makeRoot(): HTMLElement {
   return root;
 }
 
-function fnv(text: string, h = 0x811c9dc5): number {
+export function fnv(text: string, h = 0x811c9dc5): number {
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
@@ -101,10 +101,10 @@ function fnv(text: string, h = 0x811c9dc5): number {
   return h;
 }
 
-type Tips = Array<[number, number]>;
+export type Tips = Array<[number, number]>;
 
 /** Each link's tip in `anchor`'s local frame. */
-function tips(p: RigPlayerType, lengths: ReadonlyMap<string, number>, links: readonly string[], anchor: string): Tips {
+export function tips(p: RigPlayerType, lengths: ReadonlyMap<string, number>, links: readonly string[], anchor: string): Tips {
   const w = p.bone(anchor);
   const det = w.a * w.d - w.b * w.c;
   return links.map((name) => {
@@ -116,7 +116,7 @@ function tips(p: RigPlayerType, lengths: ReadonlyMap<string, number>, links: rea
   });
 }
 
-function dist(a: Tips, b: Tips): number {
+export function dist(a: Tips, b: Tips): number {
   let m = 0;
   for (let i = 0; i < a.length; i++) m = Math.max(m, Math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]));
   return m;

@@ -1,4 +1,5 @@
 import { liveCoreProbe } from './liveCoreProbe';
+import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
@@ -276,6 +277,8 @@ export interface RigPlayHarness {
   drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; still: string }>): Promise<DrawnMatchCombo[]>;
   drawnRulesProbe(): Promise<DrawnRulesProbeResult>;
   setPhysicsProbe(): Promise<SetPhysicsProbeResult>;
+  setEaseProbe(): Promise<SetEaseProbeResult>;
+  setEaseB5Probe(): Promise<B5Hashes>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
 }
@@ -9398,6 +9401,8 @@ window.rigPlayHarness = {
   drawnMatchProbe,
   drawnRulesProbe,
   setPhysicsProbe,
+  setEaseProbe,
+  setEaseB5Probe,
   seekSnapshotProbe,
   slotIdentityProbe,
 };
