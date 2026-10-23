@@ -187,6 +187,7 @@ test_rig talk talk
 test_rig talk talk-packed --pack
 rm -rf "$RIGS_DEST/talk-packed/parts"
 test_rig gesture gesture
+test_rig drape drape
 for still in wave nod wave+nod; do
   PARTS_FROM="$TEST_RIGS_SRC/gesture/parts" test_rig "gesture/stills/$still" "gesture-still-$still"
 done

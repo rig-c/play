@@ -1,0 +1,32 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "drape",
+  "cut": "test-drape",
+  "easings": {},
+  "physics": {
+    "sleeve_1_phys": { "bone": "sleeve_1", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 },
+    "sleeve_2_phys": { "bone": "sleeve_2", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 },
+    "sleeve_3_phys": { "bone": "sleeve_3", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 },
+    "skirt_1_phys": { "bone": "skirt_1", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 },
+    "skirt_2_phys": { "bone": "skirt_2", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 },
+    "skirt_3_phys": { "bone": "skirt_3", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 0, "gravity": 12 }
+  },
+  "animations": {
+    "idle": {
+      "duration": 2,
+      "loop": true,
+      "note": "Sways the torso without a pause, so both chains move a little on every frame; the arm is not keyed.",
+      "tracks": [
+        { "bone": "torso", "property": "rotate", "keys": [{ "t": 0, "v": [-6] }, { "t": 0.5, "v": [0] }, { "t": 1, "v": [6] }, { "t": 1.5, "v": [0] }, { "t": 2, "v": [-6] }] }
+      ]
+    },
+    "shift": {
+      "duration": 2,
+      "loop": true,
+      "note": "Slides the torso sideways without turning it, so the forearm is pushed the same way wherever the arm points; a diagnostic beside idle.",
+      "tracks": [
+        { "bone": "torso", "property": "translate", "keys": [{ "t": 0, "v": [-10, 0] }, { "t": 0.5, "v": [0, 0] }, { "t": 1, "v": [10, 0] }, { "t": 1.5, "v": [0, 0] }, { "t": 2, "v": [-10, 0] }] }
+      ]
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "drape",
+  "images": "parts",
+  "skeleton": {
+    "x": -500,
+    "y": 0,
+    "width": 1000,
+    "height": 900
+  },
+  "bones": [
+    { "name": "root" },
+    { "name": "torso", "parent": "root", "x": 0, "y": 360 },
+    { "name": "shoulder", "parent": "torso", "x": 70, "y": 180, "rotation": -90, "length": 100 },
+    { "name": "forearm", "parent": "shoulder", "x": 100, "y": 0, "length": 90 },
+    { "name": "sleeve_1", "parent": "forearm", "x": 90, "y": 0, "length": 80 },
+    { "name": "sleeve_2", "parent": "sleeve_1", "x": 80, "y": 0, "length": 80 },
+    { "name": "sleeve_3", "parent": "sleeve_2", "x": 80, "y": 0, "length": 80 },
+    { "name": "hip", "parent": "torso", "x": -40, "y": 0, "rotation": -90, "length": 20 },
+    { "name": "skirt_1", "parent": "hip", "x": 20, "y": 0, "length": 80 },
+    { "name": "skirt_2", "parent": "skirt_1", "x": 80, "y": 0, "length": 80 },
+    { "name": "skirt_3", "parent": "skirt_2", "x": 80, "y": 0, "length": 80 }
+  ],
+  "slots": [
+    { "name": "body", "bone": "torso", "attachment": "body" },
+    { "name": "skirt_1", "bone": "skirt_1", "attachment": "skirt" },
+    { "name": "skirt_2", "bone": "skirt_2", "attachment": "skirt" },
+    { "name": "skirt_3", "bone": "skirt_3", "attachment": "skirt" },
+    { "name": "arm_upper", "bone": "shoulder", "attachment": "arm_upper" },
+    { "name": "arm_lower", "bone": "forearm", "attachment": "arm_lower" },
+    { "name": "sleeve_1", "bone": "sleeve_1", "attachment": "sleeve" },
+    { "name": "sleeve_2", "bone": "sleeve_2", "attachment": "sleeve" },
+    { "name": "sleeve_3", "bone": "sleeve_3", "attachment": "sleeve" }
+  ],
+  "skins": {
+    "default": {
+      "body": { "body": { "image": "body.png", "y": 100 } },
+      "skirt_1": { "skirt": { "image": "skirt.png", "x": 40 } },
+      "skirt_2": { "skirt": { "image": "skirt.png", "x": 40 } },
+      "skirt_3": { "skirt": { "image": "skirt.png", "x": 40 } },
+      "arm_upper": { "arm_upper": { "image": "arm_upper.png", "x": 50 } },
+      "arm_lower": { "arm_lower": { "image": "arm_lower.png", "x": 46 } },
+      "sleeve_1": { "sleeve": { "image": "sleeve.png", "x": 40 } },
+      "sleeve_2": { "sleeve": { "image": "sleeve.png", "x": 40 } },
+      "sleeve_3": { "sleeve": { "image": "sleeve.png", "x": 40 } }
+    }
+  }
+}
