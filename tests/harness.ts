@@ -647,10 +647,17 @@ export interface GlFallbackProbeResult {
   firstPixels: number;
   /** After the shared context is lost (when asked) and the rig steps on. */
   lost: boolean;
+  lossDefaultPrevented: boolean;
   afterActive: string;
   afterPixels: number;
   /** Meshes the frame after the loss re-rastered (the backend signature re-dirties them). */
   afterMeshesDrawn: number;
+  /** After a webglcontextrestored event fires and the rig steps on again (#193). */
+  restoredEventFired: boolean;
+  restored: boolean;
+  afterRestoreActive: string;
+  afterRestorePixels: number;
+  afterRestoreMeshesDrawn: number;
 }
 
 export interface GlFlushFallbackProbeResult {
@@ -6349,23 +6356,59 @@ async function glFallbackProbe(loseContext: boolean): Promise<GlFallbackProbeRes
   const firstActive = renderer.meshBackendActive;
   const firstPixels = meshPixels(root);
   let lost = false;
-  if (loseContext) {
-    const blitter = getMeshGlBlitter() as unknown as { gl: WebGLRenderingContext; canvas: HTMLCanvasElement } | null;
-    if (blitter) {
-      const event = new Promise<void>((resolve) => blitter.canvas.addEventListener('webglcontextlost', () => resolve(), { once: true }));
-      blitter.gl.getExtension('WEBGL_lose_context')?.loseContext();
-      await event;
-      lost = getMeshGlBlitter() === null;
-    }
+  let lossDefaultPrevented = false;
+  const blitter = loseContext
+    ? (getMeshGlBlitter() as unknown as { gl: WebGLRenderingContext; canvas: HTMLCanvasElement } | null)
+    : null;
+  if (blitter) {
+    const event = new Promise<Event>((resolve) =>
+      blitter.canvas.addEventListener('webglcontextlost', (e) => resolve(e), { once: true }),
+    );
+    blitter.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    const lossEvent = await event;
+    lossDefaultPrevented = lossEvent.defaultPrevented;
+    lost = getMeshGlBlitter() === null;
   }
   player.frame(0.1);
   const afterActive = renderer.meshBackendActive;
   const afterPixels = meshPixels(root);
   const afterMeshesDrawn = renderer.meshCount;
+  let restoredEventFired = false;
+  let restored = false;
+  let afterRestoreActive = afterActive;
+  let afterRestorePixels = afterPixels;
+  let afterRestoreMeshesDrawn = afterMeshesDrawn;
+  if (blitter) {
+    const restoreEvent = new Promise<void>((resolve) =>
+      blitter.canvas.addEventListener('webglcontextrestored', () => resolve(), { once: true }),
+    );
+    blitter.canvas.dispatchEvent(new Event('webglcontextrestored'));
+    await restoreEvent;
+    restoredEventFired = true;
+    restored = getMeshGlBlitter() !== null;
+    player.frame(0.1);
+    afterRestoreActive = renderer.meshBackendActive;
+    afterRestorePixels = meshPixels(root);
+    afterRestoreMeshesDrawn = renderer.meshCount;
+  }
   player.dispose();
   root.remove();
   assets.dispose();
-  return { meshBackend, firstActive, firstPixels, lost, afterActive, afterPixels, afterMeshesDrawn };
+  return {
+    meshBackend,
+    firstActive,
+    firstPixels,
+    lost,
+    lossDefaultPrevented,
+    afterActive,
+    afterPixels,
+    afterMeshesDrawn,
+    restoredEventFired,
+    restored,
+    afterRestoreActive,
+    afterRestorePixels,
+    afterRestoreMeshesDrawn,
+  };
 }
 
 /**
