@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.1](https://github.com/rig-c/play/compare/v1.17.0...v1.17.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* stabilize mesh rasterization across packed jobs ([#188](https://github.com/rig-c/play/issues/188)) ([6bebb77](https://github.com/rig-c/play/commit/6bebb77a7bb81710baeec7de50ab89ce7e1c7b2f))
+
 ## [1.17.0](https://github.com/rig-c/play/compare/v1.16.0...v1.17.0) (2026-10-23)
 
 
