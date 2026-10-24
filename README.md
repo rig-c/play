@@ -174,7 +174,7 @@ tells the renderer about the scale, and plays the first animation:
 
 `syncPixelRatio()` is what makes the scale cheap: without it the mesh canvases
 raster at the device pixel ratio of the *unscaled* rig, `1 / scale²` times more
-pixels than the screen shows. Call it again after anything that changes the
+pixels than the screen shows (ideally 16× at `scale = 0.25`, before backing-store rounding and slack). Call it again after anything that changes the
 scale. `tests/readme-page.spec.ts` runs this block as written, against the
 package built from this tree.
 
