@@ -46,7 +46,31 @@ jobs:
       - name: Check release workflow decisions (offline)
         timeout-minutes: 2
         run: bun test scripts/release-workflow.test.ts
-      - run: bunx playwright install --with-deps chromium webkit
+      - name: Identify Playwright browser cache
+        id: playwright
+        run: |
+          version=$(bunx playwright --version)
+          echo "$version; runner image ${ImageOS:?} ${ImageVersion:?}"
+          printf 'version=%s\nimage=%s-%s\n' "${version#Version }" "$ImageOS" "$ImageVersion" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # No partial restore: match the installed CLI, architecture and image.
+          key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      - name: Install Playwright system dependencies
+        timeout-minutes: 10
+        run: |
+          # apt logs the requested and newly-installed packages; browser cache
+          # hits do not cache system packages. Do not gate apt on --dry-run:
+          # that diagnostic can exit nonzero when packages are missing.
+          /usr/bin/time -p bunx playwright install-deps chromium webkit
+      - name: Install Playwright browsers
+        timeout-minutes: 10
+        run: |
+          echo "Browser cache hit: ${{ steps.playwright-cache.outputs.cache-hit }}"
+          /usr/bin/time -p bunx playwright install chromium webkit
       - run: bun run test
         env:
           # Empty on push / pull_request — the spec only dumps on the exact
