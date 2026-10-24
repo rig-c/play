@@ -921,6 +921,13 @@ onto shared pages instead. Both play here, unchanged:
   (see Measured above). Falls back to canvas2d automatically when WebGL is
   unavailable or the shared context is lost; `meshBackendActive` says which drew. Switching re-rasters every
   mesh once (no reallocation), so it is fine to expose as a user setting.
+
+  On WebGL context loss (`webglcontextlost`), a player instance falls back to
+  `canvas2d` for the rest of its life and never attempts a restore (#193): the
+  shared context does not request restoration and ignores
+  `webglcontextrestored`, so the very next frame draws on `canvas2d`
+  (`meshBackendActive` in `dom` mode, `backendActive` in `canvas` mode) and
+  stays there.
 - `renderer.triangleExpand` — how far (canvas px) each triangle edge's clip is
   moved outward to close antialiased mesh seams (default 0.5). Also re-rasters every mesh once when changed.
 - `renderer.meshSourceRect` — what a canvas2d mesh triangle is drawn from:

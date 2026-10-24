@@ -45,9 +45,15 @@ test('context lost mid-play: the next frame draws on canvas2d, every mesh re-ras
   const r = await page.evaluate(() => window.rigPlayHarness.glFallbackProbe(true));
   test.skip(r.firstActive !== 'webgl', 'no WebGL to lose');
   expect(r.lost).toBe(true);
+  expect(r.lossDefaultPrevented).toBe(false);
   expect(r.afterActive).toBe('canvas2d');
   expect(r.afterMeshesDrawn).toBeGreaterThan(0);
   expect(r.afterPixels).toBeGreaterThan(1000);
+  expect(r.restoredEventFired).toBe(true);
+  expect(r.restored).toBe(false);
+  expect(r.afterRestoreActive).toBe('canvas2d');
+  expect(r.afterRestoreMeshesDrawn).toBeGreaterThan(0);
+  expect(r.afterRestorePixels).toBeGreaterThan(1000);
 });
 
 test('flush fallback (flush → false): meshBackendActive reports canvas2d for that frame and webgl after recovery (#138)', async ({ page }) => {
