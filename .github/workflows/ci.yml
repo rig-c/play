@@ -62,9 +62,9 @@ jobs:
       - name: Install Playwright system dependencies
         timeout-minutes: 10
         run: |
-          # Retain the requested package list and apt's actual newly-installed
-          # packages in the log; browser cache hits do not cache system packages.
-          bunx playwright install-deps --dry-run chromium webkit
+          # apt logs the requested and newly-installed packages; browser cache
+          # hits do not cache system packages. Do not gate apt on --dry-run:
+          # that diagnostic can exit nonzero when packages are missing.
           /usr/bin/time -p bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         timeout-minutes: 10
