@@ -1,0 +1,111 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "batch-context",
+  "cut": "test-batch-context",
+  "easings": {
+    "flicker": [
+      0.37,
+      0,
+      0.63,
+      1
+    ]
+  },
+  "animations": {
+    "burn": {
+      "duration": 1,
+      "loop": true,
+      "note": "The original glow core animation, with two authored rectangular padding meshes. Their 445 by 821 unit bounds produce 447 by 823 pixel mesh jobs with the renderer padding at the frozen ratios.",
+      "tracks": [
+        {
+          "bone": "flame_1",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                12
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 0.5,
+              "v": [
+                -12
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 1,
+              "v": [
+                12
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "flame_2",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                -18
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 0.5,
+              "v": [
+                18
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 1,
+              "v": [
+                -18
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "flame_0",
+          "property": "scale",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                1,
+                1
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 0.25,
+              "v": [
+                1.12,
+                0.9
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 0.75,
+              "v": [
+                0.94,
+                1.06
+              ],
+              "ease": "flicker"
+            },
+            {
+              "t": 1,
+              "v": [
+                1,
+                1
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

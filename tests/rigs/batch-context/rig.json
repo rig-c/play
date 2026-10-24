@@ -1,0 +1,196 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "batch-context",
+  "images": "parts",
+  "skeleton": {
+    "x": -220,
+    "y": 0,
+    "width": 440,
+    "height": 560
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "halo",
+      "parent": "root",
+      "x": 0,
+      "y": 300
+    },
+    {
+      "name": "body",
+      "parent": "root",
+      "x": 0,
+      "y": 130
+    },
+    {
+      "name": "flame_0",
+      "parent": "body",
+      "x": 0,
+      "y": 116,
+      "rotation": 90,
+      "length": 80
+    },
+    {
+      "name": "flame_1",
+      "parent": "flame_0",
+      "x": 80,
+      "y": 0,
+      "length": 70
+    },
+    {
+      "name": "flame_2",
+      "parent": "flame_1",
+      "x": 70,
+      "y": 0,
+      "length": 60
+    },
+    {
+      "name": "spark_a",
+      "parent": "root",
+      "x": -96,
+      "y": 330
+    },
+    {
+      "name": "spark_b",
+      "parent": "root",
+      "x": 104,
+      "y": 400
+    },
+    {
+      "name": "plate",
+      "parent": "root",
+      "x": 0,
+      "y": 280,
+      "rotation": 8
+    },
+    {
+      "name": "pad_a_bone",
+      "parent": "root"
+    },
+    {
+      "name": "pad_b_bone",
+      "parent": "root"
+    }
+  ],
+  "slots": [
+    {
+      "name": "pad_a",
+      "bone": "pad_a_bone",
+      "attachment": "pad"
+    },
+    {
+      "name": "pad_b",
+      "bone": "pad_b_bone",
+      "attachment": "pad"
+    },
+    {
+      "name": "core",
+      "bone": "flame_0",
+      "attachment": "core"
+    }
+  ],
+  "skins": {
+    "default": {
+      "pad_a": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1
+          ],
+          "vertices": [
+            0,
+            0,
+            0,
+            821,
+            445,
+            821,
+            445,
+            0
+          ],
+          "triangles": [
+            0,
+            1,
+            2,
+            0,
+            2,
+            3
+          ]
+        }
+      },
+      "pad_b": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [
+            0,
+            1,
+            0,
+            0,
+            1,
+            0,
+            1,
+            1
+          ],
+          "vertices": [
+            0,
+            0,
+            0,
+            821,
+            445,
+            821,
+            445,
+            0
+          ],
+          "triangles": [
+            0,
+            1,
+            2,
+            0,
+            2,
+            3
+          ]
+        }
+      },
+      "core": {
+        "core": {
+          "type": "mesh",
+          "image": "core.png",
+          "generator": {
+            "kind": "segments",
+            "cell": 10,
+            "bones": [
+              [
+                "flame_0",
+                "flame_1",
+                "flame_2"
+              ]
+            ],
+            "falloff": {
+              "radius": 10
+            },
+            "anchor": [
+              42,
+              146
+            ]
+          }
+        }
+      }
+    }
+  },
+  "invariants": {
+    "meshSlots": 3,
+    "meshTriangles": 212
+  }
+}

@@ -15,6 +15,7 @@ for (const ratio of RATIOS) {
     expect(r.backend).toBe('webgl');
     expect(r.commonUnchanged).toBe(true);
     expect(r.commonSlots).toEqual(['core']);
+    expect(r.sourceSlots).toEqual(['pad_a', 'pad_b', 'core']);
     expect(r.contentPixels).toBeGreaterThan(0);
     expect(r.highPack.target).toEqual([512, 3328]);
     expect(r.highPack.common).toEqual([1, 1649]);

@@ -1,7 +1,7 @@
 import { CanvasRenderer } from '../src/CanvasRenderer';
 import { DomRenderer } from '../src/DomRenderer';
 import { getMeshGlBlitter, type MeshBlitJob } from '../src/MeshGlBlitter';
-import type { PosedFrame, PosedMesh } from '../src/posedFrame';
+import type { PosedFrame } from '../src/posedFrame';
 import { frameAt, loadRig } from './rigFrames';
 
 // Derived before the #187 measurements from glow's boundary vertex29:
@@ -27,21 +27,29 @@ function difference(a: Uint8ClampedArray, b: Uint8ClampedArray): number {
 
 /** Loader/pose preflight without rendering, also used for staged remote runs. */
 export async function batchContextInputProbe() {
-  const assets = await loadRig('glow');
+  const assets = await loadRig('batch-context');
+  let reference: Awaited<ReturnType<typeof loadRig>> | undefined;
   try {
+    reference = await loadRig('glow');
     const frame = frameAt(assets, 'burn', 0.35);
     const common = frame.order.find((slot) => slot.slot === 'core');
-    const extra = frame.order.find((slot) => slot.slot === 'flame');
-    if (common?.kind !== 'mesh' || extra?.kind !== 'mesh' || common.clip) throw new Error('glow meshes required');
+    const pads = frame.order.filter((slot) => slot.slot === 'pad_a' || slot.slot === 'pad_b');
+    if (common?.kind !== 'mesh' || pads.length !== 2 || pads.some((slot) => slot.kind !== 'mesh') || common.clip) throw new Error('batch-context source meshes required');
     const page = assets.pageImages.get(common.page);
     if (!page) throw new Error('common page missing');
-    return { common: common.slot, surrounding: extra.slot, vertices: common.vertices.length / 2, triangles: common.triangles.length / 3, page: [page.width, page.height] };
+    const original = frameAt(reference, 'burn', 0.35).order.find((slot) => slot.slot === 'core');
+    if (original?.kind !== 'mesh') throw new Error('reference core missing');
+    const sourceFields = (mesh: typeof common) => JSON.stringify([mesh.vertices, mesh.uvs, mesh.triangles, mesh.page, mesh.pma, mesh.tint, mesh.blend, mesh.clip]);
+    const referenceCommonEqual = sourceFields(common) === sourceFields(original);
+    if (!referenceCommonEqual) throw new Error('fixture changed the source-derived common mesh');
+    return { referenceCommonEqual, sourceSlots: frame.order.map((slot) => slot.slot), common: common.slot, surrounding: pads.map((slot) => slot.slot), vertices: common.vertices.length / 2, triangles: common.triangles.length / 3, page: [page.width, page.height] };
   } finally {
+    reference?.dispose();
     assets.dispose();
   }
 }
 
-/** Real frameOf meshes; only surrounding copies are diagnostic transforms. */
+/** Only selects real frameOf slots from the rigc-built packing fixture. */
 export async function batchContextProbe(ratio: number) {
   if (!Number.isFinite(ratio) || ratio <= 0) throw new Error('positive finite pixelRatio required');
   const gpu = getMeshGlBlitter();
@@ -50,7 +58,7 @@ export async function batchContextProbe(ratio: number) {
   const gl = probe.gl;
   const ext = gl.getExtension('WEBGL_debug_renderer_info');
   const renderer = gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) as string;
-  const assets = await loadRig('glow');
+  const assets = await loadRig('batch-context');
   const roots: HTMLElement[] = [];
   const renderers: (DomRenderer | CanvasRenderer)[] = [];
   const originalFlush = gpu.flush;
@@ -59,16 +67,11 @@ export async function batchContextProbe(ratio: number) {
   try {
     const frame = frameAt(assets, 'burn', 0.35);
     const common = frame.order.find((slot) => slot.slot === 'core');
-    const extra = frame.order.find((slot) => slot.slot === 'flame');
-    if (common?.kind !== 'mesh' || extra?.kind !== 'mesh' || common.clip) throw new Error('glow meshes required');
+    const pads = frame.order.filter((slot) => slot.slot === 'pad_a' || slot.slot === 'pad_b');
+    if (common?.kind !== 'mesh' || pads.length !== 2 || pads.some((slot) => slot.kind !== 'mesh') || common.clip) throw new Error('batch-context source meshes required');
     const sourceBefore = JSON.stringify(common);
-    const pads: PosedMesh[] = [0, 1].map((i) => ({
-      ...extra,
-      slot: `diagnostic-pad-${i}`,
-      vertices: extra.vertices.map((value, axis) => value * (axis % 2 ? 3.2 : 3.6)),
-    }));
     const alone: PosedFrame = { order: [common] };
-    const crowded: PosedFrame = { order: [...pads, common] };
+    const crowded: PosedFrame = { order: frame.order.filter((slot) => slot === common || pads.includes(slot)) };
     const root = () => {
       const element = document.body.appendChild(document.createElement('div'));
       roots.push(element);
@@ -145,7 +148,7 @@ export async function batchContextProbe(ratio: number) {
       webglAvailable: true as const, renderer, ratio,
       backend: warm.dom.meshBackendActive,
       commonUnchanged: sourceBefore === JSON.stringify(common),
-      commonSlots: alone.order.map((slot) => slot.slot), highPack, packs,
+      commonSlots: alone.order.map((slot) => slot.slot), sourceSlots: frame.order.map((slot) => slot.slot), highPack, packs,
       contentPixels: a.pixels.filter((value, i) => i % 4 === 3 && value > 0).length,
       coldDiff: difference(a.pixels, b.pixels),
       warmDiff: difference(a.pixels, afterRemoval.pixels),

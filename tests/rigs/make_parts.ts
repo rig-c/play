@@ -42,7 +42,7 @@
  * Nothing here is random: every value is a closed-form function of the pixel
  * position, so a re-run writes the same bytes.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -211,6 +211,23 @@ function look(base: RGB, overrides: Partial<Look> = {}): Look {
   return { base, stripe: 22, period: 10, rim: 3, halo: 6, haloAlpha: 150, ramp: 30, lines: 0, lineDark: 0, ...overrides };
 }
 
+/** Separate packing fixture: glow's unchanged core and two real pad slots. */
+function paintBatchContextParts(): void {
+  // Preserve the committed common artwork byte-for-byte across JS math/zlib
+  // implementations; the packing fixture does not repaint its reference.
+  mkdirSync(join(HERE, 'batch-context', 'parts'), { recursive: true });
+  copyFileSync(join(HERE, 'glow', 'parts', 'core.png'), join(HERE, 'batch-context', 'parts', 'core.png'));
+  write('batch-context', 'pad.png', 2, 2, new Uint8Array([
+    80, 80, 80, 255, 160, 160, 160, 255,
+    160, 160, 160, 255, 80, 80, 80, 255,
+  ]));
+}
+
+if (process.argv.includes('--batch-context-only')) {
+  paintBatchContextParts();
+  process.exit(0);
+}
+
 // --- figure: rigid parts, two meshes, clip hosts, and detail-only line art -----
 
 console.log('figure:');
@@ -244,6 +261,7 @@ write('glow', 'flame.png', 132, 232, paint(132, 232, teardrop(132, 232, 6), look
 write('glow', 'core.png', 84, 164, paint(84, 164, teardrop(84, 164, 6), look([255, 230, 140], { stripe: 18, period: 8, rim: 2 })));
 write('glow', 'spark.png', 40, 40, glow(40, 40, [255, 240, 200], 255));
 write('glow', 'plate.png', 360, 360, paint(360, 360, roundedRect(360, 360, 6, 24), look([120, 90, 150], { period: 14 })));
+paintBatchContextParts();
 
 // --- turned: one 8 x 8 page painted texel by texel, for `--atlas-in` ----------
 //
