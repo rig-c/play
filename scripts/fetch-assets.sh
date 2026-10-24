@@ -175,6 +175,7 @@ else
   rm -f "$ORACLE_PMA_OUT/art/pma.atlas"
   printf '%s' "$ORACLE_PMA_STAMP" > "$ORACLE_PMA_OUT/.source"
 fi
+test_rig batch-context batch-context
 test_rig glow glow
 test_rig glow glow-packed --pack
 rm -rf "$RIGS_DEST/glow-packed/parts"

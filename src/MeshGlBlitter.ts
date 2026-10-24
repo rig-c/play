@@ -166,11 +166,12 @@ const VERTEX_SHADER = `
 attribute vec2 aPos;
 attribute vec2 aUV;
 uniform vec2 uResolution;
+uniform vec2 uOrigin;
 varying vec2 vUV;
 void main() {
   // aPos is in offscreen-canvas device px, top-left origin (matching the
   // top-left-origin drawImage read of the same rect).
-  vec2 clip = aPos / uResolution * 2.0 - 1.0;
+  vec2 clip = (aPos - uOrigin) / uResolution * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   vUV = aUV;
 }`;
@@ -210,6 +211,7 @@ class MeshGlBlitter {
   private readonly canvas = document.createElement('canvas');
   private readonly gl: WebGLRenderingContext;
   private readonly uResolution: WebGLUniformLocation;
+  private readonly uOrigin: WebGLUniformLocation;
   private readonly meshProgram: WebGLProgram;
   private readonly meshPos: number;
   private readonly meshUV: number;
@@ -257,8 +259,10 @@ class MeshGlBlitter {
     this.meshProgram = program;
     gl.useProgram(program);
     const uResolution = gl.getUniformLocation(program, 'uResolution');
-    if (!uResolution) throw new Error('uResolution not found');
+    const uOrigin = gl.getUniformLocation(program, 'uOrigin');
+    if (!uResolution || !uOrigin) throw new Error('mesh program uniforms not found');
     this.uResolution = uResolution;
+    this.uOrigin = uOrigin;
     gl.uniform1i(gl.getUniformLocation(program, 'uTex'), 0);
     this.meshPos = gl.getAttribLocation(program, 'aPos');
     this.meshUV = gl.getAttribLocation(program, 'aUV');
@@ -331,11 +335,8 @@ class MeshGlBlitter {
         Math.ceil(Math.max(height, this.canvas.height) / GROW_STEP) * GROW_STEP,
       );
     }
-    const bufW = this.canvas.width;
     const bufH = this.canvas.height;
-    gl.viewport(0, 0, bufW, bufH);
     this.bindMesh();
-    gl.uniform2f(this.uResolution, bufW, bufH);
 
     // Build one interleaved vertex array for the whole batch (unindexed —
     // meshes are a few hundred triangles, expansion is cheaper than managing
@@ -370,6 +371,12 @@ class MeshGlBlitter {
         boundPage = job.page;
       }
       // Scissor is bottom-left origin; pack coords are top-left origin.
+      // Normalize in the job's own rect: a global clip-space mapping lets
+      // unrelated packed jobs change the same mesh's subpixel raster (#187).
+      // Keep the packed Float32 upload and the 1:1 blit unchanged.
+      gl.viewport(packX[i], bufH - packY[i] - job.height, job.width, job.height);
+      gl.uniform2f(this.uResolution, job.width, job.height);
+      gl.uniform2f(this.uOrigin, packX[i], packY[i]);
       gl.scissor(packX[i], bufH - packY[i] - job.height, job.width, job.height);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, first, job.triangles.length);

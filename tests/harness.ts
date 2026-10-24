@@ -1,3 +1,4 @@
+import { batchContextInputProbe, batchContextProbe } from './batch-context';
 import { liveCoreProbe } from './liveCoreProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
@@ -211,6 +212,8 @@ export interface RegionGeometryProbeResult {
 }
 
 export interface RigPlayHarness {
+  batchContextInputProbe: typeof batchContextInputProbe;
+  batchContextProbe: typeof batchContextProbe;
   liveCoreProbe: typeof liveCoreProbe;
   setupMeshLookDiagnosisProbe: typeof setupMeshLookDiagnosisProbe;
   setupMeshLiteralProbe: typeof setupMeshLiteralProbe;
@@ -9335,6 +9338,8 @@ async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
 }
 
 window.rigPlayHarness = {
+  batchContextInputProbe,
+  batchContextProbe,
   liveCoreProbe,
   setupMeshLookDiagnosisProbe,
   setupMeshLiteralProbe,
