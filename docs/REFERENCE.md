@@ -496,11 +496,11 @@ gravity re-settles the chain in the turning arm's frame (with gravity at 0,
 0.83 against 0.84).
 
 `sets.json` keys are read strictly. Besides `slots`, `hides` and `drawn`, a
-set may carry `drawnLength`, `registration` and `threshold`, which parts
-writes and which place nothing under `check --set`: play reads past them by
-name and gives them no meaning. Any other key, on a set or on the document
-(which takes `spec`, `sets` and `threshold`), is refused by name rather than
-ignored.
+set may carry `drawnLength`, `registration`, `threshold` and `focus`, which
+parts writes and which place nothing under `check --set`: play reads past them
+by name (validating `focus`, when present, as `[x, y]` of two finite numbers)
+and gives them no meaning. Any other key, on a set or on the document (which
+takes `spec`, `sets` and `threshold`), is refused by name rather than ignored.
 
 To switch one driver's set while another stays — a new viseme while a gesture
 holds — name the new list in one call (`setSets(['viseme_a', 'gesture_chin'])`)
