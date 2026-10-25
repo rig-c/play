@@ -166,3 +166,81 @@ test("a turned region's artwork top-left is the packed rect's bottom-left", asyn
   expectCorners(probe.rotated.drawn);
   expectCorners(probe.rotated.corners);
 });
+
+test('posedFrame frozen topology fast path, readonly output, fallback, and stale-cache plants (#198)', async ({ page }) => {
+  await openHarness(page);
+  const probe = await page.evaluate(() => window.rigPlayHarness.posedFrameTrianglesProbe());
+
+  // 1. Canonical rigs: identical frames, frozen canonical references, zero warm value-scan element reads, and pixel parity.
+  expect(probe.canonicalRigs).toHaveLength(6);
+  for (const rig of probe.canonicalRigs) {
+    expect(rig.frameDiffs, `${rig.rig} frameDiffs`).toBe(0);
+    expect(rig.allFrozen, `${rig.rig} allFrozen`).toBe(true);
+    expect(rig.allCanonicalRefEqual, `${rig.rig} allCanonicalRefEqual`).toBe(true);
+    expect(rig.valueScanElementReads, `${rig.rig} valueScanElementReads`).toBe(0);
+    expect(rig.domWebglPixelDiffs, `${rig.rig} domWebglPixelDiffs`).toBe(0);
+    expect(rig.domCanvas2dPixelDiffs, `${rig.rig} domCanvas2dPixelDiffs`).toBe(0);
+    expect(rig.canvasModePixelDiffs, `${rig.rig} canvasModePixelDiffs`).toBe(0);
+    expect(rig.heldMeshReused, `${rig.rig} heldMeshReused`).toBe(rig.meshSlotsPerFrame);
+  }
+
+  // 2. Readonly output (`Object.freeze`) and mutation isolation on retained frames.
+  expect(probe.readonlyOutput).toEqual({
+    canonicalFrozen: true,
+    mutableFallbackFrozen: true,
+    mutateCanonicalThrew: true,
+    mutateFallbackThrew: true,
+    reverseCanonicalThrew: true,
+    retainedUnchangedAfterAttempt: true,
+    nextFrameUnchangedAfterAttempt: true,
+    callerInputMutationIsolated: true,
+    inPlaceCallerMutationDetected: true,
+    inPlaceMutatedOutputFrozen: true,
+  });
+
+  // 3. Skin swaps with the same placeholder, linked meshes, attachment swaps, mutable fallback, and lookup fallbacks.
+  expect(probe.topologyCases.skinSwapSamePlaceholder).toEqual({
+    defaultTriangles: [0, 1, 2],
+    altTriangles: [0, 1, 2, 0, 2, 3],
+    restoredDefaultSameRef: true,
+    sharedSourceDefaultTriangles: [0, 1, 2],
+    sharedSourceAltTriangles: [0, 1, 2, 0, 2, 3],
+    sharedSourceRestoredSameRef: true,
+  });
+  expect(probe.topologyCases.linkedMesh).toEqual({
+    linkedQuadTriangles: [0, 1, 2, 0, 2, 3],
+    linkedMatchesSourceRef: true,
+    linkedTriTriangles: [0, 1, 2],
+    linkedSwitchRestoredSameRef: true,
+  });
+  expect(probe.topologyCases.attachmentSwap).toEqual({
+    baseTriangles: [0, 1, 2],
+    quadTriangles: [0, 1, 2, 0, 2, 3],
+    restoredBaseSameRef: true,
+    domSwapDrawn: 1,
+    domHeldReused: 1,
+  });
+  expect(probe.topologyCases.mutableFallback).toEqual({
+    mutableRefReused: true,
+    mutableChangedNewRef: true,
+    distinctFrozenEqualReused: true,
+    distinctFrozenWarmScanReads: 0,
+  });
+  expect(probe.topologyCases.lookupFallbacks).toEqual({
+    reorderedDrawOrderDiffs: 0,
+    reorderedSlotsDiffs: 0,
+    reorderedRegionsDiffs: 0,
+    clippedMaskDiffs: 0,
+  });
+
+  // 4. Stale-cache plants: real adapter has 0 diffs; slot-only and (slot,attachment)-first-win mutants fail by name.
+  expect(probe.plants.realDiffs).toEqual([]);
+  expect(probe.plants.slotOnlyMutantDiffs).toEqual([
+    'step2 s/quad attachment swap: expected [0,1,2,0,2,3], got [0,1,2]',
+    'step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got [0,1,2]',
+  ]);
+  expect(probe.plants.slotAttachmentFirstMutantDiffs).toEqual([
+    'step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got [0,1,2]',
+  ]);
+});
+

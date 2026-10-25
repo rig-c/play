@@ -124,6 +124,14 @@ export interface PosedMesh extends PosedSlotCommon {
 
 export type PosedSlot = PosedRegion | PosedMesh;
 
+/** @internal */
+export interface TriangleCache {
+  /** Known frozen triangle arrays mapped by object identity to their kept frozen output. */
+  byRef: WeakMap<readonly number[], number[]>;
+  /** Frozen triangle lists kept for this slot and attachment, compared index for index on the fallback path. */
+  lists: number[][];
+}
+
 /**
  * What a document's frames read besides the pose, built once per document
  * view (`frameSource`): where every region sits on its page, each record's
@@ -139,12 +147,14 @@ export interface FrameSource {
   pages: ReadonlyMap<string, ModelPage>;
   active: ReadonlySet<string>;
   boneOf: ReadonlyMap<string, string>;
+  /** Setup slot index by slot name (`doc.slots`), for direct O(1) slot-row and setup-drawOrder indexing. */
+  slotIndex: ReadonlyMap<string, number>;
   /** Page UVs kept per placement and attachment UV array, so a mesh's `uvs` is one object for its lifetime. */
   uvs: WeakMap<object, Map<readonly number[], number[]>>;
   /** Region page UVs kept per placement, so a region's `uvs` is one object for its lifetime. */
   regionUvs: WeakMap<object, number[]>;
-  /** Triangle lists kept per slot and attachment, compared index for index before reuse. */
-  triangles: Map<string, number[][]>;
+  /** Triangle caches kept per slot and attachment: frozen identity fast path plus value-checked fallback. */
+  triangles: Map<string, Map<string, TriangleCache>>;
 }
 
 /**
@@ -163,12 +173,20 @@ export function frameSource(doc: CompiledDocument, parsed: unknown): FrameSource
     );
   }
   const pages = new Map(doc.pages.map((page) => [page.name, page]));
+  const boneOf = new Map<string, string>();
+  const slotIndex = new Map<string, number>();
+  for (let i = 0; i < doc.slots.length; i++) {
+    const slot = doc.slots[i];
+    boneOf.set(slot.name, slot.bone);
+    slotIndex.set(slot.name, i);
+  }
   return {
     doc,
     uv: { lookup: documentPageLookup(doc.pages), sequences: readUvSequences(parsed) },
     pages,
     active: activeBones(doc),
-    boneOf: new Map(doc.slots.map((slot) => [slot.name, slot.bone])),
+    boneOf,
+    slotIndex,
     uvs: new WeakMap(),
     regionUvs: new WeakMap(),
     triangles: new Map(),
@@ -207,21 +225,59 @@ function regionUvs(source: FrameSource, found: DrawnRegion): number[] {
   return kept;
 }
 
-/** A triangle list equal, index for index, to `drawn.triangles`, kept for reuse by identity. */
+/**
+ * A frozen triangle list equal, index for index, to `drawn.triangles`, kept
+ * per slot and attachment for reuse by identity.
+ *
+ * `rig-c/core`'s `meshArraysOf` hands `RawDrawn.triangles` a frozen canonical
+ * array per mesh geometry, so once verified frozen on first sight it hits
+ * `cache.byRef` in O(1) by reference identity without re-scanning indices or
+ * re-walking property descriptors (`Object.isFrozen`). Mutable or custom inputs
+ * stay out of `byRef` and take the value-checked fallback (`cache.lists`),
+ * which freezes a copy (`Object.freeze`) so retained old frames cannot be
+ * mutated through shared output.
+ */
 function trianglesOf(source: FrameSource, drawn: RawDrawn): number[] {
-  const key = `${drawn.slot}\u0000${drawn.attachment}`;
-  let lists = source.triangles.get(key);
-  if (lists === undefined) {
-    lists = [];
-    source.triangles.set(key, lists);
+  let byAttachment = source.triangles.get(drawn.slot);
+  if (byAttachment === undefined) {
+    byAttachment = new Map();
+    source.triangles.set(drawn.slot, byAttachment);
+  }
+  let cache = byAttachment.get(drawn.attachment);
+  if (cache === undefined) {
+    cache = { byRef: new WeakMap(), lists: [] };
+    byAttachment.set(drawn.attachment, cache);
   }
   const wanted = drawn.triangles;
-  let kept = lists.find((list) => list.length === wanted.length && list.every((v, i) => v === wanted[i]));
+  const fast = cache.byRef.get(wanted);
+  if (fast !== undefined) return fast;
+  const frozen = Object.isFrozen(wanted);
+  let kept = cache.lists.find((list) => list.length === wanted.length && list.every((v, i) => v === wanted[i]));
   if (kept === undefined) {
-    kept = [...wanted];
-    lists.push(kept);
+    kept = frozen ? (wanted as number[]) : (Object.freeze([...wanted]) as number[]);
+    cache.lists.push(kept);
+    cache.byRef.set(kept, kept);
   }
+  if (frozen) cache.byRef.set(wanted, kept);
   return kept;
+}
+
+function regionMap(regions: readonly DrawnRegion[]): Map<string, DrawnRegion> {
+  const map = new Map<string, DrawnRegion>();
+  for (let i = 0; i < regions.length; i++) map.set(regions[i].slot, regions[i]);
+  return map;
+}
+
+function slotRowMap(slots: readonly CoreSlotRow[]): Map<string, CoreSlotRow> {
+  const map = new Map<string, CoreSlotRow>();
+  for (let i = 0; i < slots.length; i++) map.set(slots[i][0], slots[i]);
+  return map;
+}
+
+function drawOrderMap(drawOrder: readonly string[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (let i = 0; i < drawOrder.length; i++) map.set(drawOrder[i], i);
+  return map;
 }
 
 /**
@@ -242,9 +298,18 @@ function trianglesOf(source: FrameSource, drawn: RawDrawn): number[] {
  * @internal Exported for the frame gate's synthetic cover cases.
  */
 export function clipCover(pose: Pick<RawPose, 'clips' | 'shown' | 'drawOrder'>, active: ReadonlySet<string>, draws: (slot: string) => boolean = () => true): Map<string, PosedClip> {
-  const polygons = new Map(pose.clips.map((c) => [c[0], { end: c[2], polygon: c[3] }]));
-  const shownOf = new Map(pose.shown.map((s) => [s.slot, s]));
   const cover = new Map<string, PosedClip>();
+  if (pose.clips.length === 0) return cover;
+  const polygons = new Map<string, { end: string | null; polygon: number[] }>();
+  for (let i = 0; i < pose.clips.length; i++) {
+    const c = pose.clips[i];
+    polygons.set(c[0], { end: c[2], polygon: c[3] });
+  }
+  const shownOf = new Map<string, RawPose['shown'][number]>();
+  for (let i = 0; i < pose.shown.length; i++) {
+    const s = pose.shown[i];
+    shownOf.set(s.slot, s);
+  }
   let current: { end: string | null; clip: PosedClip } | null = null;
   for (const slot of pose.drawOrder) {
     const shown = shownOf.get(slot);
@@ -294,20 +359,34 @@ export function frameOf(
 ): PosedFrame {
   const { drawn: regions, why } = drawnRegions(source.doc, pose.shown, pose.drawOrder, source.uv);
   if (regions === null) throw new CoreInputError(`the page UVs are not posed: ${why}`);
-  const regionOf = new Map(regions.map((r) => [r.slot, r]));
-  const rows = new Map<string, CoreSlotRow>(pose.slots.map((row) => [row[0], row]));
-  const z = new Map(pose.drawOrder.map((slot, index) => [slot, index]));
-  const cover = clipCover(pose, source.active, draws);
+  let regionOf: Map<string, DrawnRegion> | null = null;
+  let rows: Map<string, CoreSlotRow> | null = null;
+  let z: Map<string, number> | null = null;
+  const cover = pose.clips.length === 0 ? null : clipCover(pose, source.active, draws);
   const [sr, sg, sb, sa] = color;
   const order: PosedSlot[] = [];
-  for (const d of pose.drawn) {
+  for (let i = 0; i < pose.drawn.length; i++) {
+    const d = pose.drawn[i];
     if (!draws(d.slot)) continue;
     const bone = source.boneOf.get(d.slot);
     if (bone === undefined || !source.active.has(bone)) continue;
-    const found = regionOf.get(d.slot);
+    const directRegion = regions[i];
+    const found =
+      directRegion !== undefined && directRegion.slot === d.slot
+        ? directRegion
+        : (regionOf ??= regionMap(regions)).get(d.slot);
     if (found === undefined) throw new CoreInputError(`slot "${d.slot}" drew "${d.attachment}", and no atlas region was resolved for it`);
-    const row = rows.get(d.slot);
+    const slotIdx = source.slotIndex.get(d.slot);
+    const directRow = slotIdx !== undefined ? pose.slots[slotIdx] : undefined;
+    const row =
+      directRow !== undefined && directRow[0] === d.slot
+        ? directRow
+        : (rows ??= slotRowMap(pose.slots)).get(d.slot);
     if (row === undefined) throw new CoreInputError(`slot "${d.slot}" drew and has no slot row`);
+    const slotZ =
+      slotIdx !== undefined && pose.drawOrder[slotIdx] === d.slot
+        ? slotIdx
+        : ((z ??= drawOrderMap(pose.drawOrder)).get(d.slot) as number);
     const tint: [number, number, number, number] = [
       channel(row[2], d.slot) * d.colour[0] * sr,
       channel(row[3], d.slot) * d.colour[1] * sg,
@@ -315,13 +394,14 @@ export function frameOf(
       channel(row[5], d.slot) * d.colour[3] * sa,
     ];
     const darkRow = row[6];
+    const clip = cover === null ? undefined : cover.get(d.slot);
     const common = {
       slot: d.slot,
-      z: z.get(d.slot) as number,
+      z: slotZ,
       blend: (row[8] ?? 'Normal') as BlendMode,
       tint,
       ...(darkRow === null ? {} : { dark: [channel(darkRow[0], d.slot), channel(darkRow[1], d.slot), channel(darkRow[2], d.slot)] as [number, number, number] }),
-      ...(cover.has(d.slot) ? { clip: cover.get(d.slot) as PosedClip } : {}),
+      ...(clip === undefined ? {} : { clip }),
     };
     const page = source.pages.get(found.found.page.name);
     if (d.kind === 'region') {
