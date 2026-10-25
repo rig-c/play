@@ -432,7 +432,7 @@ export interface DrawnMatchCombo {
   drawnSlots: number;
   /** The same with `drawn` stripped from sets.json (a planted copy): must not match. */
   stripped: { rotationMaxDeg: number; worstBone: string; slotDiffs: number };
-  /** The frame with drawnLength / registration / threshold stripped equals the frame with them. */
+  /** The frame with drawnLength / registration / threshold / focus stripped equals the frame with them. */
   notPosedKeysIgnored: boolean;
 }
 
@@ -442,6 +442,12 @@ export interface DrawnRulesProbeResult {
   unknownSetKeyError: string;
   unknownDocumentKeyError: string;
   unknownBoneError: string;
+  malformedFocusErrors: Record<string, string>;
+  parts163Control: {
+    setsEqual: boolean;
+    setKeys: string[];
+    poseEqual: boolean;
+  };
   declaredDrawn: Record<string, Record<string, number> | null>;
   /** Mid-clip (`swing` at 0.5) with `wave`: undrawn bones vs a control player, max |Δ| matrix and position. */
   midClipUndrawnMaxAbs: number;
@@ -8058,7 +8064,7 @@ async function drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; stil
   const out: DrawnMatchCombo[] = [];
   const assets = await loadRig(rig);
   const stripped = await loadRigWithSets(rig, (doc) => withoutSetKeys(doc, ['drawn']));
-  const unposed = await loadRigWithSets(rig, (doc) => withoutSetKeys(doc, ['drawnLength', 'registration', 'threshold']));
+  const unposed = await loadRigWithSets(rig, (doc) => withoutSetKeys(doc, ['drawnLength', 'registration', 'threshold', 'focus']));
   const roots: HTMLElement[] = [];
   const players: RigPlayer[] = [];
   const make = (a: ModelAssets): RigPlayer => {
@@ -8182,6 +8188,87 @@ async function drawnRulesProbe(): Promise<DrawnRulesProbeResult> {
     const unknownSetKeyError = await catchLoad((doc) => ({ ...doc, sets: { ...sets(doc), wave: { ...sets(doc).wave, bogus: 1 } } }));
     const unknownDocumentKeyError = await catchLoad((doc) => ({ ...doc, bogus: 1 }));
     const unknownBoneError = await catchLoad((doc) => ({ ...doc, sets: { ...sets(doc), wave: { ...sets(doc).wave, drawn: { no_such_bone: 1 } } } }));
+    const malformedFocusErrors: Record<string, string> = {};
+    for (const [label, value] of [
+      ['short', [1]],
+      ['long', [1, 2, 3]],
+      ['string', ['1', 2]],
+      ['nullItem', [1, null]],
+      ['nullValue', null],
+      ['object', { x: 1, y: 2 }],
+    ] as const) {
+      malformedFocusErrors[label] = await catchLoad((doc) => ({
+        ...doc,
+        sets: { ...sets(doc), wave: { ...sets(doc).wave, focus: value } },
+      }));
+    }
+    try {
+      const nonFiniteAssets = await loadRig('gesture', {
+        fetch: async (input, init) => {
+          const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+          const response = await fetch(input, init);
+          if (!url.endsWith('/sets.json') || !response.ok) return response;
+          const doc = (await response.json()) as Record<string, unknown>;
+          const next = { ...doc, sets: { ...sets(doc), wave: { ...sets(doc).wave, focus: [-999999, 0] } } };
+          return new Response(JSON.stringify(next).replace('[-999999,0]', '[1e309,2]'), { status: 200 });
+        },
+      });
+      nonFiniteAssets.dispose();
+      malformedFocusErrors.nonFinite = '';
+    } catch (e) {
+      malformedFocusErrors.nonFinite = (e as Error).message;
+    }
+
+    // Control loading the sets.json written by published @rig-c/parts 1.63.0 for its wind-wave example,
+    // both as published and with the authored focus tuple [x, y] that parts 1.62+ writes (#195, parts #722).
+    const wavePublished = await loadRig('wind-wave');
+    const waveWithFocus = await loadRig('wind-wave', {
+      fetch: async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const response = await fetch(input, init);
+        if (!url.endsWith('/sets.json') || !response.ok) return response;
+        return new Response(
+          JSON.stringify(
+            {
+              spec: 'rig-parts-sets/1',
+              sets: {
+                wave_r: {
+                  slots: {
+                    forearm_r_front: 'wave_r_forearm_r',
+                    upperarm_r: 'wave_r_upperarm_r',
+                  },
+                  focus: [26.9736328125, 62.872983870967744],
+                  hides: ['forearm_r'],
+                  drawn: {
+                    sleeve_r0: -110,
+                    sleeve_r1: -112,
+                  },
+                },
+              },
+            },
+            null,
+            1,
+          ) + '\n',
+          { status: 200 },
+        );
+      },
+    });
+    let parts163Control: DrawnRulesProbeResult['parts163Control'];
+    try {
+      const pPub = make(wavePublished);
+      const pFoc = make(waveWithFocus);
+      pPub.setSets(['wave_r']);
+      pFoc.setSets(['wave_r']);
+      parts163Control = {
+        setsEqual: JSON.stringify(waveWithFocus.sets) === JSON.stringify(wavePublished.sets),
+        setKeys: Object.keys(waveWithFocus.sets[0]),
+        poseEqual: json(pFoc) === json(pPub),
+      };
+    } finally {
+      wavePublished.dispose();
+      waveWithFocus.dispose();
+    }
+
     const declaredDrawn = Object.fromEntries(make().sets().map((s) => [s.name, s.drawn === undefined ? null : { ...s.drawn }]));
 
     // Mid-clip.
@@ -8256,6 +8343,8 @@ async function drawnRulesProbe(): Promise<DrawnRulesProbeResult> {
       unknownSetKeyError,
       unknownDocumentKeyError,
       unknownBoneError,
+      malformedFocusErrors,
+      parts163Control,
       declaredDrawn,
       midClipUndrawnMaxAbs: Math.max(single.undrawnMax, tracksMode.undrawnMax),
       midClipShoulderOverTorso: single.shoulderOverTorso,

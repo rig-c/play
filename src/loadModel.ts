@@ -168,11 +168,13 @@ const SETS_SPECS = ['spine-parts-sets/1', 'rig-parts-sets/1'] as const;
 /**
  * Keys `@rig-c/parts` writes that place nothing: `check --set` poses a set by
  * its `slots`, `hides` and `drawn` alone, so these are read past by name and
- * given no meaning here (#170). `drawnLength` and `registration` record how a
- * skeleton-placed set's painting was measured; `threshold` is the yaw/pitch
- * band a pose dial switches a face set at. Any other key is refused by name.
+ * given no meaning here (#170, #195). `drawnLength` and `registration` record
+ * how a skeleton-placed set's painting was measured; `threshold` is the
+ * yaw/pitch band a pose dial switches a face set at; `focus` is the set's
+ * authored focus point `[x, y]` in setup-pose coordinates (parts #722). Any
+ * other key is refused by name.
  */
-const SET_KEYS_NOT_POSED = ['drawnLength', 'registration', 'threshold'] as const;
+const SET_KEYS_NOT_POSED = ['drawnLength', 'registration', 'threshold', 'focus'] as const;
 const SET_KEYS = ['slots', 'hides', 'drawn', ...SET_KEYS_NOT_POSED] as const;
 const SETS_DOCUMENT_KEYS = ['spec', 'sets', 'threshold'] as const;
 
@@ -302,6 +304,18 @@ export function readSetsText(text: string, where: string, doc: CompiledDocument)
           throw new Error(`${where}: set "${name}" drawn bone "${boneName}" must be a finite number of degrees`);
         }
         drawn[boneName] = degrees;
+      }
+    }
+    if (item.focus !== undefined) {
+      if (
+        !Array.isArray(item.focus) ||
+        item.focus.length !== 2 ||
+        typeof item.focus[0] !== 'number' ||
+        !Number.isFinite(item.focus[0]) ||
+        typeof item.focus[1] !== 'number' ||
+        !Number.isFinite(item.focus[1])
+      ) {
+        throw new Error(`${where}: set "${name}" "focus" must be [x, y] of two finite numbers`);
       }
     }
     out.push(

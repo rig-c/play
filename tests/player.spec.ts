@@ -186,7 +186,7 @@ test('a set\'s drawn bones pose as @rig-c/parts check --set poses them, and the 
     expect(c.matrixMaxAbs, label).toBeLessThanOrEqual(1e-5);
     // The planted copy without drawn does not match.
     expect(c.stripped.rotationMaxDeg, `${label} stripped worst ${c.stripped.worstBone}`).toBeGreaterThanOrEqual(1);
-    // drawnLength / registration / threshold move nothing.
+    // drawnLength / registration / threshold / focus move nothing.
     expect(c.notPosedKeysIgnored, label).toBe(true);
   }
 
@@ -196,8 +196,26 @@ test('a set\'s drawn bones pose as @rig-c/parts check --set poses them, and the 
   expect(rules.overlapError).toContain('bone "elbow"');
   expect(rules.overlapUnchanged).toBe(true);
   expect(rules.unknownSetKeyError).toContain('"bogus"');
+  expect(rules.unknownSetKeyError).toContain('known: slots, hides, drawn, drawnLength, registration, threshold, focus');
   expect(rules.unknownDocumentKeyError).toContain('"bogus"');
   expect(rules.unknownBoneError).toContain('no_such_bone');
+  expect(Object.keys(rules.malformedFocusErrors).sort()).toEqual([
+    'long',
+    'nonFinite',
+    'nullItem',
+    'nullValue',
+    'object',
+    'short',
+    'string',
+  ]);
+  for (const [label, err] of Object.entries(rules.malformedFocusErrors)) {
+    expect(err, label).toContain('set "wave" "focus" must be [x, y] of two finite numbers');
+  }
+  expect(rules.parts163Control).toEqual({
+    setsEqual: true,
+    setKeys: ['name', 'slots', 'hides', 'drawn'],
+    poseEqual: true,
+  });
   expect(rules.declaredDrawn).toEqual({ wave: { shoulder: 50, elbow: 95 }, nod: { head: 105 }, elbow_only: { elbow: 10 } });
   expect(rules.midClipUndrawnMaxAbs).toBeLessThanOrEqual(1e-9);
   expect(rules.midClipShoulderOverTorso).toBeCloseTo(42, 4);
