@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.17.1](https://github.com/rig-c/play/compare/v1.17.0...v1.17.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* **loadModel:** accept the alternate set's focus key that parts 1.62+ writes ([#196](https://github.com/rig-c/play/issues/196)) ([f94da0b](https://github.com/rig-c/play/commit/f94da0b2296c441703e2d5bd39767bec6ffc87fb)), closes [#195](https://github.com/rig-c/play/issues/195)
+* stabilize mesh rasterization across packed jobs ([#188](https://github.com/rig-c/play/issues/188)) ([6bebb77](https://github.com/rig-c/play/commit/6bebb77a7bb81710baeec7de50ab89ce7e1c7b2f))
+
 ## [1.17.0](https://github.com/rig-c/play/compare/v1.16.0...v1.17.0) (2026-10-23)
 
 
