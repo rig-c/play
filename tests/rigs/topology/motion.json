@@ -1,0 +1,18 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "topology",
+  "cut": "test-topology",
+  "easings": {},
+  "animations": {
+    "swap": {
+      "duration": 1,
+      "loop": false,
+      "note": "Slot s shows a one-triangle mesh, then at 0.5 a two-triangle one; slot t shows a link to the two-triangle mesh, then at 0.5 a link to the one-triangle one, and s is drawn over t from 0.5. Under the alt skin s/base is the two-triangle mesh; under the twin skin it is another one-triangle mesh with the default's triangle list.",
+      "drawOrder": [{ "t": 0.5, "offsets": [{ "slot": "s", "offset": 1 }] }],
+      "tracks": [
+        { "slot": "s", "property": "attachment", "keys": [{ "t": 0, "v": "base" }, { "t": 0.5, "v": "quad" }, { "t": 1, "v": "quad" }] },
+        { "slot": "t", "property": "attachment", "keys": [{ "t": 0, "v": "linked" }, { "t": 0.5, "v": "linked_tri" }, { "t": 1, "v": "linked_tri" }] }
+      ]
+    }
+  }
+}

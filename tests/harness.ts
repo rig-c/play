@@ -4,7 +4,7 @@ import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } 
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
-import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, readModel, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
+import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
 
 import {
   type AdjustableBones,
@@ -285,6 +285,7 @@ export interface RigPlayHarness {
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
   posedFrameTrianglesProbe(): Promise<PosedFrameTrianglesProbeResult>;
+  posedFrameInputContractProbe(): Promise<PosedFrameInputContractProbeResult>;
 }
 
 export interface PosedFrameTrianglesProbeResult {
@@ -304,15 +305,10 @@ export interface PosedFrameTrianglesProbeResult {
   }>;
   readonlyOutput: {
     canonicalFrozen: boolean;
-    mutableFallbackFrozen: boolean;
     mutateCanonicalThrew: boolean;
-    mutateFallbackThrew: boolean;
     reverseCanonicalThrew: boolean;
     retainedUnchangedAfterAttempt: boolean;
     nextFrameUnchangedAfterAttempt: boolean;
-    callerInputMutationIsolated: boolean;
-    inPlaceCallerMutationDetected: boolean;
-    inPlaceMutatedOutputFrozen: boolean;
   };
   topologyCases: {
     skinSwapSamePlaceholder: {
@@ -336,16 +332,12 @@ export interface PosedFrameTrianglesProbeResult {
       domSwapDrawn: number;
       domHeldReused: number;
     };
-    mutableFallback: {
-      mutableRefReused: boolean;
-      mutableChangedNewRef: boolean;
+    distinctFrozen: {
       distinctFrozenEqualReused: boolean;
       distinctFrozenWarmScanReads: number;
     };
     lookupFallbacks: {
       reorderedDrawOrderDiffs: number;
-      reorderedSlotsDiffs: number;
-      reorderedRegionsDiffs: number;
       clippedMaskDiffs: number;
     };
   };
@@ -354,6 +346,22 @@ export interface PosedFrameTrianglesProbeResult {
     slotOnlyMutantDiffs: string[];
     slotAttachmentFirstMutantDiffs: string[];
   };
+}
+
+/** `posedFrameInputContractProbe`: `frameOf` on a rigc-built pose cloned or with its rows reordered (#198). */
+export interface PosedFrameInputContractProbeResult {
+  /** Whether a cloned pose's triangle array is frozen — false, which is what puts it on the fallback. */
+  cloneInputFrozen: boolean;
+  mutableFallbackFrozen: boolean;
+  mutateFallbackThrew: boolean;
+  /** No frame hands out a cloned pose's own triangle array. */
+  fallbackIsCopy: boolean;
+  /** How many cloned arrays the identity cache keyed — 0: a mutable array is never trusted by identity. */
+  clonedInputsKeptByRef: number;
+  mutableRefReused: boolean;
+  changedTopologyNewRef: boolean;
+  reorderedSlotsDiffs: number;
+  reorderedRegionsDiffs: number;
 }
 
 export interface SlotIdentityProbeResult {
@@ -9811,469 +9819,313 @@ async function posedFrameTrianglesProbe(): Promise<PosedFrameTrianglesProbeResul
     }
   }
 
-  // Construct a synthetic multi-skin / multi-attachment / linked-mesh compiled model
-  // to test readonly output, skin swaps with the same placeholder, linked meshes,
-  // attachment swaps, mutable-input fallback, lookup fallbacks, and stale-cache plants.
-  const triMesh = {
-    kind: 'mesh',
-    vertices: { weighted: false, xy: [0, 0, 10, 0, 0, 10] },
-    uvs: [0, 0, 1, 0, 0, 1],
-    triangles: [0, 1, 2],
-    hull: 3,
-  };
-  const quadMesh = {
-    kind: 'mesh',
-    vertices: { weighted: false, xy: [0, 0, 10, 0, 10, 10, 0, 10] },
-    uvs: [0, 0, 1, 0, 1, 1, 0, 1],
-    triangles: [0, 1, 2, 0, 2, 3],
-    hull: 4,
-  };
-  const rawDoc = {
-    spec: 'rigc-compiled/3',
-    referenceScale: 100,
-    stage: null,
-    bones: [
-      { name: 'root' },
-      { name: 'a', parent: 'root', x: 2, y: 3 },
-      { name: 'b', parent: 'root', x: -4, y: 5 },
-    ],
-    slots: [
-      { name: 's', bone: 'a', setup: 'base' },
-      { name: 't', bone: 'b', setup: 'linked' },
-    ],
-    skins: [
-      {
-        name: 'default',
-        bones: [],
-        constraints: {},
-        attachments: {
-          s: {
-            base: triMesh,
-            quad: quadMesh,
-          },
-          t: {
-            linked: { kind: 'linkedmesh', skin: 'default', slot: 's', source: 'quad', timelines: false },
-            linked_tri: { kind: 'linkedmesh', skin: 'default', slot: 's', source: 'base', timelines: false },
-          },
-        },
-      },
-      {
-        name: 'alt',
-        bones: [],
-        constraints: {},
-        attachments: {
-          s: {
-            // Same slot 's' and same placeholder 'base', but 2-triangle quad topology instead of 1-triangle triMesh!
-            base: quadMesh,
-          },
-        },
-      },
-    ],
-    constraints: [],
-    events: [],
-    animations: [
-      {
-        name: 'swap',
-        duration: 1,
-        bones: [],
-        slots: [
-          {
-            name: 's',
-            timelines: [
-              {
-                name: 'attachment',
-                keys: [
-                  { time: 0, name: 'base' },
-                  { time: 0.5, name: 'quad' },
-                ],
-              },
-            ],
-          },
-          {
-            name: 't',
-            timelines: [
-              {
-                name: 'attachment',
-                keys: [
-                  { time: 0, name: 'linked' },
-                  { time: 0.5, name: 'linked_tri' },
-                ],
-              },
-            ],
-          },
-        ],
-        constraints: { ik: [], transform: [], path: [], physics: [], slider: [] },
-        attachments: [],
-        drawOrder: [
-          { time: 0.5, offsets: [{ slot: 's', offset: 1 }] },
-        ],
-        events: [],
-      },
-    ],
-    editorOrder: {
-      skins: [
-        { name: 'default', slots: ['s', 't'] },
-        { name: 'alt', slots: ['s'] },
-      ],
-      animations: ['swap'],
-    },
-    images: [],
-    pageGrids: [],
-    droppedStates: [],
-    absentParts: [],
-    meshBones: {},
-    meshes: {},
-    physics: [],
-    deformTransforms: [],
-    trackDerivations: [],
-    rig: {},
-    pages: [
-      {
-        name: 'page.png',
-        width: 16,
-        height: 16,
-        pma: false,
-        scale: 1,
-        regions: [
-          { name: 'base', x: 0, y: 0, width: 8, height: 8, offsetX: 0, offsetY: 0, originalWidth: 8, originalHeight: 8, degrees: 0, index: -1 },
-          { name: 'quad', x: 8, y: 0, width: 8, height: 8, offsetX: 0, offsetY: 0, originalWidth: 8, originalHeight: 8, degrees: 0, index: -1 },
-          { name: 'linked', x: 0, y: 8, width: 8, height: 8, offsetX: 0, offsetY: 0, originalWidth: 8, originalHeight: 8, degrees: 0, index: -1 },
-          { name: 'linked_tri', x: 8, y: 8, width: 8, height: 8, offsetX: 0, offsetY: 0, originalWidth: 8, originalHeight: 8, degrees: 0, index: -1 },
-        ],
-      },
-    ],
-    spine: { sha256: '0'.repeat(64) },
-  };
-
-  const doc = readModel(JSON.stringify(rawDoc));
-  const defaultView = underSkin(doc, 'default');
-  const altView = underSkin(doc, 'alt');
-  const defaultPose = poseRawSetup(defaultView);
-  const altPose = poseRawSetup(altView);
-
-  // 2. Readonly output & mutation isolation (`Object.freeze`)
-  const roSource = frameSource(defaultView, rawDoc);
-  const canonicalFrame = frameOf(roSource, defaultPose);
-  const canonicalMesh = canonicalFrame.order[0] as Extract<PosedSlot, { kind: 'mesh' }>;
-  const canonicalFrozen = Object.isFrozen(canonicalMesh.triangles);
-  const snapshotBefore = [...canonicalMesh.triangles];
-
-  let mutateCanonicalThrew = false;
+  // The topology fixture (`tests/rigs/topology/`, built by rigc through
+  // `scripts/fetch-assets.sh` like every test rig) carries every topology case
+  // the canonical rigs do not: slot `s` shows a one-triangle mesh (`base`, in
+  // the `base` skin) and from 0.5 a two-triangle one (`quad`); slot `t` shows a
+  // link to `quad` and from 0.5 a link to `base`, drawn under `s` from 0.5; the
+  // `alt` skin fills `s`/`base` with the two-triangle mesh, and `twin` with
+  // another one-triangle mesh whose triangle list equals `base`'s. Every pose
+  // below is one rig-c/core's live track posed off that build.
+  const topologyAssets = await loadRig('topology');
   try {
-    canonicalMesh.triangles[0] = 999;
-  } catch {
-    mutateCanonicalThrew = true;
-  }
-  let reverseCanonicalThrew = false;
-  try {
-    canonicalMesh.triangles.reverse();
-  } catch {
-    reverseCanonicalThrew = true;
-  }
-  const retainedUnchangedAfterAttempt = JSON.stringify(canonicalMesh.triangles) === JSON.stringify(snapshotBefore);
-  const nextCanonicalFrame = frameOf(roSource, defaultPose);
-  const nextCanonicalMesh = nextCanonicalFrame.order[0] as Extract<PosedSlot, { kind: 'mesh' }>;
-  const nextFrameUnchangedAfterAttempt =
-    nextCanonicalMesh.triangles === canonicalMesh.triangles &&
-    JSON.stringify(nextCanonicalMesh.triangles) === JSON.stringify(snapshotBefore);
+    const topologyRead = topologyAssets.document as ReadDocument;
+    const parsed = topologyRead.parsed;
+    const baseView = underSkin(topologyRead.doc, 'base');
+    const altView = underSkin(topologyRead.doc, 'alt');
+    const twinView = underSkin(topologyRead.doc, 'twin');
+    const firstPose = (view: typeof baseView): RawPose => openTrack(view, 'swap', { loop: false, reset: 'animation' }).first;
+    const basePose = firstPose(baseView);
+    const altPose = firstPose(altView);
+    const twinPose = firstPose(twinView);
+    const meshOf = (frame: PosedFrame, slot: string): Extract<PosedSlot, { kind: 'mesh' }> => frame.order.find((s) => s.slot === slot) as Extract<PosedSlot, { kind: 'mesh' }>;
 
-  // Mutable fallback input: caller passes an un-frozen array, then mutates it in place.
-  const mutableCallerInput = [0, 1, 2];
-  const poseWithMutable: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: mutableCallerInput } : d)),
-  };
-  const fallbackSource = frameSource(defaultView, rawDoc);
-  const fallbackFrame1 = frameOf(fallbackSource, poseWithMutable);
-  const fallbackMesh1 = fallbackFrame1.order[0] as Extract<PosedSlot, { kind: 'mesh' }>;
-  const mutableFallbackFrozen = Object.isFrozen(fallbackMesh1.triangles);
-  let mutateFallbackThrew = false;
-  try {
-    fallbackMesh1.triangles.push(3);
-  } catch {
-    mutateFallbackThrew = true;
-  }
-  // Mutate caller's own mutable array in place after frame 1
-  mutableCallerInput[0] = 2;
-  mutableCallerInput[2] = 0;
-  const callerInputMutationIsolated = JSON.stringify(fallbackMesh1.triangles) === JSON.stringify([0, 1, 2]);
-  // Pass the same mutated array reference on frame 2: must NOT hit `byRef`, must detect new values [2, 1, 0]
-  const fallbackFrame2 = frameOf(fallbackSource, poseWithMutable);
-  const fallbackMesh2 = fallbackFrame2.order[0] as Extract<PosedSlot, { kind: 'mesh' }>;
-  const inPlaceCallerMutationDetected =
-    fallbackMesh2.triangles !== fallbackMesh1.triangles &&
-    JSON.stringify(fallbackMesh2.triangles) === JSON.stringify([2, 1, 0]) &&
-    JSON.stringify(fallbackMesh1.triangles) === JSON.stringify([0, 1, 2]);
-  const inPlaceMutatedOutputFrozen = Object.isFrozen(fallbackMesh2.triangles);
-
-  // 3a. Skin swap with the same placeholder ('s' / 'base' has [0,1,2] in 'default' and [0,1,2,0,2,3] in 'alt')
-  const srcDefault1 = frameSource(defaultView, rawDoc);
-  const srcAlt = frameSource(altView, rawDoc);
-  const fDefault1 = frameOf(srcDefault1, defaultPose);
-  const fAlt = frameOf(srcAlt, altPose);
-  const fDefault2 = frameOf(srcDefault1, defaultPose);
-  const defaultTriangles = [...(fDefault1.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles];
-  const altTriangles = [...(fAlt.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles];
-  const restoredDefaultSameRef =
-    (fDefault2.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles ===
-    (fDefault1.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-
-  // Also test on a SINGLE shared `FrameSource` where `(slot: 's', attachment: 'base')` receives both skin topologies:
-  const sharedSkinSource = frameSource(defaultView, rawDoc);
-  const sharedDefault1 = frameOf(sharedSkinSource, defaultPose);
-  const sharedAlt = frameOf(sharedSkinSource, altPose);
-  const sharedDefault2 = frameOf(sharedSkinSource, defaultPose);
-  const sharedSourceDefaultTriangles = [...(sharedDefault1.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles];
-  const sharedSourceAltTriangles = [...(sharedAlt.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles];
-  const sharedSourceRestoredSameRef =
-    (sharedDefault2.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles ===
-    (sharedDefault1.order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-
-  // 3b. Linked meshes (`t` shows `linked` -> `s/quad` at t=0, then `linked_tri` -> `s/base` at t=0.5)
-  const swapTrack = openTrack(defaultView, 'swap', { loop: false, reset: 'animation' });
-  const swapPose0 = swapTrack.first;
-  const swapPoseHalf = swapTrack.step(0.5);
-  const swapSource = frameSource(defaultView, rawDoc);
-  const swapFrame0 = frameOf(swapSource, swapPose0);
-  const swapFrameHalf = frameOf(swapSource, swapPoseHalf);
-  const swapFrame0Again = frameOf(swapSource, swapPose0);
-
-  const slotS0 = swapFrame0.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>;
-  const slotT0 = swapFrame0.order.find((s) => s.slot === 't') as Extract<PosedSlot, { kind: 'mesh' }>;
-  const slotSHalf = swapFrameHalf.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>;
-  const slotTHalf = swapFrameHalf.order.find((s) => s.slot === 't') as Extract<PosedSlot, { kind: 'mesh' }>;
-  const slotS0Again = swapFrame0Again.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>;
-  const slotT0Again = swapFrame0Again.order.find((s) => s.slot === 't') as Extract<PosedSlot, { kind: 'mesh' }>;
-
-  // At t=0, `t` is `linked` (source `s/quad` = [0,1,2,0,2,3]), and at t=0.5 `s` is `quad` ([0,1,2,0,2,3]):
-  // both share the same `CoreMeshGeometry` in `rig-c/core`, so `slotT0.triangles === slotSHalf.triangles`!
-  const linkedQuadTriangles = [...slotT0.triangles];
-  const linkedMatchesSourceRef = slotT0.triangles === slotSHalf.triangles && slotTHalf.triangles === slotS0.triangles;
-  const linkedTriTriangles = [...slotTHalf.triangles];
-  const linkedSwitchRestoredSameRef = slotT0Again.triangles === slotT0.triangles;
-
-  // 3c. Attachment swap on slot `s` (`base` -> `quad` -> `base`) + DOM dirty-check verification
-  const baseTriangles = [...slotS0.triangles];
-  const quadTriangles = [...slotSHalf.triangles];
-  const restoredBaseSameRef = slotS0Again.triangles === slotS0.triangles;
-
-  // Render attachment swap through DomRenderer to verify dirty invalidation on swap and reuse on hold
-  const pageCanvas = document.createElement('canvas');
-  pageCanvas.width = 16;
-  pageCanvas.height = 16;
-  const pageCtx = pageCanvas.getContext('2d')!;
-  pageCtx.fillStyle = '#44aa88';
-  pageCtx.fillRect(0, 0, 16, 16);
-  const pageImg = new Image();
-  pageImg.src = pageCanvas.toDataURL();
-  await pageImg.decode();
-  const pageImages = new Map<string, HTMLImageElement>([['page.png', pageImg]]);
-  const domRoot = makeGlRoot();
-  const domRen = new DomRenderer(domRoot, new Map(), pageImages);
-  domRen.pixelRatio = 1;
-  domRen.meshBackend = 'canvas2d';
-  let domSwapDrawn = 0;
-  let domHeldReused = 0;
-  try {
-    domRen.render({ order: [slotS0] });
-    domRen.render({ order: [slotSHalf] });
-    domSwapDrawn = domRen.meshCount;
-    domRen.render({ order: [slotSHalf] });
-    domHeldReused = domRen.meshReuseCount;
-  } finally {
-    domRen.dispose();
-    domRoot.remove();
-  }
-
-  // 3d. Mutable-input fallback & distinct frozen equal-value deduplication
-  const mutSource = frameSource(defaultView, rawDoc);
-  const mutPose1: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: [0, 1, 2] } : d)),
-  };
-  const mutPose2: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: [0, 1, 2] } : d)),
-  };
-  const mutPose3: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: [0, 2, 1] } : d)),
-  };
-  const mf1 = (frameOf(mutSource, mutPose1).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  const mf2 = (frameOf(mutSource, mutPose2).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  const mf3 = (frameOf(mutSource, mutPose3).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  const mutableRefReused = mf1 === mf2 && Object.isFrozen(mf1);
-  const mutableChangedNewRef = mf3 !== mf1 && JSON.stringify(mf3) === JSON.stringify([0, 2, 1]) && Object.isFrozen(mf3);
-
-  const distinctFrozenSource = frameSource(defaultView, rawDoc);
-  const frozenCopy1 = Object.freeze([0, 1, 2]);
-  const frozenCopy2 = Object.freeze([0, 1, 2]);
-  const dfPose1: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: frozenCopy1 } : d)),
-  };
-  const dfPose2: RawPose = {
-    ...defaultPose,
-    drawn: defaultPose.drawn.map((d, i) => (i === 0 ? { ...d, triangles: frozenCopy2 } : d)),
-  };
-  const df1 = (frameOf(distinctFrozenSource, dfPose1).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  const df2 = (frameOf(distinctFrozenSource, dfPose2).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  const distinctFrozenEqualReused = df1 === df2 && df1 === frozenCopy1;
-  let distinctFrozenWarmScanReads = 0;
-  for (const byAttachment of distinctFrozenSource.triangles.values()) {
-    for (const cache of byAttachment.values()) {
-      cache.lists = cache.lists.map(
-        (list) =>
-          new Proxy(list, {
-            get(target, prop, receiver) {
-              if (typeof prop === 'string' && /^\d+$/.test(prop)) distinctFrozenWarmScanReads++;
-              return Reflect.get(target, prop, receiver);
-            },
-          }),
-      );
+    // 2. Readonly output (`Object.freeze`): a frame's triangles cannot be written, by index or in place.
+    const roSource = frameSource(baseView, parsed);
+    const canonicalMesh = meshOf(frameOf(roSource, basePose), 's');
+    const canonicalFrozen = Object.isFrozen(canonicalMesh.triangles);
+    const snapshotBefore = [...canonicalMesh.triangles];
+    let mutateCanonicalThrew = false;
+    try {
+      canonicalMesh.triangles[0] = 999;
+    } catch {
+      mutateCanonicalThrew = true;
     }
-  }
-  const df3 = (frameOf(distinctFrozenSource, dfPose2).order[0] as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-  if (df3 !== df1) distinctFrozenWarmScanReads += 1000;
+    let reverseCanonicalThrew = false;
+    try {
+      canonicalMesh.triangles.reverse();
+    } catch {
+      reverseCanonicalThrew = true;
+    }
+    const retainedUnchangedAfterAttempt = JSON.stringify(canonicalMesh.triangles) === JSON.stringify(snapshotBefore);
+    const nextCanonicalMesh = meshOf(frameOf(roSource, basePose), 's');
+    const nextFrameUnchangedAfterAttempt =
+      nextCanonicalMesh.triangles === canonicalMesh.triangles &&
+      JSON.stringify(nextCanonicalMesh.triangles) === JSON.stringify(snapshotBefore);
 
-  // 3e. Lookup fallbacks: reordered drawOrder, reordered pose.slots, reordered pose.drawn, and non-empty clips (`figure` `mask`)
-  let reorderedDrawOrderDiffs = 0;
-  let reorderedSlotsDiffs = 0;
-  let reorderedRegionsDiffs = 0;
-  const fallbackCheckSource = frameSource(defaultView, rawDoc);
-  const fallbackOracleSource = frameSource(defaultView, rawDoc);
-  const fallbackLegacyTris = new Map<string, number[][]>();
-  if (JSON.stringify(frameOf(fallbackCheckSource, swapPoseHalf)) !== JSON.stringify(referenceFrameOfOracle(fallbackOracleSource, swapPoseHalf, fallbackLegacyTris))) {
-    reorderedDrawOrderDiffs++;
-  }
-  const reversedSlotsPose: RawPose = {
-    ...defaultPose,
-    slots: [...defaultPose.slots].reverse(),
-  };
-  if (JSON.stringify(frameOf(fallbackCheckSource, reversedSlotsPose)) !== JSON.stringify(referenceFrameOfOracle(fallbackOracleSource, reversedSlotsPose, fallbackLegacyTris))) {
-    reorderedSlotsDiffs++;
-  }
-  const reversedDrawnPose: RawPose = {
-    ...defaultPose,
-    drawn: [...defaultPose.drawn].reverse(),
-  };
-  if (JSON.stringify(frameOf(fallbackCheckSource, reversedDrawnPose)) !== JSON.stringify(referenceFrameOfOracle(fallbackOracleSource, reversedDrawnPose, fallbackLegacyTris))) {
-    reorderedRegionsDiffs++;
-  }
+    // 3a. Skin swap with the same placeholder (`s`/`base`: one triangle under `base`, two under `alt`).
+    const srcBase = frameSource(baseView, parsed);
+    const srcAlt = frameSource(altView, parsed);
+    const fBase1 = meshOf(frameOf(srcBase, basePose), 's');
+    const fAlt = meshOf(frameOf(srcAlt, altPose), 's');
+    const fBase2 = meshOf(frameOf(srcBase, basePose), 's');
+    const defaultTriangles = [...fBase1.triangles];
+    const altTriangles = [...fAlt.triangles];
+    const restoredDefaultSameRef = fBase2.triangles === fBase1.triangles;
 
-  let clippedMaskDiffs = 0;
-  const figureAssets = await loadRig('figure');
-  try {
-    const figRead = figureAssets.document as ReadDocument;
-    const figView = underNoSkin(figRead.doc);
-    const figSource = frameSource(figView, figRead.parsed);
-    const figOracleSource = frameSource(figView, figRead.parsed);
-    const figLegacyTris = new Map<string, number[][]>();
-    const figTrack = openTrack(figView, 'mask', { loop: true, reset: 'animation' });
-    for (let i = 0; i < 10; i++) {
-      const p = i === 0 ? figTrack.first : figTrack.step(0.12);
-      if (JSON.stringify(frameOf(figSource, p)) !== JSON.stringify(referenceFrameOfOracle(figOracleSource, p, figLegacyTris))) {
-        clippedMaskDiffs++;
+    // The same on one shared `FrameSource`, where (`s`, `base`) receives both skins' topologies.
+    const sharedSkinSource = frameSource(baseView, parsed);
+    const sharedBase1 = meshOf(frameOf(sharedSkinSource, basePose), 's');
+    const sharedAlt = meshOf(frameOf(sharedSkinSource, altPose), 's');
+    const sharedBase2 = meshOf(frameOf(sharedSkinSource, basePose), 's');
+    const sharedSourceDefaultTriangles = [...sharedBase1.triangles];
+    const sharedSourceAltTriangles = [...sharedAlt.triangles];
+    const sharedSourceRestoredSameRef = sharedBase2.triangles === sharedBase1.triangles;
+
+    // 3b. Linked meshes (`t` shows `linked` → `s`/`quad` at 0, then `linked_tri` → `s`/`base` at 0.5).
+    const swapTrack = openTrack(baseView, 'swap', { loop: false, reset: 'animation' });
+    const swapPose0 = swapTrack.first;
+    const swapPoseHalf = swapTrack.step(0.5);
+    const swapSource = frameSource(baseView, parsed);
+    const swapFrame0 = frameOf(swapSource, swapPose0);
+    const swapFrameHalf = frameOf(swapSource, swapPoseHalf);
+    const swapFrame0Again = frameOf(swapSource, swapPose0);
+    const slotS0 = meshOf(swapFrame0, 's');
+    const slotT0 = meshOf(swapFrame0, 't');
+    const slotSHalf = meshOf(swapFrameHalf, 's');
+    const slotTHalf = meshOf(swapFrameHalf, 't');
+    const slotS0Again = meshOf(swapFrame0Again, 's');
+    const slotT0Again = meshOf(swapFrame0Again, 't');
+
+    // A link draws its source's frozen triangle array, so `t`'s at 0 is `s`'s at 0.5 and the reverse.
+    const linkedQuadTriangles = [...slotT0.triangles];
+    const linkedMatchesSourceRef = slotT0.triangles === slotSHalf.triangles && slotTHalf.triangles === slotS0.triangles;
+    const linkedTriTriangles = [...slotTHalf.triangles];
+    const linkedSwitchRestoredSameRef = slotT0Again.triangles === slotT0.triangles;
+
+    // 3c. Attachment swap on slot `s` (`base` → `quad` → `base`), and the DOM mesh tier's dirty check across it.
+    const baseTriangles = [...slotS0.triangles];
+    const quadTriangles = [...slotSHalf.triangles];
+    const restoredBaseSameRef = slotS0Again.triangles === slotS0.triangles;
+    const domRoot = makeGlRoot();
+    const domRen = new DomRenderer(domRoot, topologyAssets.regionImages, topologyAssets.pageImages);
+    domRen.pixelRatio = 1;
+    domRen.meshBackend = 'canvas2d';
+    let domSwapDrawn = 0;
+    let domHeldReused = 0;
+    try {
+      domRen.render({ order: [slotS0] });
+      domRen.render({ order: [slotSHalf] });
+      domSwapDrawn = domRen.meshCount;
+      domRen.render({ order: [slotSHalf] });
+      domHeldReused = domRen.meshReuseCount;
+    } finally {
+      domRen.dispose();
+      domRoot.remove();
+    }
+
+    // 3d. Two distinct frozen arrays with one triangle list on one (slot, attachment): `s`/`base` under
+    // `base` and under `twin` are two meshes, so the core hands each its own frozen array. The second is
+    // served the first's kept list, and a warm frame of it reads no index of any kept list.
+    const distinctFrozenSource = frameSource(baseView, parsed);
+    const df1 = meshOf(frameOf(distinctFrozenSource, basePose), 's').triangles;
+    const df2 = meshOf(frameOf(distinctFrozenSource, twinPose), 's').triangles;
+    const twinArraysDistinct = basePose.drawn.find((d) => d.slot === 's')?.triangles !== twinPose.drawn.find((d) => d.slot === 's')?.triangles;
+    const distinctFrozenEqualReused = twinArraysDistinct && df1 === df2 && df1 === basePose.drawn.find((d) => d.slot === 's')?.triangles;
+    let distinctFrozenWarmScanReads = 0;
+    for (const byAttachment of distinctFrozenSource.triangles.values()) {
+      for (const cache of byAttachment.values()) {
+        cache.lists = cache.lists.map(
+          (list) =>
+            new Proxy(list, {
+              get(target, prop, receiver) {
+                if (typeof prop === 'string' && /^\d+$/.test(prop)) distinctFrozenWarmScanReads++;
+                return Reflect.get(target, prop, receiver);
+              },
+            }),
+        );
       }
     }
-  } finally {
-    figureAssets.dispose();
-  }
+    const df3 = meshOf(frameOf(distinctFrozenSource, twinPose), 's').triangles;
+    if (df3 !== df1) distinctFrozenWarmScanReads += 1000;
 
-  // 4. Stale-cache plants: slot-name-only mutant and (slot, attachment)-first-win mutant
-  const realDiffs: string[] = [];
-  const slotOnlyMutantDiffs: string[] = [];
-  const slotAttachmentFirstMutantDiffs: string[] = [];
-
-  const runPlantSequence = (
-    runner: (src: FrameSource, p: RawPose) => PosedFrame,
-    diffsOut: string[],
-  ): void => {
-    const src = frameSource(defaultView, rawDoc);
-    // Step 1: slot 's' shows 'base' ([0, 1, 2])
-    const f1 = runner(src, swapPose0);
-    const s1 = (f1.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-    if (JSON.stringify(s1) !== JSON.stringify([0, 1, 2])) {
-      diffsOut.push(`step1 s/base: expected [0,1,2], got ${JSON.stringify(s1)}`);
+    // 3e. Lookup fallbacks the core's poses reach: the draw-order key reorders the frame at 0.5, and the
+    // figure's `mask` clips. (The reorderings no build produces are `posedFrameInputContractProbe`'s.)
+    let reorderedDrawOrderDiffs = 0;
+    const fallbackCheckSource = frameSource(baseView, parsed);
+    const fallbackOracleSource = frameSource(baseView, parsed);
+    const fallbackLegacyTris = new Map<string, number[][]>();
+    const drawOrderMoved = swapPoseHalf.drawOrder.join() !== swapPose0.drawOrder.join();
+    if (!drawOrderMoved || JSON.stringify(frameOf(fallbackCheckSource, swapPoseHalf)) !== JSON.stringify(referenceFrameOfOracle(fallbackOracleSource, swapPoseHalf, fallbackLegacyTris))) {
+      reorderedDrawOrderDiffs++;
     }
-    // Step 2: slot 's' switches to 'quad' ([0, 1, 2, 0, 2, 3])
-    const f2 = runner(src, swapPoseHalf);
-    const s2 = (f2.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-    if (JSON.stringify(s2) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
-      diffsOut.push(`step2 s/quad attachment swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s2)}`);
-    }
-    // Step 3: skin swap to 'alt' where slot 's' placeholder 'base' has quad topology ([0, 1, 2, 0, 2, 3])
-    const f3 = runner(src, altPose);
-    const s3 = (f3.order.find((s) => s.slot === 's') as Extract<PosedSlot, { kind: 'mesh' }>).triangles;
-    if (JSON.stringify(s3) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
-      diffsOut.push(`step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s3)}`);
-    }
-  };
 
-  runPlantSequence((src, p) => frameOf(src, p), realDiffs);
-  const slotOnlyMap = new Map<string, number[][]>();
-  runPlantSequence((src, p) => referenceFrameOfOracle(src, p, slotOnlyMap, 'slot-only'), slotOnlyMutantDiffs);
-  const slotAttachmentMap = new Map<string, number[][]>();
-  runPlantSequence(
-    (src, p) => referenceFrameOfOracle(src, p, slotAttachmentMap, 'slot-attachment-first'),
-    slotAttachmentFirstMutantDiffs,
-  );
+    let clippedMaskDiffs = 0;
+    const figureAssets = await loadRig('figure');
+    try {
+      const figRead = figureAssets.document as ReadDocument;
+      const figView = underNoSkin(figRead.doc);
+      const figSource = frameSource(figView, figRead.parsed);
+      const figOracleSource = frameSource(figView, figRead.parsed);
+      const figLegacyTris = new Map<string, number[][]>();
+      const figTrack = openTrack(figView, 'mask', { loop: true, reset: 'animation' });
+      for (let i = 0; i < 10; i++) {
+        const p = i === 0 ? figTrack.first : figTrack.step(0.12);
+        if (JSON.stringify(frameOf(figSource, p)) !== JSON.stringify(referenceFrameOfOracle(figOracleSource, p, figLegacyTris))) {
+          clippedMaskDiffs++;
+        }
+      }
+    } finally {
+      figureAssets.dispose();
+    }
 
-  return {
-    canonicalRigs,
-    readonlyOutput: {
-      canonicalFrozen,
-      mutableFallbackFrozen,
-      mutateCanonicalThrew,
-      mutateFallbackThrew,
-      reverseCanonicalThrew,
-      retainedUnchangedAfterAttempt,
-      nextFrameUnchangedAfterAttempt,
-      callerInputMutationIsolated,
-      inPlaceCallerMutationDetected,
-      inPlaceMutatedOutputFrozen,
-    },
-    topologyCases: {
-      skinSwapSamePlaceholder: {
-        defaultTriangles,
-        altTriangles,
-        restoredDefaultSameRef,
-        sharedSourceDefaultTriangles,
-        sharedSourceAltTriangles,
-        sharedSourceRestoredSameRef,
-      },
-      linkedMesh: {
-        linkedQuadTriangles,
-        linkedMatchesSourceRef,
-        linkedTriTriangles,
-        linkedSwitchRestoredSameRef,
-      },
-      attachmentSwap: {
-        baseTriangles,
-        quadTriangles,
-        restoredBaseSameRef,
-        domSwapDrawn,
-        domHeldReused,
-      },
-      mutableFallback: {
-        mutableRefReused,
-        mutableChangedNewRef,
-        distinctFrozenEqualReused,
-        distinctFrozenWarmScanReads,
-      },
-      lookupFallbacks: {
-        reorderedDrawOrderDiffs,
-        reorderedSlotsDiffs,
-        reorderedRegionsDiffs,
-        clippedMaskDiffs,
-      },
-    },
-    plants: {
-      realDiffs,
-      slotOnlyMutantDiffs,
+    // 4. Stale-cache plants: slot-name-only mutant and (slot, attachment)-first-win mutant.
+    const realDiffs: string[] = [];
+    const slotOnlyMutantDiffs: string[] = [];
+    const slotAttachmentFirstMutantDiffs: string[] = [];
+
+    const runPlantSequence = (
+      runner: (src: FrameSource, p: RawPose) => PosedFrame,
+      diffsOut: string[],
+    ): void => {
+      const src = frameSource(baseView, parsed);
+      // Step 1: slot 's' shows 'base' ([0, 1, 2])
+      const s1 = meshOf(runner(src, swapPose0), 's').triangles;
+      if (JSON.stringify(s1) !== JSON.stringify([0, 1, 2])) {
+        diffsOut.push(`step1 s/base: expected [0,1,2], got ${JSON.stringify(s1)}`);
+      }
+      // Step 2: slot 's' switches to 'quad' ([0, 1, 2, 0, 2, 3])
+      const s2 = meshOf(runner(src, swapPoseHalf), 's').triangles;
+      if (JSON.stringify(s2) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
+        diffsOut.push(`step2 s/quad attachment swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s2)}`);
+      }
+      // Step 3: skin swap to 'alt' where slot 's' placeholder 'base' has quad topology ([0, 1, 2, 0, 2, 3])
+      const s3 = meshOf(runner(src, altPose), 's').triangles;
+      if (JSON.stringify(s3) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
+        diffsOut.push(`step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s3)}`);
+      }
+    };
+
+    runPlantSequence((src, p) => frameOf(src, p), realDiffs);
+    const slotOnlyMap = new Map<string, number[][]>();
+    runPlantSequence((src, p) => referenceFrameOfOracle(src, p, slotOnlyMap, 'slot-only'), slotOnlyMutantDiffs);
+    const slotAttachmentMap = new Map<string, number[][]>();
+    runPlantSequence(
+      (src, p) => referenceFrameOfOracle(src, p, slotAttachmentMap, 'slot-attachment-first'),
       slotAttachmentFirstMutantDiffs,
-    },
-  };
+    );
+
+    return {
+      canonicalRigs,
+      readonlyOutput: {
+        canonicalFrozen,
+        mutateCanonicalThrew,
+        reverseCanonicalThrew,
+        retainedUnchangedAfterAttempt,
+        nextFrameUnchangedAfterAttempt,
+      },
+      topologyCases: {
+        skinSwapSamePlaceholder: {
+          defaultTriangles,
+          altTriangles,
+          restoredDefaultSameRef,
+          sharedSourceDefaultTriangles,
+          sharedSourceAltTriangles,
+          sharedSourceRestoredSameRef,
+        },
+        linkedMesh: {
+          linkedQuadTriangles,
+          linkedMatchesSourceRef,
+          linkedTriTriangles,
+          linkedSwitchRestoredSameRef,
+        },
+        attachmentSwap: {
+          baseTriangles,
+          quadTriangles,
+          restoredBaseSameRef,
+          domSwapDrawn,
+          domHeldReused,
+        },
+        distinctFrozen: {
+          distinctFrozenEqualReused,
+          distinctFrozenWarmScanReads,
+        },
+        lookupFallbacks: {
+          reorderedDrawOrderDiffs,
+          clippedMaskDiffs,
+        },
+      },
+      plants: {
+        realDiffs,
+        slotOnlyMutantDiffs,
+        slotAttachmentFirstMutantDiffs,
+      },
+    };
+  } finally {
+    topologyAssets.dispose();
+  }
+}
+
+/**
+ * #198: `frameOf`'s contract on input no rigc build hands it, kept apart from
+ * the renderer probes, which read frames of rigc builds alone (CLAUDE.md,
+ * *Testing*). Nothing here renders. Every pose is one rig-c/core's live track
+ * posed off the topology fixture's build, passed through one named operation
+ * and nothing else: a structured clone — the same numbers with no array
+ * frozen, which is what a pose is after crossing a worker boundary — or its
+ * slot rows or drawn rows reversed. Each case is held to the pre-#198
+ * reference frame or to the triangle cache's own state.
+ */
+async function posedFrameInputContractProbe(): Promise<PosedFrameInputContractProbeResult> {
+  const assets = await loadRig('topology');
+  try {
+    const read = assets.document as ReadDocument;
+    const baseView = underSkin(read.doc, 'base');
+    const altView = underSkin(read.doc, 'alt');
+    const basePose = openTrack(baseView, 'swap', { loop: false, reset: 'animation' }).first;
+    const altPose = openTrack(altView, 'swap', { loop: false, reset: 'animation' }).first;
+    const meshOf = (frame: PosedFrame, slot: string): Extract<PosedSlot, { kind: 'mesh' }> => frame.order.find((s) => s.slot === slot) as Extract<PosedSlot, { kind: 'mesh' }>;
+    const trianglesIn = (pose: RawPose, slot: string): readonly number[] | undefined => pose.drawn.find((d) => d.slot === slot)?.triangles;
+
+    // Cloned poses: the value-checked fallback. Two clones of one pose are served one kept list; a clone
+    // of the `alt` pose, whose `s`/`base` is the two-triangle mesh under the same key, is a new one.
+    const source = frameSource(baseView, read.parsed);
+    const clone1 = structuredClone(basePose);
+    const clone2 = structuredClone(basePose);
+    const cloneAlt = structuredClone(altPose);
+    const cloneInputFrozen = Object.isFrozen(trianglesIn(clone1, 's'));
+    const m1 = meshOf(frameOf(source, clone1), 's').triangles;
+    const m2 = meshOf(frameOf(source, clone2), 's').triangles;
+    const m3 = meshOf(frameOf(source, cloneAlt), 's').triangles;
+    const cache = source.triangles.get('s')?.get('base');
+    const clonedArrays = [clone1, clone2, cloneAlt].map((p) => trianglesIn(p, 's'));
+    let mutateFallbackThrew = false;
+    try {
+      m1.push(3);
+    } catch {
+      mutateFallbackThrew = true;
+    }
+
+    // Reordered rows: the lookups' fallbacks, against the reference frame.
+    const oracleSource = frameSource(baseView, read.parsed);
+    const legacyTris = new Map<string, number[][]>();
+    const checkSource = frameSource(baseView, read.parsed);
+    const differs = (pose: RawPose): number => (JSON.stringify(frameOf(checkSource, pose)) === JSON.stringify(referenceFrameOfOracle(oracleSource, pose, legacyTris)) ? 0 : 1);
+
+    return {
+      cloneInputFrozen,
+      mutableFallbackFrozen: Object.isFrozen(m1),
+      mutateFallbackThrew,
+      fallbackIsCopy: clonedArrays.every((a) => a !== m1 && a !== m3),
+      clonedInputsKeptByRef: clonedArrays.filter((a) => a !== undefined && cache?.byRef.has(a) === true).length,
+      mutableRefReused: m1 === m2,
+      changedTopologyNewRef: m3 !== m1 && JSON.stringify(m3) === JSON.stringify([0, 1, 2, 0, 2, 3]) && Object.isFrozen(m3),
+      reorderedSlotsDiffs: differs({ ...basePose, slots: [...basePose.slots].reverse() }),
+      reorderedRegionsDiffs: differs({ ...basePose, drawn: [...basePose.drawn].reverse() }),
+    };
+  } finally {
+    assets.dispose();
+  }
 }
 
 window.rigPlayHarness = {
@@ -10350,5 +10202,6 @@ window.rigPlayHarness = {
   seekSnapshotProbe,
   slotIdentityProbe,
   posedFrameTrianglesProbe,
+  posedFrameInputContractProbe,
 };
 

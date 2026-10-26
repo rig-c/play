@@ -187,18 +187,14 @@ test('posedFrame frozen topology fast path, readonly output, fallback, and stale
   // 2. Readonly output (`Object.freeze`) and mutation isolation on retained frames.
   expect(probe.readonlyOutput).toEqual({
     canonicalFrozen: true,
-    mutableFallbackFrozen: true,
     mutateCanonicalThrew: true,
-    mutateFallbackThrew: true,
     reverseCanonicalThrew: true,
     retainedUnchangedAfterAttempt: true,
     nextFrameUnchangedAfterAttempt: true,
-    callerInputMutationIsolated: true,
-    inPlaceCallerMutationDetected: true,
-    inPlaceMutatedOutputFrozen: true,
   });
 
-  // 3. Skin swaps with the same placeholder, linked meshes, attachment swaps, mutable fallback, and lookup fallbacks.
+  // 3. On the rigc-built topology fixture: skin swaps with the same placeholder, linked meshes, attachment swaps,
+  // two distinct frozen arrays with one triangle list, and the lookup fallbacks a build's poses reach.
   expect(probe.topologyCases.skinSwapSamePlaceholder).toEqual({
     defaultTriangles: [0, 1, 2],
     altTriangles: [0, 1, 2, 0, 2, 3],
@@ -220,16 +216,12 @@ test('posedFrame frozen topology fast path, readonly output, fallback, and stale
     domSwapDrawn: 1,
     domHeldReused: 1,
   });
-  expect(probe.topologyCases.mutableFallback).toEqual({
-    mutableRefReused: true,
-    mutableChangedNewRef: true,
+  expect(probe.topologyCases.distinctFrozen).toEqual({
     distinctFrozenEqualReused: true,
     distinctFrozenWarmScanReads: 0,
   });
   expect(probe.topologyCases.lookupFallbacks).toEqual({
     reorderedDrawOrderDiffs: 0,
-    reorderedSlotsDiffs: 0,
-    reorderedRegionsDiffs: 0,
     clippedMaskDiffs: 0,
   });
 
@@ -242,5 +234,21 @@ test('posedFrame frozen topology fast path, readonly output, fallback, and stale
   expect(probe.plants.slotAttachmentFirstMutantDiffs).toEqual([
     'step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got [0,1,2]',
   ]);
+});
+
+test('posedFrame on input no rigc build hands it: cloned poses take the value-checked fallback, reordered rows the lookup fallbacks (#198)', async ({ page }) => {
+  await openHarness(page);
+  const probe = await page.evaluate(() => window.rigPlayHarness.posedFrameInputContractProbe());
+  expect(probe).toEqual({
+    cloneInputFrozen: false,
+    mutableFallbackFrozen: true,
+    mutateFallbackThrew: true,
+    fallbackIsCopy: true,
+    clonedInputsKeptByRef: 0,
+    mutableRefReused: true,
+    changedTopologyNewRef: true,
+    reorderedSlotsDiffs: 0,
+    reorderedRegionsDiffs: 0,
+  });
 });
 
