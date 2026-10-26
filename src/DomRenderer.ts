@@ -1,7 +1,7 @@
 import { renderFrameOf } from './liveFrameSource.js';
 import type { LiveFrame } from './liveFrame.js';
 import { syncedPixelRatio } from './pixelRatio.js';
-import { type PageSource, type RegionImage, straightAlphaSource } from './DomTexture.js';
+import { type AtlasRegion, drawAtlasRegion, type PageSource, type RegionImage, straightAlphaSource } from './DomTexture.js';
 import { getMeshGlBlitter, triangleReadSource, type MeshBlitJob } from './MeshGlBlitter.js';
 import type { BlendMode, PosedClip, PosedFrame, PosedMesh, PosedRegion, PosedSlot } from './posedFrame.js';
 
@@ -149,13 +149,15 @@ function sameMeshCoordinate(relative: number, cached: number, world: number, off
   return residual < 0.5 && residual <= tolerance;
 }
 
-type SlotKind = 'image' | 'canvas';
+type SlotKind = 'image' | 'canvas' | 'region-canvas';
 
 interface SlotView {
   kind: SlotKind;
   el: HTMLImageElement | HTMLCanvasElement;
   /** Region name currently shown (image kind), to skip src rewrites. */
   regionName: string;
+  /** Native (1) or the minification band last drawn for an atlas region. */
+  regionRatio: number;
   visible: boolean;
   zIndex: number;
   opacity: number;
@@ -263,6 +265,8 @@ export class DomRenderer {
   clipping = true;
   /** Clips applied last frame — distinct clip polygons over the drawn slots. */
   clipCount = 0;
+  /** Atlas rigid canvases rasterized in the last frame; never includes meshes. */
+  rigidRasterCount = 0;
   /**
    * Clips in the frame NOT applied last frame: `clipping` is false, or the
    * polygon has fewer than three points. A clip the runtime itself ignores (a
@@ -373,6 +377,8 @@ export class DomRenderer {
    *   and scaling of the root belong to the caller.
    * @param regionImages Unpacked per-region bitmaps (for the rigid tier),
    *   keyed by region name — `PosedRegion.region`.
+   * @param atlasRegions Optional page-backed rigid sources, from createAtlasRegions
+   *   or ModelAssets.atlasRegions. A matching entry takes precedence over regionImages.
    * @param pages Page images (for the mesh tier), keyed by page name —
    *   `PosedMesh.page`. Read on every mesh draw, so a caller may fill it after
    *   construction.
@@ -381,6 +387,7 @@ export class DomRenderer {
     private readonly root: HTMLElement,
     private readonly regionImages: ReadonlyMap<string, RegionImage>,
     private readonly pages: ReadonlyMap<string, HTMLImageElement> = new Map(),
+    private readonly atlasRegions: ReadonlyMap<string, AtlasRegion> = new Map(),
   ) {}
 
   /**
@@ -452,6 +459,7 @@ export class DomRenderer {
   render(input: PosedFrame | LiveFrame): void {
     const frame = renderFrameOf(input);
     this.clipCount = 0;
+    this.rigidRasterCount = 0;
     this.clipSkipCount = 0;
     this.clipWriteCount = 0;
     this.meshCount = 0;
@@ -556,17 +564,11 @@ export class DomRenderer {
   // --- rigid tier -----------------------------------------------------------
 
   private renderRegion(slot: PosedRegion): SlotView | null {
-    const regionImage = this.regionImages.get(slot.region);
+    const atlas = this.atlasRegions.get(slot.region);
+    const regionImage = atlas ? atlas.region : this.regionImages.get(slot.region);
     if (!regionImage) return null;
 
-    const view = this.view(slot.slot, 'image');
-    const img = view.el as HTMLImageElement;
-    if (view.regionName !== slot.region) {
-      view.regionName = slot.region;
-      img.src = regionImage.url;
-      img.width = regionImage.width;
-      img.height = regionImage.height;
-    }
+    const view = this.view(slot.slot, atlas ? 'region-canvas' : 'image');
 
     const corners = slot.corners;
     for (let v = 0; v < 8; v++) regionVertices[v] = corners[v];
@@ -584,6 +586,27 @@ export class DomRenderer {
     const b = (ury - uly) / w;
     const c = (blx - ulx) / h;
     const d = (bly - uly) / h;
+    // pixelRatio is the caller's declared root scale × device ratio; no layout
+    // reads here. Include the region's posed affine stretch. Round UP into
+    // ×1.25 bands: at most 25% linear over-resolution, never undersampled,
+    // and ordinary motion within a band reuses the same native cut raster.
+    const effective = this.pixelRatio * Math.max(Math.hypot(a, b), Math.hypot(c, d));
+    const band = effective > 0 && effective < 1 ? 1.25 ** Math.ceil(Math.log(effective) / Math.log(1.25)) : 1;
+    if (view.regionName !== slot.region || (atlas && view.regionRatio !== band)) {
+      view.regionName = slot.region;
+      view.regionRatio = band;
+      if (atlas) {
+        drawAtlasRegion(view.el as HTMLCanvasElement, atlas, band < 1 ? band : undefined);
+        view.el.style.width = `${w}px`;
+        view.el.style.height = `${h}px`;
+        this.rigidRasterCount++;
+      } else {
+        const img = view.el as HTMLImageElement;
+        img.src = this.regionImages.get(slot.region)!.url;
+        img.width = w;
+        img.height = h;
+      }
+    }
     this.setTransform(view, `matrix(${a},${b},${c},${d},${ulx},${uly})`);
     // Rigid elements carry a full affine, so the clip polygon rides its
     // inverse into the local (atlas-unit) frame the <img> box spans.
@@ -1130,6 +1153,7 @@ export class DomRenderer {
         kind,
         el,
         regionName: '',
+        regionRatio: -1,
         visible: false,
         zIndex: -1,
         opacity: 1,

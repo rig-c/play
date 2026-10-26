@@ -6,6 +6,13 @@ export function loadProfilePlugin(): Plugin {
     name: 'load-profile',
     enforce: 'pre',
     transform(source, id) {
+      if (id.split('?')[0].endsWith('/src/DomRenderer.ts') && !id.includes('/base.generated/')) {
+        const boundary = 'drawAtlasRegion(view.el as HTMLCanvasElement, atlas, band < 1 ? band : undefined);';
+        if (source.split(boundary).length !== 2) throw new Error('LOAD_PROFILE_BOUNDARY: rigid raster');
+        return source.replace(boundary, `const __rigidStart = performance.now();
+        ${boundary}
+        globalThis.__loadTrace?.push({ name: 'rigid-region-raster', start: __rigidStart, end: performance.now() });`);
+      }
       const coreReader = id.split('?')[0].endsWith('/rig-c/src/core/index.ts');
       const textureReader = id.split('?')[0].endsWith('/src/DomTexture.ts');
       if (!coreReader && !textureReader && !id.split('?')[0].endsWith('/src/loadModel.ts')) return;

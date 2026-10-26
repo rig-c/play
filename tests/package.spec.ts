@@ -171,6 +171,7 @@ test('the package entry resolves by name in node and exposes its public API', ()
     'CanvasRenderer',
     'DomRenderer',
     'RigPlayer',
+    'createAtlasRegions',
     'loadModel',
     'readSetupMesh',
     'revokeRegions',

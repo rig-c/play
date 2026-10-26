@@ -1,10 +1,11 @@
 import { type CompiledDocument, CORE_DOCUMENT_SPECS, CoreInputError, readModel, readSetupMesh as coreReadSetupMesh, underNoSkin } from 'rig-c/core';
-import { type RegionImage, revokeRegions, unpackRegions } from './DomTexture.js';
+import { type AtlasRegion, createAtlasRegions, type RegionImage, revokeRegions, unpackRegions } from './DomTexture.js';
 
 /**
  * Loads a rig built by `rigc build`: the compiled model document
  * (`skeleton.model.json`, spec `rigc-compiled/3`) and the page images its
- * `pages` section names, cut into region bitmaps once.
+ * `pages` section names. The default cuts region bitmaps once; the atlas
+ * option retains page-backed descriptors without encoding region PNGs.
  *
  * The document states everything the player reads — the skeleton, the
  * animations, and where every region sits on its page — so the `.atlas` and
@@ -33,7 +34,8 @@ export interface LoadModelOptions {
   fetch?: typeof globalThis.fetch;
   /**
    * What the region cut produces — the rigid tier's per-region bitmaps, which
-   * only the DOM mode draws. `'blob'` (the default): `blob:` URLs the load
+   * only the DOM mode draws. `'atlas'`: opt-in page-backed rigid canvases,
+   * no PNG encode and an empty regionImages map. `'blob'` (default): `blob:` URLs the load
    * owns and `dispose` frees. `'data'`: `data:` URLs, for a content policy or
    * a snapshot that does not carry `blob:`; nothing to free. `'none'`: no cut
    * at all, for a load that only ever draws in the canvas mode — the pages
@@ -51,7 +53,7 @@ export interface LoadModelOptions {
 }
 
 /** `LoadModelOptions.regions`: how, or whether, the regions are cut. */
-export type RegionLoading = 'blob' | 'data' | 'none';
+export type RegionLoading = 'atlas' | 'blob' | 'data' | 'none';
 
 /**
  * One attachment set read from `sets.json` (`spine-parts-sets/1` or
@@ -104,9 +106,11 @@ export interface ModelAssets {
   readonly stage: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } | null;
   /** How the regions were cut (`LoadModelOptions.regions`): `'none'` means `regionImages` is empty and only the canvas mode can draw. */
   readonly regions: RegionLoading;
-  /** Unpacked per-region bitmaps, keyed by region name — the rigid tier's. Empty on a `regions: 'none'` load. */
+  /** Complete ready URL map on blob/data loads; empty on atlas/none loads. */
   readonly regionImages: Map<string, RegionImage>;
-  /** Page images, keyed by the document's page names — the mesh tier's. */
+  /** Page-backed rigid sources on an atlas load; empty on explicit blob/data/none loads. */
+  readonly atlasRegions: Map<string, AtlasRegion>;
+  /** Page images, keyed by the document's page names; shared by meshes and atlas regions. */
   readonly pageImages: Map<string, HTMLImageElement>;
   /**
    * The document as `rig-c/core` read it. Opaque to callers: the player poses
@@ -445,8 +449,8 @@ export async function loadModel(options: LoadModelOptions): Promise<ModelAssets>
     );
   }
   const regions = options.regions ?? 'blob';
-  if (regions !== 'blob' && regions !== 'data' && regions !== 'none') {
-    throw new Error(`regions must be 'blob', 'data' or 'none', got ${String(options.regions)}`);
+  if (regions !== 'atlas' && regions !== 'blob' && regions !== 'data' && regions !== 'none') {
+    throw new Error(`regions must be 'atlas', 'blob', 'data' or 'none', got ${String(options.regions)}`);
   }
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const resolvePage = options.resolvePage ?? resolveAgainstModel;
@@ -461,7 +465,7 @@ export async function loadModel(options: LoadModelOptions): Promise<ModelAssets>
   );
 
   const sets = await loadSets(fetchImpl, modelUrl, options.setsUrl, read.doc);
-  const regionImages = regions === 'none' ? new Map<string, RegionImage>() : await unpackRegions(pages, pageImages, { encoding: regions });
+  const regionImages = regions === 'none' || regions === 'atlas' ? new Map<string, RegionImage>() : await unpackRegions(pages, pageImages, { encoding: regions });
 
   let disposed = false;
   return {
@@ -472,6 +476,7 @@ export async function loadModel(options: LoadModelOptions): Promise<ModelAssets>
     stage: stageOf(read.doc),
     regions,
     regionImages,
+    atlasRegions: regions === 'atlas' ? createAtlasRegions(pages, pageImages) : new Map(),
     pageImages,
     document: read,
     dispose(): void {

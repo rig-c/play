@@ -83,6 +83,7 @@ try {
             delete sample.snapshot;
             rows.push({ rig: rig.name, pair: i, cache, requests, ...sample });
             if (dry) {
+              if (arm === 'candidate' && cache === 'cold' && rig.regions === 'blob') await page.evaluate(rig => window.loadBench.verifyRegionEncodings(rig), rig);
               if (cache === 'cold') await page.screenshot({ path: `bench-results/203/${rig.name.replace('/', '-')}-${arm}.png` });
               await page.evaluate(() => window.loadBench.cleanup());
             }
@@ -98,7 +99,7 @@ try {
   const summary = [];
   const envelope = (row, name) => {
     const spans = row.spans.filter(s => s.name === name);
-    if (name === 'texture-upload-submit' || name.startsWith('gl-') || ['page-unpremultiply', 'page-readback', 'page-unpremultiply-loop', 'page-writeback', 'region-draw-submit'].includes(name)) return spans.length ? spans.reduce((sum, s) => sum + s.end - s.start, 0) : null;
+    if (name === 'texture-upload-submit' || name.startsWith('gl-') || ['page-unpremultiply', 'page-readback', 'page-unpremultiply-loop', 'page-writeback', 'region-draw-submit', 'rigid-region-raster'].includes(name)) return spans.length ? spans.reduce((sum, s) => sum + s.end - s.start, 0) : null;
     return spans.length ? Math.max(...spans.map(s => s.end)) - Math.min(...spans.map(s => s.start)) : null;
   };
   for (const rig of rigs) for (const cache of ['cold', 'warm']) for (const arm of ['base', 'candidate', 'official']) {
@@ -116,7 +117,7 @@ try {
       });
       if (deltas.length) pairedPhaseDeltaMs[name] = { n: deltas.length, ...stats(deltas) };
     }
-    summary.push({ rig: rig.name, cache, arm, n: set.length, submitMs: stats(set.map(r => r.submitMs)), glCompletedMs: stats(set.map(r => r.glCompletedMs)), pairedSubmitDeltaMs: stats(set.map(r => r.submitMs - base.find(b => b.pair === r.pair).submitMs)), pairedGlCompletedDeltaMs: stats(set.map(r => r.glCompletedMs - base.find(b => b.pair === r.pair).glCompletedMs)), phases, pairedPhaseDeltaMs });
+    summary.push({ rig: rig.name, cache, arm, n: set.length, submitMs: stats(set.map(r => r.submitMs)), glCompletedMs: stats(set.map(r => r.glCompletedMs)), firstFrameReadyMs: stats(set.map(r => r.firstFrameReadyMs)), paintOpportunityMs: stats(set.map(r => r.paintOpportunityMs)), pairedSubmitDeltaMs: stats(set.map(r => r.submitMs - base.find(b => b.pair === r.pair).submitMs)), pairedGlCompletedDeltaMs: stats(set.map(r => r.glCompletedMs - base.find(b => b.pair === r.pair).glCompletedMs)), pairedFirstFrameReadyDeltaMs: stats(set.map(r => r.firstFrameReadyMs - base.find(b => b.pair === r.pair).firstFrameReadyMs)), pairedPaintOpportunityDeltaMs: stats(set.map(r => r.paintOpportunityMs - base.find(b => b.pair === r.pair).paintOpportunityMs)), phases, pairedPhaseDeltaMs });
   }
   writeFileSync('bench-results/203/load-results.json', JSON.stringify({ schema: 'load-profile/2', dry, browser: browser.version(), caveat: 'Headless Chromium CPU/submission and software GPU path; GL queue completion is recorded separately; no device FPS, physical GPU execution, or display latency claim. Async loads cannot share one animation frame; alternating paired fresh contexts replace same-frame AB. Module import precedes t0. Cold means fresh browser context, not empty OS/network/server caches. Warm means second asset load with fresh player and renderer.', sourceHashes, inputHashes, rows, summary }, null, 2));
   console.log(`load profile: ${rows.length} samples; ${summary.length} summary rows; ${dry ? 'DRY RUN (timings not evidence)' : 'measured'}; bench-results/203/load-results.json`);

@@ -1,3 +1,4 @@
+import { atlasNativeRoundtrip } from './atlasNativeRoundtrip';
 import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
 import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
@@ -10,6 +11,7 @@ import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physi
 
 import {
   type AdjustableBones,
+  createAtlasRegions,
   loadModel,
   type ModelAssets,
   type PageLayout,
@@ -25,7 +27,7 @@ import { CanvasRenderer } from '../src/CanvasRenderer';
 import { DomRenderer } from '../src/DomRenderer';
 import type { ReadDocument } from '../src/loadModel';
 import { getMeshGlBlitter, glContextCount } from '../src/MeshGlBlitter';
-import { straightAlphaDerivations, straightAlphaSource } from '../src/DomTexture';
+import { drawAtlasRegion, straightAlphaDerivations, straightAlphaSource } from '../src/DomTexture';
 import { clipCover, type FrameSource, frameOf, frameSource, type PosedClip, type PosedFrame, type PosedSlot } from '../src/posedFrame';
 import { layoutRegions, parseAtlas, withPma } from './atlasLayout';
 import { frameAt, loadRig, poseAt, rigidOnly, scaledFrame } from './rigFrames';
@@ -241,6 +243,9 @@ export interface RigPlayHarness {
   passThroughProbe(): Promise<PassThroughProbeResult>;
   rotatedCutProbe(): Promise<RotatedCutProbeResult>;
   unpackFailureProbe(): Promise<UnpackFailureProbeResult>;
+  atlasNativeRoundtrip: typeof atlasNativeRoundtrip;
+  atlasLoadingProbe(): Promise<{ defaultMode: string; defaultRegions: number; atlasMode: string; urls: number; descriptors: number; minted: number; encodes: number; initialRasters: number; repeatRasters: number; inBandRasters: number; crossedRasters: number; nativeRasters: number; sharedSurvives: boolean }>;
+  atlasRigidStage(options: AtlasRigidOptions): Promise<{ regions: number; minted: number; meshBacking: number; nativeChanged: number; nativeGateChanged: number; nativeChannels: number; rigidRasters: number; repeatRasters: number }>;
   loaderProbe(): Promise<LoaderProbeResult>;
   loaderFailureProbe(): Promise<LoaderFailureProbeResult>;
   glTextureProbe(): Promise<GlTextureProbeResult>;
@@ -10137,6 +10142,9 @@ async function posedFrameInputContractProbe(): Promise<PosedFrameInputContractPr
 }
 
 window.rigPlayHarness = {
+  atlasNativeRoundtrip,
+  atlasLoadingProbe,
+  atlasRigidStage,
   runtimeEventsProbe,
   runtimeSeekEventsProbe,
   runtimeSkinProbe,
@@ -10219,3 +10227,125 @@ window.rigPlayHarness = {
   posedFrameInputContractProbe,
 };
 
+
+
+/** Direct old URL-image versus page-canvas rigid raster comparison (#213). */
+interface AtlasRigidOptions {
+  rig: string;
+  animation: string;
+  atlas: boolean;
+  pageEncoding?: 'blob' | 'data';
+  pma?: boolean;
+  scale?: number;
+  tint?: boolean;
+  defect?: boolean;
+  half?: boolean;
+  nativeReadback?: 'direct' | 'png-roundtrip';
+  meshOnly?: boolean;
+  set?: string;
+  wind?: [number, number];
+}
+let atlasRigidCleanup: (() => void) | undefined;
+async function atlasRigidStage(options: AtlasRigidOptions): Promise<{ regions: number; minted: number; meshBacking: number; nativeChanged: number; nativeGateChanged: number; nativeChannels: number; rigidRasters: number; repeatRasters: number }> {
+  atlasRigidCleanup?.();
+  const assets = await loadRig(options.rig);
+  let layout: readonly PageLayout[] = (assets.document as ReadDocument).doc.pages!;
+  let images = assets.pageImages;
+  let urls = assets.regionImages;
+  let ownedUrls = false;
+  const pageUrls: string[] = [];
+  if (options.pma || options.half) {
+    const scene = await pmaScene({ page: options.pma ? 'pma' : 'straight', pageScale: options.half ? 0.5 : 1 } as PmaStageOptions);
+    layout = scene.layout; images = scene.pageImages; urls = scene.regionImages;
+  }
+  if (options.pageEncoding) {
+    const replacement = new Map<string, HTMLImageElement>();
+    for (const [name, image] of images) {
+      const blob = await (await fetch(image.src)).blob();
+      const url = options.pageEncoding === 'blob' ? URL.createObjectURL(blob) : await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(blob);
+      });
+      if (options.pageEncoding === 'blob') pageUrls.push(url);
+      const img = new Image(); img.src = url; await img.decode(); replacement.set(name, img);
+    }
+    images = replacement;
+    urls = await unpackRegions(layout, images);
+    ownedUrls = true;
+  }
+  for (const entry of urls.values()) { const img = new Image(); img.src = entry.url; await img.decode(); }
+  const stage = document.createElement('div'); stage.id = 'atlas-rigid-stage';
+  stage.style.cssText = 'position:absolute;left:0;top:0;width:640px;height:600px;overflow:hidden;background:#14161a';
+  const root = document.createElement('div');
+  root.style.cssText = `position:absolute;left:280px;top:490px;transform-origin:0 0;transform:scale(${options.scale ?? 0.75})`;
+  stage.append(root); document.body.append(stage);
+  const renderer = new DomRenderer(root, options.atlas ? new Map() : urls, images, options.atlas ? createAtlasRegions(layout, images) : new Map());
+  renderer.meshBackend = 'webgl'; renderer.pixelRatio = options.scale ?? 0.75;
+  const poser = new RigPlayer(document.createElement('div'), assets);
+  if (options.tint) poser.color = [1, 144 / 255, 96 / 255, 1];
+  if (options.set) poser.setSet(options.set);
+  poser.play(options.animation);
+  if (options.wind) poser.environment({ wind: options.wind });
+  poser.seek(1.2);
+  let frame = poser.posedFrame(); poser.dispose();
+  if (options.pma) frame = withPmaSlots(frame);
+  if (options.meshOnly) frame = { order: frame.order.filter(s => s.kind === 'mesh') };
+  let nativeChanged = 0, nativeGateChanged = 0, nativeChannels = 0;
+  for (const [name, entry] of createAtlasRegions(layout, images)) {
+    const c = document.createElement('canvas'); drawAtlasRegion(c, entry);
+    const x = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    const img = new Image(); img.src = urls.get(name)!.url; await img.decode();
+    const d = document.createElement('canvas'); d.width = img.naturalWidth; d.height = img.naturalHeight;
+    const ctx = d.getContext('2d')!; ctx.drawImage(img, 0, 0);
+    const y = ctx.getImageData(0, 0, d.width, d.height).data;
+    // Linux WebKit's direct getImageData and PNG readback round the
+    // premultiplied store differently. Compare the same representation on
+    // both sides for encoded cuts there; whole-page URL pass-throughs have
+    // no encode and keep the direct path. Raw differences remain reported.
+    let gate = x;
+    if (options.nativeReadback === 'png-roundtrip' && urls.get(name)!.url !== entry.image.src) {
+      const roundtrip = new Image(); roundtrip.src = c.toDataURL('image/png'); await roundtrip.decode();
+      ctx.clearRect(0, 0, d.width, d.height); ctx.drawImage(roundtrip, 0, 0);
+      gate = ctx.getImageData(0, 0, d.width, d.height).data;
+    }
+    if (x.length !== y.length || gate.length !== y.length) throw new Error('native region dimensions differ');
+    nativeChannels += x.length;
+    for (let i = 0; i < x.length; i++) { if (x[i] !== y[i]) nativeChanged++; if (gate[i] !== y[i]) nativeGateChanged++; }
+  }
+  renderer.render(frame);
+  if (options.defect) { const first = root.querySelector('img,canvas') as HTMLElement | null; if (first) first.style.visibility = 'hidden'; }
+  const rigidRasters = renderer.rigidRasterCount;
+  renderer.render(frame);
+  const repeatRasters = renderer.rigidRasterCount;
+  const minted = options.atlas ? 0 : urls.size;
+  atlasRigidCleanup = () => { renderer.dispose(); stage.remove(); assets.dispose(); if (ownedUrls) revokeRegions(urls); for (const url of pageUrls) URL.revokeObjectURL(url); };
+  await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  return { regions: frame.order.filter(s => s.kind === 'region').length, minted, meshBacking: renderer.meshBackingPixels, nativeChanged, nativeGateChanged, nativeChannels, rigidRasters, repeatRasters };
+}
+
+
+/** Default URL contract and explicit atlas ownership/scale invalidation. */
+async function atlasLoadingProbe() {
+  const normal = await loadModel({ modelUrl: '/rigs/turned/skeleton.model.json' });
+  const defaultMode = normal.regions, defaultRegions = normal.regionImages.size; normal.dispose();
+  let encodes = 0;
+  const toBlob = HTMLCanvasElement.prototype.toBlob, toDataURL = HTMLCanvasElement.prototype.toDataURL;
+  HTMLCanvasElement.prototype.toBlob = function (...args) { encodes++; return toBlob.apply(this, args); };
+  HTMLCanvasElement.prototype.toDataURL = function (...args) { encodes++; return toDataURL.apply(this, args); };
+  try {
+    const load = await trackObjectUrls(() => loadModel({ modelUrl: '/rigs/turned/skeleton.model.json', regions: 'atlas' }));
+    const assets = load.result;
+    const root = document.createElement('div'), other = document.createElement('div');
+    const a = new RigPlayer(root, assets), b = new RigPlayer(other, assets);
+    try {
+      a.play('hold'); b.play('hold');
+      const renderer = a.renderer as DomRenderer, frame = a.posedFrame();
+      renderer.pixelRatio = .4; renderer.render(frame); const initialRasters = renderer.rigidRasterCount;
+      renderer.render(frame); const repeatRasters = renderer.rigidRasterCount;
+      renderer.pixelRatio = .401; renderer.render(frame); const inBandRasters = renderer.rigidRasterCount;
+      renderer.pixelRatio = .6; renderer.render(frame); const crossedRasters = renderer.rigidRasterCount;
+      renderer.pixelRatio = 1; renderer.render(frame); const nativeRasters = renderer.rigidRasterCount;
+      a.dispose(); b.draw(); const sharedSurvives = other.querySelectorAll('canvas').length === 2 && [...assets.pageImages.values()].every(img => img.naturalWidth > 0);
+      return { defaultMode, defaultRegions, atlasMode: assets.regions, urls: assets.regionImages.size, descriptors: assets.atlasRegions.size, minted: load.created.length, encodes, initialRasters, repeatRasters, inBandRasters, crossedRasters, nativeRasters, sharedSurvives };
+    } finally { a.dispose(); b.dispose(); assets.dispose(); root.remove(); other.remove(); }
+  } finally { HTMLCanvasElement.prototype.toBlob = toBlob; HTMLCanvasElement.prototype.toDataURL = toDataURL; }
+}
