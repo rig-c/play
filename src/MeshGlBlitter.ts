@@ -41,6 +41,20 @@
 
 import type { BlendMode } from './posedFrame.js';
 
+// Frozen public topology remains the identity and mutation boundary. Only the
+// raster loops read this private, weakly held copy; it never enters a frame.
+const triangleReadSources = new WeakMap<object, ArrayLike<number>>();
+
+/** @internal Ordinary indices for raster reads, preserving mutable inputs live. */
+export function triangleReadSource(source: ArrayLike<number>): ArrayLike<number> {
+  let kept = triangleReadSources.get(source);
+  if (kept === undefined) {
+    kept = Object.isFrozen(source) ? Array.from(source) : source;
+    triangleReadSources.set(source, kept);
+  }
+  return kept;
+}
+
 export interface MeshBlitJob {
   /** Destination per-part canvas; the blit clears its full backing first. */
   canvas: HTMLCanvasElement;
@@ -349,7 +363,8 @@ class MeshGlBlitter {
     const data = this.vertexData;
     let f = 0;
     for (let i = 0; i < jobs.length; i++) {
-      const { vertices, uvs, triangles, ratio } = jobs[i];
+      const { vertices, uvs, ratio } = jobs[i];
+      const triangles = triangleReadSource(jobs[i].triangles);
       const ox = packX[i];
       const oy = packY[i];
       for (let t = 0; t < triangles.length; t++) {
