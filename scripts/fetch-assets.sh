@@ -186,6 +186,7 @@ test_rig named named --atlas-in art/named.atlas
 test_rig cloth cloth
 test_rig parameters parameters
 test_rig draw draw
+test_rig topology topology
 test_rig sets sets
 test_rig sets sets-packed --pack
 rm -rf "$RIGS_DEST/sets-packed/parts"

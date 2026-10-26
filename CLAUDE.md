@@ -459,7 +459,12 @@ v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
   Multiply/Screen slots, a keyed draw-order swap, named skins changing one
   region, a small window, a far inverse clip and an undrawn far attachment:
   `tests/draw-contract.spec.ts`, which pins the blend formula, visible DOM
-  updates and bounds. `sets` — two attachment sets (`smile`, `wink`) in
+  updates and bounds. `topology` — one slot showing a one-triangle and then a
+  two-triangle authored mesh, a second slot linking to each, a draw-order key,
+  and named skins filling the first slot's setup placeholder with the other
+  topology (`alt`) and with another mesh of the same triangle list (`twin`):
+  `posedFrameTrianglesProbe` and `posedFrameInputContractProbe` in
+  `tests/invariants.spec.ts` (#198). `sets` — two attachment sets (`smile`, `wink`) in
   `sets.json` (`rig-parts-sets/1`), a mesh base slot with a companion
   `face_still` slot, an uncovered `body` slot keyed by the track, and a `prop`
   slot replaced by one set and hidden by the other: `setsProbe` in

@@ -4,7 +4,7 @@ import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } 
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
-import { type LiveTrack, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
+import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
 
 import {
   type AdjustableBones,
@@ -24,7 +24,7 @@ import { DomRenderer } from '../src/DomRenderer';
 import type { ReadDocument } from '../src/loadModel';
 import { getMeshGlBlitter, glContextCount } from '../src/MeshGlBlitter';
 import { straightAlphaDerivations, straightAlphaSource } from '../src/DomTexture';
-import { frameOf, frameSource, type PosedClip, type PosedFrame, type PosedSlot } from '../src/posedFrame';
+import { clipCover, type FrameSource, frameOf, frameSource, type PosedClip, type PosedFrame, type PosedSlot } from '../src/posedFrame';
 import { layoutRegions, parseAtlas, withPma } from './atlasLayout';
 import { frameAt, loadRig, poseAt, rigidOnly, scaledFrame } from './rigFrames';
 
@@ -284,6 +284,84 @@ export interface RigPlayHarness {
   setEaseB5Probe(): Promise<B5Hashes>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
   slotIdentityProbe(): Promise<SlotIdentityProbeResult>;
+  posedFrameTrianglesProbe(): Promise<PosedFrameTrianglesProbeResult>;
+  posedFrameInputContractProbe(): Promise<PosedFrameInputContractProbeResult>;
+}
+
+export interface PosedFrameTrianglesProbeResult {
+  canonicalRigs: Array<{
+    rig: string;
+    frames: number;
+    meshSlotsPerFrame: number;
+    triangleIndicesPerFrame: number;
+    frameDiffs: number;
+    allFrozen: boolean;
+    allCanonicalRefEqual: boolean;
+    valueScanElementReads: number;
+    domWebglPixelDiffs: number;
+    domCanvas2dPixelDiffs: number;
+    canvasModePixelDiffs: number;
+    heldMeshReused: number;
+  }>;
+  readonlyOutput: {
+    canonicalFrozen: boolean;
+    mutateCanonicalThrew: boolean;
+    reverseCanonicalThrew: boolean;
+    retainedUnchangedAfterAttempt: boolean;
+    nextFrameUnchangedAfterAttempt: boolean;
+  };
+  topologyCases: {
+    skinSwapSamePlaceholder: {
+      defaultTriangles: number[];
+      altTriangles: number[];
+      restoredDefaultSameRef: boolean;
+      sharedSourceDefaultTriangles: number[];
+      sharedSourceAltTriangles: number[];
+      sharedSourceRestoredSameRef: boolean;
+    };
+    linkedMesh: {
+      linkedQuadTriangles: number[];
+      linkedMatchesSourceRef: boolean;
+      linkedTriTriangles: number[];
+      linkedSwitchRestoredSameRef: boolean;
+    };
+    attachmentSwap: {
+      baseTriangles: number[];
+      quadTriangles: number[];
+      restoredBaseSameRef: boolean;
+      domSwapDrawn: number;
+      domHeldReused: number;
+    };
+    distinctFrozen: {
+      distinctFrozenEqualReused: boolean;
+      distinctFrozenWarmScanReads: number;
+    };
+    lookupFallbacks: {
+      reorderedDrawOrderDiffs: number;
+      clippedMaskDiffs: number;
+    };
+  };
+  plants: {
+    realDiffs: string[];
+    slotOnlyMutantDiffs: string[];
+    slotAttachmentFirstMutantDiffs: string[];
+  };
+}
+
+/** `posedFrameInputContractProbe`: `frameOf` on a rigc-built pose cloned or with its rows reordered (#198). */
+export interface PosedFrameInputContractProbeResult {
+  /** Whether a cloned pose's triangle array is frozen — false, which is what puts it on the fallback. */
+  cloneInputFrozen: boolean;
+  mutableFallbackFrozen: boolean;
+  mutateFallbackThrew: boolean;
+  /** No frame hands out a cloned pose's own triangle array. */
+  fallbackIsCopy: boolean;
+  /** How many cloned arrays the identity cache keyed — 0: a mutable array is never trusted by identity. */
+  clonedInputsKeptByRef: number;
+  mutableRefReused: boolean;
+  changedTopologyNewRef: boolean;
+  reorderedSlotsDiffs: number;
+  reorderedRegionsDiffs: number;
 }
 
 export interface SlotIdentityProbeResult {
@@ -9469,6 +9547,587 @@ async function slotIdentityProbe(): Promise<SlotIdentityProbeResult> {
   }
 }
 
+/**
+ * Reference pre-#198 `frameOf` oracle (value-scanned triangles, unconditional
+ * Map preparations) and the planted stale-cache mutants for #198.
+ */
+function referenceFrameOfOracle(
+  source: FrameSource,
+  pose: RawPose,
+  legacyTriangles: Map<string, number[][]>,
+  mutant?: 'slot-only' | 'slot-attachment-first',
+): PosedFrame {
+  const { drawn: regions, why } = drawnRegions(source.doc, pose.shown, pose.drawOrder, source.uv);
+  if (regions === null) throw new Error(`the page UVs are not posed: ${why}`);
+  const regionOf = new Map(regions.map((r) => [r.slot, r]));
+  const rows = new Map(pose.slots.map((row) => [row[0], row]));
+  const z = new Map(pose.drawOrder.map((slot, index) => [slot, index]));
+  const cover = clipCover(pose, source.active, () => true);
+  const order: PosedSlot[] = [];
+  for (const d of pose.drawn) {
+    const bone = source.boneOf.get(d.slot);
+    if (bone === undefined || !source.active.has(bone)) continue;
+    const found = regionOf.get(d.slot)!;
+    const row = rows.get(d.slot)!;
+    const tint: [number, number, number, number] = [
+      (row[2] as number) * d.colour[0],
+      (row[3] as number) * d.colour[1],
+      (row[4] as number) * d.colour[2],
+      (row[5] as number) * d.colour[3],
+    ];
+    const darkRow = row[6];
+    const common = {
+      slot: d.slot,
+      z: z.get(d.slot) as number,
+      blend: (row[8] ?? 'Normal') as PosedSlot['blend'],
+      tint,
+      ...(darkRow === null ? {} : { dark: [darkRow[0] as number, darkRow[1] as number, darkRow[2] as number] as [number, number, number] }),
+      ...(cover.has(d.slot) ? { clip: cover.get(d.slot) as PosedClip } : {}),
+    };
+    const page = source.pages.get(found.found.page.name);
+    if (d.kind === 'region') {
+      let keptUvs = source.regionUvs.get(found.found);
+      if (keptUvs === undefined) {
+        keptUvs = regionPageUvs(found.found.region, found.found.page);
+        source.regionUvs.set(found.found, keptUvs);
+      }
+      order.push({
+        ...common,
+        kind: 'region',
+        region: found.region,
+        corners: d.vertices,
+        page: found.found.page.name,
+        pma: page?.pma === true,
+        uvs: keptUvs,
+      });
+    } else {
+      const art = found.art as readonly number[];
+      let byArt = source.uvs.get(found.found);
+      if (byArt === undefined) {
+        byArt = new Map();
+        source.uvs.set(found.found, byArt);
+      }
+      let keptUvs = byArt.get(art);
+      if (keptUvs === undefined) {
+        keptUvs = meshPageUvs(found.found.region, found.found.page, art);
+        byArt.set(art, keptUvs);
+      }
+      let keptTris: number[];
+      if (mutant === 'slot-only') {
+        const key = d.slot;
+        let lists = legacyTriangles.get(key);
+        if (lists === undefined) {
+          lists = [[...d.triangles]];
+          legacyTriangles.set(key, lists);
+        }
+        keptTris = lists[0];
+      } else if (mutant === 'slot-attachment-first') {
+        const key = `${d.slot}\u0000${d.attachment}`;
+        let lists = legacyTriangles.get(key);
+        if (lists === undefined) {
+          lists = [[...d.triangles]];
+          legacyTriangles.set(key, lists);
+        }
+        keptTris = lists[0];
+      } else {
+        const key = `${d.slot}\u0000${d.attachment}`;
+        let lists = legacyTriangles.get(key);
+        if (lists === undefined) {
+          lists = [];
+          legacyTriangles.set(key, lists);
+        }
+        const wanted = d.triangles;
+        let foundList = lists.find((list) => list.length === wanted.length && list.every((v, i) => v === wanted[i]));
+        if (foundList === undefined) {
+          foundList = [...wanted];
+          lists.push(foundList);
+        }
+        keptTris = foundList;
+      }
+      order.push({
+        ...common,
+        kind: 'mesh',
+        page: found.found.page.name,
+        pma: page?.pma === true,
+        vertices: d.vertices,
+        uvs: keptUvs,
+        triangles: keptTris,
+        sequence: d.sequenceIndex,
+      });
+    }
+  }
+  return { order };
+}
+
+/**
+ * #198 probe: frozen-topology identity fast path, mutable/custom value-checked
+ * fallback, `Object.freeze` readonly output, per-generation slot/order lookup
+ * preparation fallbacks, and the stale-cache mutant plants.
+ */
+async function posedFrameTrianglesProbe(): Promise<PosedFrameTrianglesProbeResult> {
+  const canonicalRigList: Array<[string, string]> = [
+    ['wind-wave', 'idle'],
+    ['look', 'turn'],
+    ['glow', 'burn'],
+    ['flex', 'wave'],
+    ['figure', 'walk'],
+    ['batch-context', 'idle'],
+  ];
+  const canonicalRigs: PosedFrameTrianglesProbeResult['canonicalRigs'] = [];
+
+  for (const [rig, preferredAnim] of canonicalRigList) {
+    const assets = await loadRig(rig);
+    try {
+      const read = assets.document as ReadDocument;
+      const view = underNoSkin(read.doc);
+      const source = frameSource(view, read.parsed);
+      const oracleSource = frameSource(view, read.parsed);
+      const legacyTris = new Map<string, number[][]>();
+      const anim = view.animations.find((a) => a.name === preferredAnim)?.name ?? view.animations[0].name;
+      const track = openTrack(view, anim, { loop: true, reset: 'animation' });
+      const frameCount = 24;
+      let frameDiffs = 0;
+      let allFrozen = true;
+      let allCanonicalRefEqual = true;
+      let valueScanElementReads = 0;
+      let meshSlotsPerFrame = 0;
+      let triangleIndicesPerFrame = 0;
+
+      // Wrap every cached list in `source.triangles` with a Proxy that counts
+      // index reads if `lists.find` ever scans an existing cached list.
+      const wrapListsWithReadCounter = (): void => {
+        for (const byAttachment of source.triangles.values()) {
+          for (const cache of byAttachment.values()) {
+            cache.lists = cache.lists.map(
+              (list) =>
+                new Proxy(list, {
+                  get(target, prop, receiver) {
+                    if (typeof prop === 'string' && /^\d+$/.test(prop)) valueScanElementReads++;
+                    return Reflect.get(target, prop, receiver);
+                  },
+                }),
+            );
+          }
+        }
+      };
+
+      let lastFrame: PosedFrame | null = null;
+      let lastOracleFrame: PosedFrame | null = null;
+      for (let f = 0; f < frameCount; f++) {
+        const pose = f === 0 ? track.first : track.step(1 / 60);
+        const actual = frameOf(source, pose);
+        if (f === 0) wrapListsWithReadCounter();
+        const expected = referenceFrameOfOracle(oracleSource, pose, legacyTris);
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) frameDiffs++;
+        const meshDrawn = pose.drawn.filter((d) => d.kind === 'mesh');
+        const meshSlots = actual.order.filter((s): s is Extract<PosedSlot, { kind: 'mesh' }> => s.kind === 'mesh');
+        if (f === 0) {
+          meshSlotsPerFrame = meshSlots.length;
+          triangleIndicesPerFrame = meshSlots.reduce((sum, m) => sum + m.triangles.length, 0);
+        }
+        for (let m = 0; m < meshSlots.length; m++) {
+          if (!Object.isFrozen(meshSlots[m].triangles)) allFrozen = false;
+          if (meshSlots[m].triangles !== meshDrawn[m].triangles) allCanonicalRefEqual = false;
+        }
+        lastFrame = actual;
+        lastOracleFrame = expected;
+      }
+
+      // Verify pixel parity between `actual` and `expected` across DomRenderer (webgl, canvas2d) and CanvasRenderer.
+      let domWebglPixelDiffs = 0;
+      let domCanvas2dPixelDiffs = 0;
+      let canvasModePixelDiffs = 0;
+      let heldMeshReused = 0;
+      if (lastFrame !== null && lastOracleFrame !== null) {
+        for (const backend of ['webgl', 'canvas2d'] as const) {
+          const rootA = makeGlRoot();
+          const rootB = makeGlRoot();
+          const renA = new DomRenderer(rootA, assets.regionImages, assets.pageImages);
+          const renB = new DomRenderer(rootB, assets.regionImages, assets.pageImages);
+          renA.pixelRatio = 1;
+          renB.pixelRatio = 1;
+          renA.meshBackend = backend;
+          renB.meshBackend = backend;
+          try {
+            renA.render(lastFrame);
+            renB.render(lastOracleFrame);
+            if (backend === 'webgl') {
+              renA.render(lastFrame);
+              heldMeshReused = renA.meshReuseCount;
+            }
+            const canvasesA = Array.from(rootA.querySelectorAll('canvas'));
+            const canvasesB = Array.from(rootB.querySelectorAll('canvas'));
+            let diffs = 0;
+            for (let c = 0; c < canvasesA.length; c++) {
+              const ca = canvasesA[c];
+              const cb = canvasesB[c];
+              if (!cb || ca.width !== cb.width || ca.height !== cb.height) {
+                diffs++;
+                continue;
+              }
+              const da = ca.getContext('2d')!.getImageData(0, 0, ca.width, ca.height).data;
+              const db = cb.getContext('2d')!.getImageData(0, 0, cb.width, cb.height).data;
+              for (let k = 0; k < da.length; k++) if (da[k] !== db[k]) diffs++;
+            }
+            if (backend === 'webgl') domWebglPixelDiffs = diffs;
+            else domCanvas2dPixelDiffs = diffs;
+          } finally {
+            renA.dispose();
+            renB.dispose();
+            rootA.remove();
+            rootB.remove();
+          }
+        }
+        const rootCA = makeGlRoot();
+        const rootCB = makeGlRoot();
+        const cRenA = new CanvasRenderer(rootCA, assets.pageImages);
+        const cRenB = new CanvasRenderer(rootCB, assets.pageImages);
+        cRenA.pixelRatio = 1;
+        cRenB.pixelRatio = 1;
+        try {
+          cRenA.render(lastFrame);
+          cRenB.render(lastOracleFrame);
+          const ca = rootCA.querySelector('canvas')!;
+          const cb = rootCB.querySelector('canvas')!;
+          const da = ca.getContext('2d')!.getImageData(0, 0, ca.width, ca.height).data;
+          const db = cb.getContext('2d')!.getImageData(0, 0, cb.width, cb.height).data;
+          for (let k = 0; k < da.length; k++) if (da[k] !== db[k]) canvasModePixelDiffs++;
+        } finally {
+          cRenA.dispose();
+          cRenB.dispose();
+          rootCA.remove();
+          rootCB.remove();
+        }
+      }
+
+      canonicalRigs.push({
+        rig,
+        frames: frameCount,
+        meshSlotsPerFrame,
+        triangleIndicesPerFrame,
+        frameDiffs,
+        allFrozen,
+        allCanonicalRefEqual,
+        valueScanElementReads,
+        domWebglPixelDiffs,
+        domCanvas2dPixelDiffs,
+        canvasModePixelDiffs,
+        heldMeshReused,
+      });
+    } finally {
+      assets.dispose();
+    }
+  }
+
+  // The topology fixture (`tests/rigs/topology/`, built by rigc through
+  // `scripts/fetch-assets.sh` like every test rig) carries every topology case
+  // the canonical rigs do not: slot `s` shows a one-triangle mesh (`base`, in
+  // the `base` skin) and from 0.5 a two-triangle one (`quad`); slot `t` shows a
+  // link to `quad` and from 0.5 a link to `base`, drawn under `s` from 0.5; the
+  // `alt` skin fills `s`/`base` with the two-triangle mesh, and `twin` with
+  // another one-triangle mesh whose triangle list equals `base`'s. Every pose
+  // below is one rig-c/core's live track posed off that build.
+  const topologyAssets = await loadRig('topology');
+  try {
+    const topologyRead = topologyAssets.document as ReadDocument;
+    const parsed = topologyRead.parsed;
+    const baseView = underSkin(topologyRead.doc, 'base');
+    const altView = underSkin(topologyRead.doc, 'alt');
+    const twinView = underSkin(topologyRead.doc, 'twin');
+    const firstPose = (view: typeof baseView): RawPose => openTrack(view, 'swap', { loop: false, reset: 'animation' }).first;
+    const basePose = firstPose(baseView);
+    const altPose = firstPose(altView);
+    const twinPose = firstPose(twinView);
+    const meshOf = (frame: PosedFrame, slot: string): Extract<PosedSlot, { kind: 'mesh' }> => frame.order.find((s) => s.slot === slot) as Extract<PosedSlot, { kind: 'mesh' }>;
+
+    // 2. Readonly output (`Object.freeze`): a frame's triangles cannot be written, by index or in place.
+    const roSource = frameSource(baseView, parsed);
+    const canonicalMesh = meshOf(frameOf(roSource, basePose), 's');
+    const canonicalFrozen = Object.isFrozen(canonicalMesh.triangles);
+    const snapshotBefore = [...canonicalMesh.triangles];
+    let mutateCanonicalThrew = false;
+    try {
+      canonicalMesh.triangles[0] = 999;
+    } catch {
+      mutateCanonicalThrew = true;
+    }
+    let reverseCanonicalThrew = false;
+    try {
+      canonicalMesh.triangles.reverse();
+    } catch {
+      reverseCanonicalThrew = true;
+    }
+    const retainedUnchangedAfterAttempt = JSON.stringify(canonicalMesh.triangles) === JSON.stringify(snapshotBefore);
+    const nextCanonicalMesh = meshOf(frameOf(roSource, basePose), 's');
+    const nextFrameUnchangedAfterAttempt =
+      nextCanonicalMesh.triangles === canonicalMesh.triangles &&
+      JSON.stringify(nextCanonicalMesh.triangles) === JSON.stringify(snapshotBefore);
+
+    // 3a. Skin swap with the same placeholder (`s`/`base`: one triangle under `base`, two under `alt`).
+    const srcBase = frameSource(baseView, parsed);
+    const srcAlt = frameSource(altView, parsed);
+    const fBase1 = meshOf(frameOf(srcBase, basePose), 's');
+    const fAlt = meshOf(frameOf(srcAlt, altPose), 's');
+    const fBase2 = meshOf(frameOf(srcBase, basePose), 's');
+    const defaultTriangles = [...fBase1.triangles];
+    const altTriangles = [...fAlt.triangles];
+    const restoredDefaultSameRef = fBase2.triangles === fBase1.triangles;
+
+    // The same on one shared `FrameSource`, where (`s`, `base`) receives both skins' topologies.
+    const sharedSkinSource = frameSource(baseView, parsed);
+    const sharedBase1 = meshOf(frameOf(sharedSkinSource, basePose), 's');
+    const sharedAlt = meshOf(frameOf(sharedSkinSource, altPose), 's');
+    const sharedBase2 = meshOf(frameOf(sharedSkinSource, basePose), 's');
+    const sharedSourceDefaultTriangles = [...sharedBase1.triangles];
+    const sharedSourceAltTriangles = [...sharedAlt.triangles];
+    const sharedSourceRestoredSameRef = sharedBase2.triangles === sharedBase1.triangles;
+
+    // 3b. Linked meshes (`t` shows `linked` → `s`/`quad` at 0, then `linked_tri` → `s`/`base` at 0.5).
+    const swapTrack = openTrack(baseView, 'swap', { loop: false, reset: 'animation' });
+    const swapPose0 = swapTrack.first;
+    const swapPoseHalf = swapTrack.step(0.5);
+    const swapSource = frameSource(baseView, parsed);
+    const swapFrame0 = frameOf(swapSource, swapPose0);
+    const swapFrameHalf = frameOf(swapSource, swapPoseHalf);
+    const swapFrame0Again = frameOf(swapSource, swapPose0);
+    const slotS0 = meshOf(swapFrame0, 's');
+    const slotT0 = meshOf(swapFrame0, 't');
+    const slotSHalf = meshOf(swapFrameHalf, 's');
+    const slotTHalf = meshOf(swapFrameHalf, 't');
+    const slotS0Again = meshOf(swapFrame0Again, 's');
+    const slotT0Again = meshOf(swapFrame0Again, 't');
+
+    // A link draws its source's frozen triangle array, so `t`'s at 0 is `s`'s at 0.5 and the reverse.
+    const linkedQuadTriangles = [...slotT0.triangles];
+    const linkedMatchesSourceRef = slotT0.triangles === slotSHalf.triangles && slotTHalf.triangles === slotS0.triangles;
+    const linkedTriTriangles = [...slotTHalf.triangles];
+    const linkedSwitchRestoredSameRef = slotT0Again.triangles === slotT0.triangles;
+
+    // 3c. Attachment swap on slot `s` (`base` → `quad` → `base`), and the DOM mesh tier's dirty check across it.
+    const baseTriangles = [...slotS0.triangles];
+    const quadTriangles = [...slotSHalf.triangles];
+    const restoredBaseSameRef = slotS0Again.triangles === slotS0.triangles;
+    const domRoot = makeGlRoot();
+    const domRen = new DomRenderer(domRoot, topologyAssets.regionImages, topologyAssets.pageImages);
+    domRen.pixelRatio = 1;
+    domRen.meshBackend = 'canvas2d';
+    let domSwapDrawn = 0;
+    let domHeldReused = 0;
+    try {
+      domRen.render({ order: [slotS0] });
+      domRen.render({ order: [slotSHalf] });
+      domSwapDrawn = domRen.meshCount;
+      domRen.render({ order: [slotSHalf] });
+      domHeldReused = domRen.meshReuseCount;
+    } finally {
+      domRen.dispose();
+      domRoot.remove();
+    }
+
+    // 3d. Two distinct frozen arrays with one triangle list on one (slot, attachment): `s`/`base` under
+    // `base` and under `twin` are two meshes, so the core hands each its own frozen array. The second is
+    // served the first's kept list, and a warm frame of it reads no index of any kept list.
+    const distinctFrozenSource = frameSource(baseView, parsed);
+    const df1 = meshOf(frameOf(distinctFrozenSource, basePose), 's').triangles;
+    const df2 = meshOf(frameOf(distinctFrozenSource, twinPose), 's').triangles;
+    const twinArraysDistinct = basePose.drawn.find((d) => d.slot === 's')?.triangles !== twinPose.drawn.find((d) => d.slot === 's')?.triangles;
+    const distinctFrozenEqualReused = twinArraysDistinct && df1 === df2 && df1 === basePose.drawn.find((d) => d.slot === 's')?.triangles;
+    let distinctFrozenWarmScanReads = 0;
+    for (const byAttachment of distinctFrozenSource.triangles.values()) {
+      for (const cache of byAttachment.values()) {
+        cache.lists = cache.lists.map(
+          (list) =>
+            new Proxy(list, {
+              get(target, prop, receiver) {
+                if (typeof prop === 'string' && /^\d+$/.test(prop)) distinctFrozenWarmScanReads++;
+                return Reflect.get(target, prop, receiver);
+              },
+            }),
+        );
+      }
+    }
+    const df3 = meshOf(frameOf(distinctFrozenSource, twinPose), 's').triangles;
+    if (df3 !== df1) distinctFrozenWarmScanReads += 1000;
+
+    // 3e. Lookup fallbacks the core's poses reach: the draw-order key reorders the frame at 0.5, and the
+    // figure's `mask` clips. (The reorderings no build produces are `posedFrameInputContractProbe`'s.)
+    let reorderedDrawOrderDiffs = 0;
+    const fallbackCheckSource = frameSource(baseView, parsed);
+    const fallbackOracleSource = frameSource(baseView, parsed);
+    const fallbackLegacyTris = new Map<string, number[][]>();
+    const drawOrderMoved = swapPoseHalf.drawOrder.join() !== swapPose0.drawOrder.join();
+    if (!drawOrderMoved || JSON.stringify(frameOf(fallbackCheckSource, swapPoseHalf)) !== JSON.stringify(referenceFrameOfOracle(fallbackOracleSource, swapPoseHalf, fallbackLegacyTris))) {
+      reorderedDrawOrderDiffs++;
+    }
+
+    let clippedMaskDiffs = 0;
+    const figureAssets = await loadRig('figure');
+    try {
+      const figRead = figureAssets.document as ReadDocument;
+      const figView = underNoSkin(figRead.doc);
+      const figSource = frameSource(figView, figRead.parsed);
+      const figOracleSource = frameSource(figView, figRead.parsed);
+      const figLegacyTris = new Map<string, number[][]>();
+      const figTrack = openTrack(figView, 'mask', { loop: true, reset: 'animation' });
+      for (let i = 0; i < 10; i++) {
+        const p = i === 0 ? figTrack.first : figTrack.step(0.12);
+        if (JSON.stringify(frameOf(figSource, p)) !== JSON.stringify(referenceFrameOfOracle(figOracleSource, p, figLegacyTris))) {
+          clippedMaskDiffs++;
+        }
+      }
+    } finally {
+      figureAssets.dispose();
+    }
+
+    // 4. Stale-cache plants: slot-name-only mutant and (slot, attachment)-first-win mutant.
+    const realDiffs: string[] = [];
+    const slotOnlyMutantDiffs: string[] = [];
+    const slotAttachmentFirstMutantDiffs: string[] = [];
+
+    const runPlantSequence = (
+      runner: (src: FrameSource, p: RawPose) => PosedFrame,
+      diffsOut: string[],
+    ): void => {
+      const src = frameSource(baseView, parsed);
+      // Step 1: slot 's' shows 'base' ([0, 1, 2])
+      const s1 = meshOf(runner(src, swapPose0), 's').triangles;
+      if (JSON.stringify(s1) !== JSON.stringify([0, 1, 2])) {
+        diffsOut.push(`step1 s/base: expected [0,1,2], got ${JSON.stringify(s1)}`);
+      }
+      // Step 2: slot 's' switches to 'quad' ([0, 1, 2, 0, 2, 3])
+      const s2 = meshOf(runner(src, swapPoseHalf), 's').triangles;
+      if (JSON.stringify(s2) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
+        diffsOut.push(`step2 s/quad attachment swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s2)}`);
+      }
+      // Step 3: skin swap to 'alt' where slot 's' placeholder 'base' has quad topology ([0, 1, 2, 0, 2, 3])
+      const s3 = meshOf(runner(src, altPose), 's').triangles;
+      if (JSON.stringify(s3) !== JSON.stringify([0, 1, 2, 0, 2, 3])) {
+        diffsOut.push(`step3 alt skin s/base same-placeholder swap: expected [0,1,2,0,2,3], got ${JSON.stringify(s3)}`);
+      }
+    };
+
+    runPlantSequence((src, p) => frameOf(src, p), realDiffs);
+    const slotOnlyMap = new Map<string, number[][]>();
+    runPlantSequence((src, p) => referenceFrameOfOracle(src, p, slotOnlyMap, 'slot-only'), slotOnlyMutantDiffs);
+    const slotAttachmentMap = new Map<string, number[][]>();
+    runPlantSequence(
+      (src, p) => referenceFrameOfOracle(src, p, slotAttachmentMap, 'slot-attachment-first'),
+      slotAttachmentFirstMutantDiffs,
+    );
+
+    return {
+      canonicalRigs,
+      readonlyOutput: {
+        canonicalFrozen,
+        mutateCanonicalThrew,
+        reverseCanonicalThrew,
+        retainedUnchangedAfterAttempt,
+        nextFrameUnchangedAfterAttempt,
+      },
+      topologyCases: {
+        skinSwapSamePlaceholder: {
+          defaultTriangles,
+          altTriangles,
+          restoredDefaultSameRef,
+          sharedSourceDefaultTriangles,
+          sharedSourceAltTriangles,
+          sharedSourceRestoredSameRef,
+        },
+        linkedMesh: {
+          linkedQuadTriangles,
+          linkedMatchesSourceRef,
+          linkedTriTriangles,
+          linkedSwitchRestoredSameRef,
+        },
+        attachmentSwap: {
+          baseTriangles,
+          quadTriangles,
+          restoredBaseSameRef,
+          domSwapDrawn,
+          domHeldReused,
+        },
+        distinctFrozen: {
+          distinctFrozenEqualReused,
+          distinctFrozenWarmScanReads,
+        },
+        lookupFallbacks: {
+          reorderedDrawOrderDiffs,
+          clippedMaskDiffs,
+        },
+      },
+      plants: {
+        realDiffs,
+        slotOnlyMutantDiffs,
+        slotAttachmentFirstMutantDiffs,
+      },
+    };
+  } finally {
+    topologyAssets.dispose();
+  }
+}
+
+/**
+ * #198: `frameOf`'s contract on input no rigc build hands it, kept apart from
+ * the renderer probes, which read frames of rigc builds alone (CLAUDE.md,
+ * *Testing*). Nothing here renders. Every pose is one rig-c/core's live track
+ * posed off the topology fixture's build, passed through one named operation
+ * and nothing else: a structured clone — the same numbers with no array
+ * frozen, which is what a pose is after crossing a worker boundary — or its
+ * slot rows or drawn rows reversed. Each case is held to the pre-#198
+ * reference frame or to the triangle cache's own state.
+ */
+async function posedFrameInputContractProbe(): Promise<PosedFrameInputContractProbeResult> {
+  const assets = await loadRig('topology');
+  try {
+    const read = assets.document as ReadDocument;
+    const baseView = underSkin(read.doc, 'base');
+    const altView = underSkin(read.doc, 'alt');
+    const basePose = openTrack(baseView, 'swap', { loop: false, reset: 'animation' }).first;
+    const altPose = openTrack(altView, 'swap', { loop: false, reset: 'animation' }).first;
+    const meshOf = (frame: PosedFrame, slot: string): Extract<PosedSlot, { kind: 'mesh' }> => frame.order.find((s) => s.slot === slot) as Extract<PosedSlot, { kind: 'mesh' }>;
+    const trianglesIn = (pose: RawPose, slot: string): readonly number[] | undefined => pose.drawn.find((d) => d.slot === slot)?.triangles;
+
+    // Cloned poses: the value-checked fallback. Two clones of one pose are served one kept list; a clone
+    // of the `alt` pose, whose `s`/`base` is the two-triangle mesh under the same key, is a new one.
+    const source = frameSource(baseView, read.parsed);
+    const clone1 = structuredClone(basePose);
+    const clone2 = structuredClone(basePose);
+    const cloneAlt = structuredClone(altPose);
+    const cloneInputFrozen = Object.isFrozen(trianglesIn(clone1, 's'));
+    const m1 = meshOf(frameOf(source, clone1), 's').triangles;
+    const m2 = meshOf(frameOf(source, clone2), 's').triangles;
+    const m3 = meshOf(frameOf(source, cloneAlt), 's').triangles;
+    const cache = source.triangles.get('s')?.get('base');
+    const clonedArrays = [clone1, clone2, cloneAlt].map((p) => trianglesIn(p, 's'));
+    let mutateFallbackThrew = false;
+    try {
+      m1.push(3);
+    } catch {
+      mutateFallbackThrew = true;
+    }
+
+    // Reordered rows: the lookups' fallbacks, against the reference frame.
+    const oracleSource = frameSource(baseView, read.parsed);
+    const legacyTris = new Map<string, number[][]>();
+    const checkSource = frameSource(baseView, read.parsed);
+    const differs = (pose: RawPose): number => (JSON.stringify(frameOf(checkSource, pose)) === JSON.stringify(referenceFrameOfOracle(oracleSource, pose, legacyTris)) ? 0 : 1);
+
+    return {
+      cloneInputFrozen,
+      mutableFallbackFrozen: Object.isFrozen(m1),
+      mutateFallbackThrew,
+      fallbackIsCopy: clonedArrays.every((a) => a !== m1 && a !== m3),
+      clonedInputsKeptByRef: clonedArrays.filter((a) => a !== undefined && cache?.byRef.has(a) === true).length,
+      mutableRefReused: m1 === m2,
+      changedTopologyNewRef: m3 !== m1 && JSON.stringify(m3) === JSON.stringify([0, 1, 2, 0, 2, 3]) && Object.isFrozen(m3),
+      reorderedSlotsDiffs: differs({ ...basePose, slots: [...basePose.slots].reverse() }),
+      reorderedRegionsDiffs: differs({ ...basePose, drawn: [...basePose.drawn].reverse() }),
+    };
+  } finally {
+    assets.dispose();
+  }
+}
+
 window.rigPlayHarness = {
   batchContextInputProbe,
   batchContextProbe,
@@ -9542,5 +10201,7 @@ window.rigPlayHarness = {
   setEaseB5Probe,
   seekSnapshotProbe,
   slotIdentityProbe,
+  posedFrameTrianglesProbe,
+  posedFrameInputContractProbe,
 };
 

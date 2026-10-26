@@ -58,6 +58,12 @@ if (process.argv.includes('--draw-only')) {
   process.exit(0);
 }
 
+// A focused regeneration for the triangle-topology fixture.
+if (process.argv.includes('--topology-only')) {
+  paintTopologyParts();
+  process.exit(0);
+}
+
 /** Signed distance (px, negative inside) from a pixel centre to a part's outline. */
 type Shape = (x: number, y: number) => number;
 
@@ -359,6 +365,26 @@ function paintDrawParts(): void {
   }
 }
 paintDrawParts();
+
+// --- topology: one flat 32×32 square per attachment, so each mesh draws its own colour (#198) ---
+// The fixture is read for its triangle lists, not its pixels: a one- and a
+// two-triangle mesh on one slot, two links to them on another, and two named
+// skins filling the first slot's setup placeholder with each topology.
+function paintTopologyParts(): void {
+  console.log('topology:');
+  for (const [file, rgb] of [
+    ['base.png', [200, 60, 60]],
+    ['quad.png', [60, 160, 90]],
+    ['linked.png', [70, 110, 210]],
+    ['linked_tri.png', [220, 180, 50]],
+    ['twin.png', [160, 80, 200]],
+  ] as Array<[string, RGB]>) {
+    const page = new Uint8Array(32 * 32 * 4);
+    for (let i = 0; i < page.length; i += 4) page.set([...rgb, 255], i);
+    write('topology', file, 32, 32, page);
+  }
+}
+paintTopologyParts();
 
 // --- sets: two attachment sets (smile, wink), a companion _still slot and a hidden prop (#134) ---
 

@@ -1,0 +1,72 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "topology",
+  "images": "parts",
+  "skeleton": { "x": -120, "y": -60, "width": 240, "height": 120 },
+
+  "bones": [
+    { "name": "root" },
+    { "name": "a", "parent": "root", "x": -60 },
+    { "name": "b", "parent": "root", "x": 60 }
+  ],
+
+  "slots": [
+    { "name": "s", "bone": "a", "attachment": "base" },
+    { "name": "t", "bone": "b", "attachment": "linked" }
+  ],
+
+  "skins": {
+    "default": {
+      "s": {
+        "quad": {
+          "type": "mesh",
+          "image": "quad.png",
+          "hull": 4,
+          "uvs": [0, 0, 1, 0, 1, 1, 0, 1],
+          "vertices": [-20, 20, 20, 20, 20, -20, -20, -20],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "t": {
+        "linked": { "type": "linkedmesh", "image": "linked.png", "source": "quad", "slot": "s", "timelines": false },
+        "linked_tri": { "type": "linkedmesh", "image": "linked_tri.png", "source": "base", "slot": "s", "skin": "base", "timelines": false }
+      }
+    },
+    "base": {
+      "s": {
+        "base": {
+          "type": "mesh",
+          "image": "base.png",
+          "hull": 3,
+          "uvs": [0, 0, 1, 0, 0, 1],
+          "vertices": [-20, 20, 20, 20, -20, -20],
+          "triangles": [0, 1, 2]
+        }
+      }
+    },
+    "alt": {
+      "s": {
+        "base": {
+          "type": "mesh",
+          "image": "quad.png",
+          "hull": 4,
+          "uvs": [0, 0, 1, 0, 1, 1, 0, 1],
+          "vertices": [-20, 20, 20, 20, 20, -20, -20, -20],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      }
+    },
+    "twin": {
+      "s": {
+        "base": {
+          "type": "mesh",
+          "image": "twin.png",
+          "hull": 3,
+          "uvs": [0, 0, 1, 0, 0, 1],
+          "vertices": [-24, 24, 24, 24, -24, -24],
+          "triangles": [0, 1, 2]
+        }
+      }
+    }
+  }
+}
