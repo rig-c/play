@@ -2,7 +2,7 @@ import { syncedPixelRatio } from './pixelRatio.js';
 import { clipThrough, REGION_TRIANGLES } from 'rig-c/core';
 import { defaultMeshSourceRect, drawTexturedTriangle, type MeshSourceRect } from './DomRenderer.js';
 import { type PageSource, straightAlphaSource } from './DomTexture.js';
-import { type FrameRun, getMeshGlBlitter } from './MeshGlBlitter.js';
+import { type FrameRun, getMeshGlBlitter, triangleReadSource } from './MeshGlBlitter.js';
 import type { BlendMode, PosedClip, PosedFrame, PosedSlot } from './posedFrame.js';
 
 /** What actually drew the last frame of a `CanvasRenderer`. */
@@ -429,7 +429,8 @@ export class CanvasRenderer {
       if (!page) continue;
       const piece = this.piecesOf(slot, clips);
       if (!piece) continue;
-      const { vertices, uvs, triangles } = piece;
+      const { vertices, uvs } = piece;
+      const triangles = triangleReadSource(piece.triangles);
       const count = triangles.length;
       if (count === 0) continue;
       if (!this.glPages.has(page) && blitter) {
@@ -506,7 +507,8 @@ export class CanvasRenderer {
       }
       ctx.globalAlpha = Math.max(0, Math.min(1, slot.tint[3]));
       this.drawCalls++;
-      const { vertices, uvs, triangles } = piece;
+      const { vertices, uvs } = piece;
+      const triangles = triangleReadSource(piece.triangles);
       if (slot.kind === 'region' && vertices === slot.corners) {
         // A whole quad: its page sub-rect under the affine that sends the UL,
         // UR and BL texel corners to their device corners (BL, UL, UR, BR).

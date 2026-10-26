@@ -1,6 +1,6 @@
 import { syncedPixelRatio } from './pixelRatio.js';
 import { type PageSource, type RegionImage, straightAlphaSource } from './DomTexture.js';
-import { getMeshGlBlitter, type MeshBlitJob } from './MeshGlBlitter.js';
+import { getMeshGlBlitter, triangleReadSource, type MeshBlitJob } from './MeshGlBlitter.js';
 import type { BlendMode, PosedClip, PosedFrame, PosedMesh, PosedRegion, PosedSlot } from './posedFrame.js';
 
 /** Rasterizer used for the mesh (deform) tier. */
@@ -795,6 +795,7 @@ export class DomRenderer {
     // image's own natural size, so the frame is the same either way.
     const uw = page.width;
     const uh = page.height;
+    triangles = triangleReadSource(triangles);
     for (let t = 0; t < triangles.length; t += 3) {
       const i0 = triangles[t] * 2;
       const i1 = triangles[t + 1] * 2;
