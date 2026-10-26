@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 // Immutable origin revision, before this lane's edits. Never read a local clone.
-const revision = '4f2cc2c080a8c04fd2d7588ebf5015bf1fac69ac';
+const revision = '06d6cf6264236689a7c6358e002a3e414b653709';
 const response = await fetch(`https://raw.githubusercontent.com/rig-c/play/${revision}/src/loadModel.ts`);
 if (!response.ok) throw Error(`LOAD_BASELINE_FETCH: ${response.status}`);
 const text = await response.text();

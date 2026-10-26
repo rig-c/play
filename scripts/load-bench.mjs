@@ -32,7 +32,7 @@ for (const rig of rigs) for (const key of ['model', 'json', 'atlas']) {
 mkdirSync('bench-results/203', { recursive: true });
 const inputHashes = {};
 const sourceHashes = {};
-for (const path of ['src/loadModel.ts', 'src/MeshGlBlitter.ts', 'bench/base.generated/src/loadModel.ts', 'bench/base.generated/src/MeshGlBlitter.ts', 'bench/load-base.generated.ts', 'bench/load.ts', 'bench/load-profile-plugin.ts', 'scripts/load-bench.mjs', 'bun.lock', 'bench/oracle/package-lock.json']) {
+for (const path of [...readdirSync('src').filter(p => p.endsWith('.ts')).map(p => `src/${p}`), ...readdirSync('bench/base.generated/src').filter(p => p.endsWith('.ts')).map(p => `bench/base.generated/src/${p}`), 'bench/load-base.generated.ts', 'bench/load.ts', 'bench/load-profile-plugin.ts', 'bench/vite.config.ts', 'scripts/prepare-load-bench.mjs', 'scripts/check-load-profile.mjs', 'scripts/load-bench.mjs', 'bun.lock', 'bench/oracle/package-lock.json']) {
   sourceHashes[path] = createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 for (const rig of rigs) for (const key of ['model', 'json', 'atlas']) inputHashes[rig[key]] = createHash('sha256').update(readFileSync(`public${rig[key]}`)).digest('hex');
@@ -90,7 +90,7 @@ try {
         } finally { await context.close(); }
       }
       for (const cache of ['cold', 'warm']) if (snapshots[`base-${cache}`] !== snapshots[`candidate-${cache}`]) throw Error(`LOAD_POSE_MISMATCH: ${rig.name} ${cache}`);
-      console.log(`${rig.name} pair ${i + 1}: poses equal; cold/warm collected`);
+      console.log(`${rig.name} pair ${i + 1}: ${dry ? 'frames / RawPoses / region pixels' : 'frames'} equal; cold/warm collected`);
     }
   }
   const quantile = (a, q) => { a = [...a].sort((x,y) => x-y); return a[Math.max(0, Math.ceil(a.length * q) - 1)]; };
@@ -98,7 +98,7 @@ try {
   const summary = [];
   const envelope = (row, name) => {
     const spans = row.spans.filter(s => s.name === name);
-    if (name === 'texture-upload-submit' || name.startsWith('gl-')) return spans.length ? spans.reduce((sum, s) => sum + s.end - s.start, 0) : null;
+    if (name === 'texture-upload-submit' || name.startsWith('gl-') || ['page-unpremultiply', 'page-readback', 'page-unpremultiply-loop', 'page-writeback', 'region-draw-submit'].includes(name)) return spans.length ? spans.reduce((sum, s) => sum + s.end - s.start, 0) : null;
     return spans.length ? Math.max(...spans.map(s => s.end)) - Math.min(...spans.map(s => s.start)) : null;
   };
   for (const rig of rigs) for (const cache of ['cold', 'warm']) for (const arm of ['base', 'candidate', 'official']) {
