@@ -51,3 +51,18 @@ test('runtime stage1 skin switching preserves wrapped frames, identity and event
   expect(wrong.rows.some(row => row.frameDifference !== null || row.pixelDifferences > 0)).toBe(true);
   console.log('RUNTIME_STAGE1_SKINS', JSON.stringify({ result, wrongRows: wrong.rows }));
 });
+
+test('runtime stage1 completion reads the retained clock after an event seeks', async ({ page }) => {
+  await fixture(page, false);
+  const result = await page.evaluate(() => window.rigPlayHarness.runtimeSeekEventsProbe());
+  expect(result.duration).toBe(1); expect(result.poser).toBe('runtime');
+  for (const time of result.times) expect(time).toBe(0.5);
+  expect(result.deliveries[1].filter(value => value.kind === 'event').length).toBeGreaterThan(0);
+  expect(result.deliveries[1].filter(value => value.kind === 'complete')).toEqual([]);
+  expect(result.difference).toBeNull();
+  const oldRead = await page.evaluate(() => window.rigPlayHarness.runtimeSeekEventsProbe(true));
+  expect(oldRead.difference).not.toBeNull();
+  expect(oldRead.deliveries[0].filter(value => value.kind === 'complete')).toHaveLength(1);
+  expect(oldRead.deliveries[1].filter(value => value.kind === 'complete')).toEqual([]);
+  console.log('RUNTIME_STAGE1_REENTRANT_SEEK', JSON.stringify({ result, oldRead }));
+});

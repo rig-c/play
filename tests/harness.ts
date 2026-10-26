@@ -1,4 +1,4 @@
-import { runtimeEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
+import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
 import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
 import { liveCoreProbe } from './liveCoreProbe';
@@ -215,6 +215,7 @@ export interface RegionGeometryProbeResult {
 
 export interface RigPlayHarness {
   runtimeEventsProbe: typeof runtimeEventsProbe;
+  runtimeSeekEventsProbe: typeof runtimeSeekEventsProbe;
   runtimeSkinProbe: typeof runtimeSkinProbe;
   liveFrameProbe: typeof liveFrameProbe;
   liveFrameTransitions: typeof liveFrameTransitions;
@@ -10137,6 +10138,7 @@ async function posedFrameInputContractProbe(): Promise<PosedFrameInputContractPr
 
 window.rigPlayHarness = {
   runtimeEventsProbe,
+  runtimeSeekEventsProbe,
   runtimeSkinProbe,
   liveFrameProbe,
   liveFrameTransitions,

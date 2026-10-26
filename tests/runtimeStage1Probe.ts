@@ -35,6 +35,34 @@ export async function runtimeEventsProbe(reentrant = false, drop = false) {
   } finally { players.forEach(player => player.dispose()); assets.dispose(); roots.forEach(root => root.remove()); }
 }
 
+/** A looping advance crosses one second, then its first event seeks to 0.5. */
+export async function runtimeSeekEventsProbe(oldRead = false) {
+  const assets = await loadModel({ modelUrl: '/rigs/turned/skeleton.model.json' });
+  const roots = [document.createElement('div'), document.createElement('div')];
+  const players = [new RigPlayer(roots[0], assets), new RigPlayer(roots[1], assets, { poser: 'oracle' })];
+  const deliveries: Delivery[][] = [[], []];
+  try {
+    for (let index = 0; index < players.length; index++) {
+      const player = players[index]; let sought = false;
+      player.on('event', value => {
+        deliveries[index].push({ kind: 'event', value });
+        if (!sought) { sought = true; player.seek(0.5); }
+      });
+      player.on('complete', value => deliveries[index].push({ kind: 'complete', value }));
+      player.play(assets.animations[0].name, { loop: true });
+    }
+    if (oldRead) {
+      // Freeze the completion read at the pre-callback time, like the old code.
+      const clock = Reflect.get(players[0], 'runtimeCompletionClock') as object;
+      Object.defineProperty(clock, 'trackTime', { get: () => 1.25, set: () => {} });
+    }
+    for (const player of players) player.advance(1.25);
+    return { poser: players[0].poser, duration: assets.animations[0].duration,
+      times: players.map(player => player.time), deliveries,
+      difference: difference(deliveries[0], deliveries[1]) };
+  } finally { players.forEach(player => player.dispose()); assets.dispose(); roots.forEach(root => root.remove()); }
+}
+
 function capture(player: RigPlayer): Uint8ClampedArray {
   const source = (player.renderer as CanvasRenderer).canvas;
   const canvas = document.createElement('canvas'); canvas.width = source.width; canvas.height = source.height;

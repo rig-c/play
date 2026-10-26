@@ -891,6 +891,7 @@ export class RigPlayer {
   private runtimeModel: RuntimeModel | null = null;
   private runtimeFrames: RuntimeFrames | null = null;
   private runtimeReadback: RawPose | null = null;
+  private runtimeCompletionClock = { trackTime: 0 };
   private poserLabel = 'oracle: not selected';
   private readonly oracleOnly: boolean;
   private readonly liveChecks: boolean;
@@ -1491,7 +1492,7 @@ export class RigPlayer {
       this.runtimeFrames.pose.trackTime += step;
       this.lastStep = step;
       this.applyRuntimeTime();
-      const after = this.runtimeFrames.pose.trackTime;
+      const completionClock = this.runtimeCompletionClock;
       if (this.listeners.event.size > 0) {
         // A listener may play/seek/advance again, overwriting the borrowed list.
         // Preserve this delivery batch exactly as the oracle's detached rows do.
@@ -1502,6 +1503,9 @@ export class RigPlayer {
         }
       }
       if (this.listeners.complete.size > 0) {
+        // Retain this play entry, as dispatchSingle retains its LiveTrack.
+        // seek/advance inside delivery changes its clock; play replaces it.
+        const after = completionClock.trackTime;
         const complete = this.loop ? (duration === 0 || Math.floor(after / duration) > Math.floor(before / duration)) : before < duration && after >= duration;
         if (complete) {
           const payload: RigComplete = { animation: this.animation as string, track: 0 };
@@ -2233,6 +2237,7 @@ export class RigPlayer {
     frames.pose.setAnimation(name);
     frames.pose.apply(0);
     this.runtimeFrames = frames;
+    this.runtimeCompletionClock = { trackTime: 0 };
     this.animation = name;
     this.loop = loop;
     this.track = null;
@@ -2251,6 +2256,7 @@ export class RigPlayer {
     const frames = this.runtimeFrames!;
     const duration = frames.model.animations.get(this.animation as string)!.duration;
     const time = frames.pose.trackTime;
+    this.runtimeCompletionClock.trackTime = time;
     frames.pose.apply(duration === 0 ? 0 : this.loop ? time % duration : Math.min(time, duration));
     this.poseGeneration++;
     this.cachedIdentity = null;
