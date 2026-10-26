@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.18.0](https://github.com/rig-c/play/compare/v1.17.1...v1.18.0) (2026-10-26)
+
+
+### Features
+
+* **runtime:** adopt core's stage-1 runtime — skins, forwarded events, restore() — pinned to rig-c 2.72.0 ([#208](https://github.com/rig-c/play/issues/208)) ([8130157](https://github.com/rig-c/play/commit/8130157fb23adbe97b3125804f687c803b1aa5f4))
+* **runtime:** draw from core's runtime poser through a liveFrame() view; posedFrame() stays a detached snapshot ([#206](https://github.com/rig-c/play/issues/206)) ([1df8712](https://github.com/rig-c/play/commit/1df87123cb742191ee8ac6cc3cc8db201ebec442))
+
+
+### Performance Improvements
+
+* **posedFrame:** skip the per-frame triangle scan for frozen topology, and index slot lookups ([#198](https://github.com/rig-c/play/issues/198)) ([#199](https://github.com/rig-c/play/issues/199)) ([4f2cc2c](https://github.com/rig-c/play/commit/4f2cc2c080a8c04fd2d7588ebf5015bf1fac69ac))
+* **render:** read frozen triangle topology through a private plain copy in the raster loops ([#204](https://github.com/rig-c/play/issues/204)) ([8880808](https://github.com/rig-c/play/commit/88808082b367bf9b6839da1cb03041663a362fe1))
+
 ## [1.17.1](https://github.com/rig-c/play/compare/v1.17.0...v1.17.1) (2026-10-25)
 
 
