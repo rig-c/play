@@ -1,5 +1,6 @@
 import { loadModel } from '../src/loadModel';
-import type { ReadDocument } from '../src/loadModel';
+import { drawAtlasRegion } from '../src/DomTexture';
+import type { ModelAssets, ReadDocument } from '../src/loadModel';
 import { openTrack, underNoSkin } from 'rig-c/core';
 import { loadModel as loadBase, RigPlayer as BasePlayer } from './load-base.generated';
 import { RigPlayer } from '../src/player';
@@ -58,6 +59,19 @@ async function image(url: string): Promise<HTMLImageElement> {
 }
 
 state.loadBench = {
+  async verifyRegionEncodings(rig: { model: string }) {
+    const blob = await loadModel({ modelUrl: rig.model, regions: 'blob' });
+    const data = await loadModel({ modelUrl: rig.model, regions: 'data' });
+    try {
+      if (blob.regionImages.size !== data.regionImages.size || !blob.regionImages.size) throw Error('LOAD_EXPLICIT_MAP_SIZE');
+      const read = async (url: string) => {
+        const img = await image(url); const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const ctx = c.getContext('2d')!; ctx.drawImage(img, 0, 0); return JSON.stringify([c.width, c.height, Array.from(ctx.getImageData(0, 0, c.width, c.height).data)]);
+      };
+      for (const [name, entry] of blob.regionImages) if (await read(entry.url) !== await read(data.regionImages.get(name)!.url)) throw Error(`LOAD_EXPLICIT_PIXELS: ${name}`);
+      return blob.regionImages.size;
+    } finally { blob.dispose(); data.dispose(); }
+  },
   cleanup() { pendingCleanup?.(); pendingCleanup = undefined; },
   async run(arm: 'base' | 'candidate' | 'official', rig: { model: string; json: string; atlas: string; animation: string }, regions: 'blob' | 'none' = 'none', verifyRaw = false) {
     pendingCleanup?.(); pendingCleanup = undefined;
@@ -70,12 +84,12 @@ state.loadBench = {
     let regionPixels: (() => Promise<unknown>) | undefined;
     let rawCheck: (() => unknown) | undefined;
     if (arm !== 'official') {
-      const assets = await (arm === 'base' ? loadBase : loadModel)({ modelUrl: rig.model, regions });
+      const assets = arm === 'base' ? await loadBase({ modelUrl: rig.model, regions }) : await loadModel({ modelUrl: rig.model, regions: regions === 'none' ? 'none' : 'atlas' });
       const playerRoot = document.createElement('div');
       playerRoot.style.cssText = 'position:absolute;transform-origin:0 0;transform:translate(256px,480px) scale(.4)';
       root.appendChild(playerRoot);
-      const Player = arm === 'base' ? BasePlayer : RigPlayer;
-      const player = sync('player-view-renderer', () => new Player(playerRoot, assets, { mode: regions === 'none' ? 'canvas' : 'dom' }));
+      const mode = regions === 'none' ? 'canvas' : 'dom';
+      const player = sync('player-view-renderer', () => arm === 'base' ? new BasePlayer(playerRoot, assets as ConstructorParameters<typeof BasePlayer>[1], { mode }) : new RigPlayer(playerRoot, assets as ModelAssets, { mode }));
       player.renderer.pixelRatio = .4;
       sync('first-pose', () => player.play(rig.animation));
       const frame = sync('first-frame-assembly', () => player.posedFrame());
@@ -84,14 +98,20 @@ state.loadBench = {
         const track = openTrack(underNoSkin((assets.document as ReadDocument).doc), rig.animation, { loop: true, reset: 'animation' });
         return [track.first, track.step(0), track.step(1 / 60)];
       };
-      if (verifyRaw) regionPixels = async () => Promise.all([...assets.regionImages].map(async ([name, region]) => {
-        const img = await image(region.url);
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0);
-        return [name, region.width, region.height, canvas.width, canvas.height, Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data)];
-      }));
+      if (verifyRaw) regionPixels = async () => {
+        if (arm === 'candidate' && (assets as ModelAssets).regions === 'atlas') {
+          return [...(assets as ModelAssets).atlasRegions].map(([name, entry]) => {
+            const canvas = document.createElement('canvas'); drawAtlasRegion(canvas, entry);
+            return [name, entry.region.width, entry.region.height, canvas.width, canvas.height, Array.from(canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data)];
+          });
+        }
+        return Promise.all([...assets.regionImages].map(async ([name, region]) => {
+          const img = await image(region.url);
+          const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+          const ctx = canvas.getContext('2d')!; ctx.drawImage(img, 0, 0);
+          return [name, region.width, region.height, canvas.width, canvas.height, Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data)];
+        }));
+      };
       sync('first-draw-submit-including-upload', () => player.renderer.render(frame));
       cleanup = () => { player.dispose(); assets.dispose(); playerRoot.remove(); };
     } else {
@@ -131,6 +151,8 @@ state.loadBench = {
       for (const gl of contexts) if (!gl.isContextLost()) gl.finish();
     });
     const glCompleted = performance.now();
+    await timed('visible-image-decode', () => Promise.all([...root.querySelectorAll('img')].map(img => img.decode())).then(() => undefined));
+    const firstFrameReady = performance.now();
     // This is a paint opportunity, not a display/GPU completion timestamp.
     await timed('paint-opportunity', () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     const end = performance.now();
@@ -150,6 +172,6 @@ state.loadBench = {
       const ext = gl.getExtension('WEBGL_debug_renderer_info');
       return String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
     });
-    return { arm, spans, submitMs: submitted - start, glCompletedMs: glCompleted - start, glRenderers, paintOpportunityMs: end - start, snapshot };
+    return { arm, spans, submitMs: submitted - start, glCompletedMs: glCompleted - start, firstFrameReadyMs: firstFrameReady - start, glRenderers, paintOpportunityMs: end - start, snapshot };
   },
 };

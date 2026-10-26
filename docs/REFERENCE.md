@@ -816,6 +816,7 @@ cycle.
 The region cut makes the rigid tier's bitmaps, which only the DOM mode draws.
 `loadModel({ regions })` says what to do about it:
 
+- `'atlas'` — opt-in page-backed rigid canvases; see below for the filtering caveat.
 - `'blob'` (default) — `blob:` URLs the load owns; `assets.dispose()` frees them.
 - `'data'` — `data:` URLs instead, for a content policy or a snapshot that does
   not carry `blob:`. The same PNG bytes, inline; nothing is minted, so there is
@@ -827,6 +828,54 @@ The region cut makes the rigid tier's bitmaps, which only the DOM mode draws.
 
 `assets.regions` records the choice. `unpackRegions` takes the same thing as
 `{ encoding: 'blob' | 'data' }`.
+
+### Opt-in page-backed rigid regions
+
+`loadModel({ modelUrl, regions: 'atlas' })` skips per-region PNG encoding.
+`ModelAssets.regions` records `'atlas'`, `ModelAssets.regionImages` is empty,
+and `ModelAssets.atlasRegions` holds the page-backed rigid descriptors. The
+load supports both render modes. The default remains `'blob'`: callers reading
+the complete ready-URL map keep the same contract, and explicit `'data'` and
+canvas-only `'none'` loads retain their meanings. No URLs are minted later in
+idle callbacks.
+
+Rigid regions in this opt-in are canvases drawn from their atlas pages, using
+the same native source rectangles, clockwise rotation restoration and shared
+straight-alpha page derivation as the URL cut. Native pixels are held to exact
+equality with the decoded URL regions. On Linux WebKit the test compares
+encoded cuts through the same PNG readback path (unencoded whole-page
+pass-throughs keep their direct read): its direct canvas reads and
+PNG readback round the premultiplied store differently for translucent RGB.
+The original direct deltas remain reported; Chromium and macOS WebKit retain
+the direct strict comparison. This test-only encode is outside the load clock
+and is not used by the atlas rendering path. Composited output differs: browsers
+filter a transformed canvas differently from an image. The hard checker in
+`named/tilt` exceeds the existing test-rig DOM/canvas parity bound at scale 0.4
+(3.25% on Chromium and 3.26% on WebKit in the measured high-quality minification
+comparison). The opt-in therefore does **not** promise that parity bound for
+all artwork; use `'blob'` or `'data'` when its image filtering is required.
+Meshes keep their existing raster path.
+
+For effective pixel ratios below 1, the renderer draws rigid canvases using
+`imageSmoothingQuality: 'high'` and rounds the ratio upward into ×1.25 bands.
+The ratio is the caller's `renderer.pixelRatio` times the largest posed affine
+axis stretch. A band provides at most 25% excess resolution per axis and never
+rounds below the requested ratio. Native resolution caps the backing size;
+ratios at least 1 retain native backing. Region changes and band crossings
+repaint; repeated frames within one band do not. This adds no layout reads:
+when a root's scale changes, set `pixelRatio` or call `syncPixelRatio()` as for
+meshes. `rigidRasterCount` reports rigid rasterizations in the last frame,
+separately from all mesh counters. First-frame preparation is inside the load
+measurement; no steady-state performance claim is made.
+
+Low-level callers can use `createAtlasRegions(layout, pageImages)` and pass its
+map as the fourth argument to `new DomRenderer(root, regionImages, pageImages,
+atlasRegions)`. An atlas entry takes precedence over a URL entry of the same
+name. `AtlasRegion` contains `page`, `region` and `image`; its map and page
+images belong to the caller and can be shared across renderers. Disposing a
+renderer leaves them alive. The renderer owns its slot canvases, which it
+removes on disposal. `unpackRegions` and `revokeRegions` remain available for
+callers needing ready URLs.
 
 ### Pages that ship at another resolution
 

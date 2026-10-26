@@ -78,3 +78,157 @@ The actual-browser dry-run checked first PosedFrame, three RawPoses with signed 
 The adapter renderers read atlas pages directly; the site’s player reaches the rigid map through RigPlayer/DomRenderer. Their absence of direct map access does not make the default DOM first-frame URLs unused.
 
 Removing the encoding work by rendering rigid slots from the atlas is the separate [#213](https://github.com/rig-c/play/issues/213). It is not implemented here. See [the load-profile method](../docs/BENCHMARK.md#load-to-first-draw-development-harness) for reproduction commands and timing boundaries.
+
+
+## Atlas-backed rigid tier: #213
+
+The follow-up keeps `regions: 'blob'` as the default and adds an explicit
+`regions: 'atlas'` path. It paints a native-resolution per-region canvas on
+first use, directly from the page, using the cut's same source rectangle,
+clockwise restoration and shared straight-alpha derivation. It does not encode
+a region PNG, mint a region URL or start idle encoding. Its ready URL map is
+empty; `atlasRegions` supplies the separate descriptor contract.
+
+The default was not changed because direct comparisons with the image tier
+found browser-composited filtering differences. The native pixel producer
+matched the decoded ready regions exactly on Chromium and macOS WebKit; Linux
+WebKit's matching-readback control is detailed below. Coverage includes PMA,
+blob/data page URLs, half-resolution and rotated artwork. All mesh-only
+captures were byte-identical. Composited strict counts are reported alongside
+the existing mode-parity metric; the latter's limits were not widened.
+The hard checker in named/tilt exceeds the existing test-rig bound at scale
+0.4. This is an explicit opt-in caveat, not a passed default-path parity gate.
+
+Two backing policies were compared over all 46 browser/case rows. Native
+backing exceeded the existing bounds on three rows: named/tilt on both
+browsers, and WebKit cloth/hang under wind [-1, 0] (1.50841%). High-quality,
+screen-sized backing rounded upward into ×1.25 bands exceeded on only the two
+named rows (3.25028% Chromium, 3.26093% WebKit), with lower WebKit mismatch on
+the figure, portrait, look and sets cases. Native backing improved the named
+Chromium row (1.79244%) but reduced the margin elsewhere and added the cloth
+failure. It was rejected in favour of the banded candidate. This is the
+measured tradeoff, not a claim of pixel identity. Both policies reused every
+repeated identical frame; scale-band crossings in the retained policy repaint.
+No steady-state timing claim is made.
+
+The load harness compares the explicit atlas candidate with the immutable
+v1.19.0 blob baseline. Visible-region canvas drawing stays inside first-draw
+submission. No region-cuts/PNG span means no calls, not a synthetic zero sample.
+It separately records visible-image decode readiness after queue drain and the
+following two-rAF paint opportunity; neither is a physical display timestamp.
+
+### Opt-in load comparison
+
+N=12 paired samples per case/cache/arm, alternating order, on the same
+Chromium 151.0.7922.34 Linux software-GPU protocol as above. Current-head A/A
+was collected before source edits; all 13 baseline source modules matched its
+v1.19.0 origin pin. The opt-in run matched the source hashes of its final
+Chromium/WebKit raster table. Units below are p50 (IQR), ms. Paired differences
+are reduced pair by pair, not differences of the displayed medians. The blob
+totals in this run differ from the earlier A/A (raptor warm 73.6 versus 63.6
+ms); compare the paired deltas within each run, never subtract across tables.
+
+| Case | Cache | Blob submit | Atlas submit | Official | Paired atlas − blob | Ready delta | Paint-opportunity delta |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| spineboy/dom | cold | 93.4 (13.3) | 72.7 (11.6) | 51.9 (6.9) | -17.9 (4.9) | -25.3 (5.8) | -44.4 (8.1) |
+| spineboy/dom | warm | 58.8 (5.7) | 33.3 (6.5) | 9.9 (2.2) | -24.9 (5.7) | -30.7 (5.4) | -50.6 (10.2) |
+| raptor/dom | cold | 105.4 (9.4) | 75.9 (7.3) | 50.6 (4.8) | -29.5 (16.5) | -41.0 (17.8) | -47.7 (19.9) |
+| raptor/dom | warm | 73.6 (4.7) | 38.7 (5.8) | 11.0 (1.8) | -35.4 (6.5) | -49.0 (5.8) | -57.5 (6.3) |
+| wind-wave/dom | cold | 70.1 (4.1) | 73.3 (14.0) | 70.1 (5.3) | 3.2 (11.0) | -1.8 (10.8) | -13.4 (15.4) |
+| wind-wave/dom | warm | 33.7 (2.8) | 31.1 (5.2) | 16.3 (1.6) | -2.6 (3.4) | -5.7 (3.7) | -3.4 (8.6) |
+
+“Submit” is the existing load-through-first-draw submission clock, including
+visible rigid canvas painting. “Ready delta” adds queue drain and visible-image
+decode readiness. The final delta includes the following two-rAF paint
+opportunity. These are distinct clocks, not physical display latency; the
+preceding A/A did not separately record image decoding. The exclusive pool
+was held, but a separate Windows load snapshot showed non-WSL activity, so no
+whole-machine-idle claim is made.
+
+The atlas arm had no region-cuts or region-PNG encoder calls in any sample.
+Its warm first-frame rigid raster submission was 0.8 (0.1) ms on spineboy,
+1.2 (0.1) ms on raptor and 0.9 (0.2) ms on wind-wave. This work remains inside
+the measured submit clock. The warm packed-atlas gains exceed the preceding
+A/A variation; wind-wave's cold submit delta is positive and noisy, so there
+is no uniform gain claim. All paired PosedFrames agreed; the browser dry-run
+also checked native region pixels, signed-zero-preserving RawPoses and the
+explicit blob/data ready maps outside the timed interval. The named filtering
+caveat is the reason this improvement is opt-in rather than the default.
+
+### Linux WebKit native-readback control
+
+The first full suite recorded 487 passed, 13 failed and 2 existing skips.
+Eleven failures were strict direct native readback comparisons on Linux
+WebKit, not composited parity-limit failures; two were the missing new public
+export in the package test's exhaustive expectation, subsequently corrected.
+Mesh-only captures still differed by zero screen pixels.
+
+The bounded control used (a) the native canvas read directly, (b) that SAME
+canvas encoded to PNG, decoded and read, and (c) the old ready URL decoded and
+read. On Linux WebKit, (b) and (c) agreed at every channel on every control rig;
+(a) differed only in RGB with 0 < alpha < 255. Alpha, opaque RGB and alpha-zero
+RGB were unchanged. Repeating the native producer was also exact. Chromium
+and macOS WebKit had direct equality. Thus the strict Linux test compares the
+same PNG readback representation, with zero tolerance; it does not widen the
+native-pixel limit or encode anything in the production atlas path.
+
+| Linux WebKit input | Direct differing channels | Peak RGB delta | Peak delta × alpha / 255 | Same-path differing channels |
+| --- | ---: | ---: | ---: | ---: |
+| figure-packed | 45122 | 42 | 1.33333 | 0 |
+| figure-packed (PMA flag control) | 34073 | 14 | 1.67843 | 0 |
+| flex-packed | 4941 | 42 | 1.49020 | 0 |
+| sets-packed | 28041 | 42 | 1.67843 | 0 |
+| look-packed | 12414 | 42 | 1.67843 | 0 |
+| turned | 0 | 0 | 0.00000 | 0 |
+| named | 0 | 0 | 0.00000 | 0 |
+
+The PMA-flag row isolates the producer/readback path on identical input bytes;
+it is not an independently painted PMA fixture. The suite's PMA artwork and
+composited comparisons remain separate. Signed RGB-delta histograms below
+are `PNG readback − direct canvas read`, grouped by alpha bucket for the
+straight figure control (zero bins included):
+
+```json
+{
+  "opaque": {
+    "0": 446223
+  },
+  "translucent": {
+    "0": 61042,
+    "-42": 176,
+    "-28": 96,
+    "-23": 200,
+    "-21": 340,
+    "-19": 1556,
+    "-10": 403,
+    "-8": 618,
+    "-7": 3642,
+    "-18": 124,
+    "-5": 1167,
+    "-4": 6622,
+    "-3": 8622,
+    "-2": 14544,
+    "-12": 84,
+    "-11": 252,
+    "-1": 3959,
+    "-6": 1733,
+    "-13": 156,
+    "-14": 192,
+    "-9": 440,
+    "-36": 152,
+    "-15": 44
+  },
+  "transparent": {
+    "0": 43620
+  }
+}
+```
+
+One exact pixel tuple (figure `arm_lo`, x=19, y=1): direct RGBA
+`[76,48,28,37]`; SAME-canvas PNG roundtrip and ready URL both `[76,41,28,37]`.
+The green-channel difference is 7 × 37 / 255 = 1.01569 equivalent
+premultiplied levels. Across the controls the maximum was 1.67843, with both
+serialized representations still exactly equal. A single-rounding bound of
+one level would therefore misclassify this readback difference; the write,
+read and encode roundings must be distinguished. These are observed browser
+representation differences, not different region selection, rotation or alpha.

@@ -163,12 +163,14 @@ changing a renderer cannot silently change both arms. Check with
 Run `node scripts/load-bench.mjs --dry-run` before admitting a timed run.
 It uses the actual browser, checks one model request per load, requires the
 instrumented phases, and compares baseline/candidate first frames, three
-RawPoses with signed zero preserved, and decoded pixels of every returned
-region image. Correctness serialization and image decoding happen outside
+RawPoses with signed zero preserved, and native pixels of every region (decoded URL images versus page-backed
+canvas pixels for the explicit atlas candidate). Explicit blob/data map pixels
+are checked separately outside the clock. Correctness serialization and image decoding happen outside
 the clock. Timed runs compare first frames; the additional RawPoses and region
 pixel checks run only in the dry-run. Measurement uses
 `node scripts/load-bench.mjs --runs 12` on the exclusive remote runner.
-The output is `bench-results/203/load-results.json`, including raw spans,
+The DOM candidate explicitly selects `regions: 'atlas'`; the default stays
+`'blob'`. The output is `bench-results/203/load-results.json`, including raw spans,
 input hashes, nearest-rank p50/p95, IQR and paired differences. Do not use dry-run timings
 as measurements.
 
@@ -205,3 +207,11 @@ The queue-drain figure does not isolate hardware execution from driver waits.
 
 The current-head warm tables, region-cut subdivision, and two rejected
 candidates are recorded in [the #203 findings](../bench/LOAD_FINDINGS.md).
+
+The #213 opt-in comparison additionally waits for visible `<img>` decoding
+inside `firstFrameReadyMs`, after GL queue drain, and records the following
+two-rAF paint opportunity separately. This is resource readiness and a paint
+opportunity, not proof of display completion. The prior A/A submit clock stays
+comparable; it did not separately record visible-image decoding. Per-region
+canvas raster spans (`rigid-region-raster`) are inside first-draw submission,
+with their call counts retained, so skipping PNG encoding cannot hide that work.

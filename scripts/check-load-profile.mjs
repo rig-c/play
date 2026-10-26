@@ -35,3 +35,11 @@ try {
   else process.env.LOAD_PROFILE = previous;
 }
 console.log('load profile: normal and optional Vite entry graphs stay separate');
+
+const rigid = readFileSync('src/DomRenderer.ts', 'utf8');
+const boundary = 'drawAtlasRegion(view.el as HTMLCanvasElement, atlas, band < 1 ? band : undefined);';
+assert.match(transform(rigid, '/src/DomRenderer.ts'), /name: 'rigid-region-raster'/);
+assert.throws(() => transform(rigid.replace(boundary, 'changedBoundary();'), '/src/DomRenderer.ts'), /LOAD_PROFILE_BOUNDARY/);
+assert.throws(() => transform(rigid + '\n' + boundary, '/src/DomRenderer.ts'), /LOAD_PROFILE_BOUNDARY/);
+assert.equal(transform(rigid, '/bench/base.generated/src/DomRenderer.ts'), undefined);
+console.log('load profile: candidate rigid raster boundary counted; missing/duplicate plants refused; immutable baseline untouched');

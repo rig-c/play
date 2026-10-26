@@ -55,6 +55,33 @@ export interface RegionImage {
   height: number;
 }
 
+/** One region's page-backed source, without an encoded per-region URL. */
+export interface AtlasRegion {
+  readonly page: PageLayout;
+  readonly region: PageRegion;
+  readonly image: HTMLImageElement;
+}
+
+/** Maps atlas entries in layout order; duplicate names keep the last entry. */
+export function createAtlasRegions(
+  pages: readonly PageLayout[],
+  images: ReadonlyMap<string, HTMLImageElement>,
+): Map<string, AtlasRegion> {
+  const result = new Map<string, AtlasRegion>();
+  for (const page of pages) {
+    const image = images.get(page.name);
+    if (!image) throw new Error(`Missing page image: ${page.name}`);
+    for (const region of page.regions) result.set(region.name, { page, region, image });
+  }
+  return result;
+}
+
+/** @internal Paints native region pixels without encoding them. */
+export function drawAtlasRegion(canvas: HTMLCanvasElement, entry: AtlasRegion, ratio?: number): void {
+  const plan = planCut(entry, entry.image);
+  paintRegion(canvas, entry, entry.image, plan, ratio);
+}
+
 /**
  * Blob URLs minted by unpackRegions, i.e. the ones this module owns.
  *
@@ -400,12 +427,34 @@ async function cutRegion(
   if (plan.passThrough) return { url: image.src, width: w, height: h };
 
   const canvas = document.createElement('canvas');
-  canvas.width = plan.cw;
-  canvas.height = plan.ch;
+  paintRegion(canvas, placed, image, plan);
+
+  // A `data:` URL is the same PNG inline: nothing is minted, so nothing is
+  // owned and `revokeRegions` has nothing to free. It is for a consumer whose
+  // content policy or snapshotting does not carry `blob:`; it costs the
+  // base64 string per region for as long as the map lives.
+  if (encoding === 'data') return { url: canvas.toDataURL('image/png'), width: w, height: h };
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
+  });
+  const url = URL.createObjectURL(blob);
+  ownedUrls.add(url);
+  return { url, width: w, height: h };
+}
+
+/** The identical native-pixel producer for encoded regions and atlas canvases. */
+function paintRegion(canvas: HTMLCanvasElement, placed: PlacedRegion, image: HTMLImageElement, plan: CutPlan, ratio?: number): void {
+  canvas.width = ratio === undefined ? plan.cw : Math.min(plan.cw, Math.max(1, Math.ceil(placed.region.width * ratio)));
+  canvas.height = ratio === undefined ? plan.ch : Math.min(plan.ch, Math.max(1, Math.ceil(placed.region.height * ratio)));
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2d context unavailable');
 
-  if (region.degrees === 90) {
+  if (ratio !== undefined) {
+    ctx.imageSmoothingQuality = 'high';
+    ctx.scale(canvas.width / plan.cw, canvas.height / plan.ch);
+  }
+  if (placed.region.degrees === 90) {
     // The region is packed rotated. Turn the destination frame back so the
     // source rect, drawn at its own size, lands upright and fills the canvas —
     // and turn it *clockwise*, which is derived from spine-core's UVs rather
@@ -445,21 +494,9 @@ async function cutRegion(
   // and shown in an <img>. The rect was planned against the image, and the
   // derivation is that image's own size, so the coordinates carry over
   // unchanged — including on a page that ships at another resolution.
-  const source = straightAlphaSource(image, page.pma === true);
+  const source = straightAlphaSource(image, placed.page.pma === true);
   ctx.drawImage(source, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.sw, plan.sh);
 
-  // A `data:` URL is the same PNG inline: nothing is minted, so nothing is
-  // owned and `revokeRegions` has nothing to free. It is for a consumer whose
-  // content policy or snapshotting does not carry `blob:`; it costs the
-  // base64 string per region for as long as the map lives.
-  if (encoding === 'data') return { url: canvas.toDataURL('image/png'), width: w, height: h };
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
-  });
-  const url = URL.createObjectURL(blob);
-  ownedUrls.add(url);
-  return { url, width: w, height: h };
 }
 
 /**
