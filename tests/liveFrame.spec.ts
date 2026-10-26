@@ -44,3 +44,25 @@ test('planted vertex, snapshot and unchecked-lease defects fail their gates', as
   const shared = await page.evaluate(() => window.rigPlayHarness.liveFrameProbe('walk', 'snapshot'));
   expect(shared.rows.some(row => row.poser === 'runtime' && !row.snapshotKept)).toBe(true);
 });
+
+
+test('a null attachment key without a setup attachment has coherent runtime/oracle identity', async ({ page }) => {
+  await page.route('**/rigs/turned/skeleton.model.json', async route => {
+    const response = await route.fetch();
+    const model: { slots: Array<{ name: string; setup: string | null }>; animations: Array<{ slots: Array<{ name: string; timelines: Array<{ name: string; keys: Array<{ time: number; name: string | null }> }> }> }> } = await response.json();
+    const slot = model.slots.find(value => value.name === 's');
+    const timeline = model.animations[0].slots.find(value => value.name === 's')?.timelines.find(value => value.name === 'attachment');
+    if (!slot || !timeline) throw Error('NULL_IDENTITY_FIXTURE: turned needs slot s and its attachment timeline');
+    slot.setup = null;
+    timeline.keys = [{ time: 0.25, name: null }, { time: 1, name: null }];
+    await route.fulfill({ response, json: model });
+  });
+  await page.goto('/tests/harness.html');
+  await page.waitForFunction(() => Boolean(window.rigPlayHarness));
+  const clean = await page.evaluate(() => window.rigPlayHarness.liveFrameNullIdentity());
+  expect(clean.every(row => row.poser === 'runtime' && row.difference === null)).toBe(true);
+  expect(clean.map(row => row.actual)).toEqual(['no-attachment', 'no-attachment', 'timeline-null', 'timeline-null', 'timeline-null']);
+  const planted = await page.evaluate(() => window.rigPlayHarness.liveFrameNullIdentity(true));
+  expect(planted.some(row => row.expected === 'timeline-null' && row.actual === 'no-attachment' && row.difference !== null)).toBe(true);
+  console.log('LIVE_FRAME_NULL_IDENTITY', JSON.stringify({ clean, planted }));
+});

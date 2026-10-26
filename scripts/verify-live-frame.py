@@ -70,7 +70,7 @@ if '--precheck' in sys.argv:
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)
     run('build-turned', ['bun', 'node_modules/rig-c/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
-    run('browser-precheck', ['bunx', '--no-install', 'playwright', 'test', '--config', 'playwright.live-frame.config.ts', '--project', 'chromium', '--grep', 'turned|composition'])
+    run('browser-precheck', ['bunx', '--no-install', 'playwright', 'test', '--config', 'playwright.live-frame.config.ts', '--grep', 'turned|composition|null attachment key'])
 elif '--allocation' in sys.argv:
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)

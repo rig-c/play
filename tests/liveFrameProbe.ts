@@ -126,3 +126,24 @@ export async function liveFrameTransitions() {
     return { beforeCount: before.order.length, at, composedTime, composedReason, oldStale, disposed };
   } finally { runtime.dispose(); root.remove(); assets.dispose(); }
 }
+
+/** Identity control: the test route supplies a null-keyed slot with no setup attachment. */
+export async function liveFrameNullIdentity(plantOldCheck = false) {
+  const assets = await loadModel({ modelUrl: '/rigs/turned/skeleton.model.json' });
+  const roots = [document.createElement('div'), document.createElement('div')];
+  roots.forEach(root => document.body.append(root));
+  const runtime = new RigPlayer(roots[0], assets, { liveFrameChecks: true });
+  const oracle = new RigPlayer(roots[1], assets, { poser: 'oracle' });
+  try {
+    runtime.play(assets.animations[0].name); oracle.play(assets.animations[0].name);
+    if (plantOldCheck) Reflect.set(runtime, 'isSlotKeyedNullByTimeline', () => false);
+    const rows = [];
+    for (const time of [0, 0.125, 0.25, 0.5, 1.25]) {
+      runtime.seek(time); oracle.seek(time);
+      const actual = runtime.slotIdentity(), expected = oracle.slotIdentity();
+      rows.push({ time, poser: runtime.poser, actual: actual.slots.find(slot => slot.slot === 's')?.reason,
+        expected: expected.slots.find(slot => slot.slot === 's')?.reason, difference: mismatch(actual, expected, 'identity') });
+    }
+    return rows;
+  } finally { runtime.dispose(); oracle.dispose(); assets.dispose(); roots.forEach(root => root.remove()); }
+}

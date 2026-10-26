@@ -2413,7 +2413,7 @@ export class RigPlayer {
       }
       return result;
     }
-    if (this.track !== null && this.animation !== null) {
+    if ((this.track !== null || this.runtimeFrames !== null) && this.animation !== null) {
       return checkAnimation(this.animation, animationTime) === true;
     }
     return false;
