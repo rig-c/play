@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 // Focused source-browser precheck. The normal suite still tests the production build.
 export default defineConfig({
-  testDir: './tests', testMatch: 'liveFrame.spec.ts', workers: 1, retries: 0,
+  testDir: './tests', testMatch: ['liveFrame.spec.ts', 'runtimeStage1.spec.ts'], workers: 1, retries: 0,
   timeout: 60_000, reporter: 'list',
   use: { baseURL: 'http://127.0.0.1:4341', viewport: { width: 900, height: 640 }, deviceScaleFactor: 1 },
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }, { name: 'webkit', use: { browserName: 'webkit' } }],

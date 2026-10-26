@@ -6,18 +6,15 @@ import { resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 
 const probeOnly = process.argv.includes('--probe-only');
-const diagnosticSkeletons = process.argv.includes('--events-diagnostic') ? ['spineboy', 'raptor'] : process.argv.includes('--spineboy-events-diagnostic') ? ['spineboy'] : [];
 const skeletons = process.argv.includes('--raptor-only') ? ['raptor'] : ['spineboy', 'raptor'];
 const host = resolve('node_modules/.cache/adapters-host');
 const out = resolve('test-results/runtime-bench');
 mkdirSync(out, { recursive: true });
 const productBundle = readFileSync('dist/index.js', 'utf8');
 const productBundleSha256 = createHash('sha256').update(productBundle).digest('hex');
-if ([...productBundle.matchAll(/^function compileRuntime\(/gm)].length !== 1) throw Error('BENCH_RUNTIME_EXPORT: expected one bundled compileRuntime function');
-// Only the throwaway harness module exposes this experimental compiler.
-const benchBundle = `${productBundle}\nexport { compileRuntime as compileRuntimeForBench };\n`;
-writeFileSync(resolve(host, 'public/play-candidate.js'), benchBundle);
-const bundleSha256 = createHash('sha256').update(benchBundle).digest('hex');
+// The default-product comparison serves the canonical package bytes unchanged.
+writeFileSync(resolve(host, 'public/play-candidate.js'), productBundle);
+const bundleSha256 = productBundleSha256;
 const server = spawn('bunx', ['--no-install', 'vite', '--host', '127.0.0.1', '--port', '4351', '--strictPort'], { cwd: host, env: { ...process.env, RIG_BENCH: '1' }, stdio: 'inherit' });
 const url = 'http://127.0.0.1:4351/bench/index.html';
 // Pool exclusion does not prove that Windows or queue-external GPU work is idle.
@@ -62,17 +59,12 @@ try {
     const adapter = await import('/packages/pixi/src/index.ts');
     globalThis.__NewPlay = play;
     globalThis.__PlayCandidateMode = 'oracle';
-    globalThis.__SpineboyEventWaiver = false;
     const make = candidate => class extends adapter.PixiRig {
       constructor(assets, options) {
         super(assets, options);
         this.player.dispose();
         Object.defineProperty(this, 'player', { value: new play.RigPlayer(document.createElement('div'), assets, { mode: 'canvas', poser: candidate ? globalThis.__PlayCandidateMode : 'oracle', liveFrameChecks: false }), writable: false, configurable: true });
-        if (candidate && globalThis.__PlayCandidateMode === 'auto' && globalThis.__SpineboyEventWaiver) {
-          const model = play.compileRuntimeForBench(Reflect.get(this.player, 'view'), { ignore: ['events'] });
-          if (model.animation('walk').events !== 2) throw Error('BENCH_EVENT_WAIVER: walk must have exactly 2 ignored keys');
-          Reflect.set(this.player, 'runtimeModel', model);
-        }
+
       }
       play(name, options) {
         super.play(name, options);
@@ -87,7 +79,6 @@ try {
   const rows = [];
   const coverage = [];
   for (const skeleton of skeletons) {
-    await page.evaluate(waiver => { globalThis.__SpineboyEventWaiver = waiver; }, diagnosticSkeletons.includes(skeleton));
     const exact = await page.evaluate(async skeleton => {
       const play = globalThis.__NewPlay;
       const assets = await play.loadModel({ modelUrl: `/bench/${skeleton}/skeleton.model.json`, regions: 'none' });
@@ -96,14 +87,6 @@ try {
       try {
         a.play('walk'); b.play('walk');
         const defaultPoser = b.poser;
-        let eventsIgnored = 0;
-        if (globalThis.__SpineboyEventWaiver) {
-          const model = play.compileRuntimeForBench(Reflect.get(b, 'view'), { ignore: ['events'] });
-          eventsIgnored = model.animation('walk').events;
-          if (eventsIgnored !== 2) throw Error('BENCH_EVENT_WAIVER: expected exactly 2 keys');
-          Reflect.set(b, 'runtimeModel', model);
-          b.play('walk');
-        }
         if (b.poser !== 'runtime') return { skeleton, pass: false, status: 'not measurable', reason: b.poser };
         let values = 0;
         const compare = (left, right, path) => {
@@ -115,7 +98,7 @@ try {
           for (const key of keys) compare(left[key], right[key], `${path}.${key}`);
         };
         for (const dt of [0, .125, .375, .75]) { a.advance(dt); b.advance(dt); compare(a.posedFrame(), b.posedFrame(), skeleton); }
-        return { skeleton, values, pass: true, defaultPoser, eventsIgnored, poser: eventsIgnored ? `runtime (events ignored, ${eventsIgnored} keys)` : 'runtime' };
+        return { skeleton, values, pass: true, defaultPoser, eventsIgnored: 0, poser: 'runtime' };
       } finally { a.dispose(); b.dispose(); assets.dispose(); }
     }, skeleton);
     console.log('RUNTIME_BENCH_EXACT', JSON.stringify(exact));
@@ -132,8 +115,8 @@ try {
         if (!result.drawCallsPass || !result.halves.every(half => half.pass)) throw Error(`BENCH_SHARED_CORRECTNESS: ${skeleton} ${mode} ${instances}`);
         result.control = mode === 'oracle' ? 'AA' : 'AB';
         result.candidatePoser = mode === 'oracle' ? 'oracle' : exact.poser;
-        result.eventsIgnored = mode === 'oracle' ? 0 : exact.eventsIgnored;
-        result.eventAsymmetry = result.eventsIgnored ? 'bench-only: candidate ignores 2 event keys; oracle evaluates them as usual; no event listeners are registered' : null;
+        result.eventsIgnored = 0;
+        result.eventAsymmetry = null;
         result.bundleSha256 = bundleSha256;
         result.poseDifference = stats(result.frames.map(frame => frame.arms[1].poseMs - frame.arms[0].poseMs));
         result.submitDifference = stats(result.frames.map(frame => frame.arms[1].submitMs - frame.arms[0].submitMs));
@@ -144,7 +127,7 @@ try {
       }
     }
   }
-  const report = { protocol: 'play-runtime-same-frame-v1', adapterHost: '0880a6404e62ec03fba158124eb7b5abdc5f013e', bundleSha256, productBundleSha256, diagnosticSkeletons, machineObservation, coverage, probeOnly, timingStatus: rows.length ? 'measured covered inputs' : 'not measurable', boundary: 'same play code and legacy Pixi adapter; oracle vs runtime, both using posedFrame snapshots; not the adapters#56 direct-buffer path', rows };
+  const report = { protocol: 'play-runtime-default-same-frame-v1', adapterHost: '0880a6404e62ec03fba158124eb7b5abdc5f013e', bundleSha256, productBundleSha256, eventPolicy: 'default delivery, no ignore or model injection', machineObservation, coverage, probeOnly, timingStatus: rows.length ? 'measured covered inputs' : 'not measurable', boundary: 'same play code and legacy Pixi adapter; oracle vs runtime, both using posedFrame snapshots; not the adapters#56 direct-buffer path', rows };
   writeFileSync(resolve(out, 'report.json'), JSON.stringify(report, null, 2));
   console.log('RUNTIME_BENCH_REPORT', JSON.stringify(report));
   if (!probeOnly && rows.length === 0) throw Error('BENCH_NOT_MEASURABLE: no input selected the runtime');

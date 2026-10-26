@@ -26,7 +26,9 @@ leases. Call `posedFrame()` when retaining data is required.
 
 Selection is automatic for covered models and animations; inspect `player.poser`
 for the named oracle fallback. Unsupported tracks, sets and adjustments preserve
-the old semantics on that path. No event waiver or silent feature drop is used.
+the old semantics on that path. Covered events reach the existing listener API, including when a listener
+re-enters the player. Supported skin switches preserve wrapped animation time.
+No event waiver or silent feature drop is used.
 The oracle live view may allocate; development diagnostic leases also allocate.
 Neither is evidence for the production runtime's allocation bar. The raw view's
 oracle `placeholder` is `null`, not a display-name guess.
