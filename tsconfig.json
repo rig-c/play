@@ -14,5 +14,8 @@
     // because nothing here emits JavaScript through tsc — see build-lib.mjs).
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "tests", "bench", "playwright.config.ts"]
+  "include": ["src", "tests", "bench", "playwright.config.ts"],
+  // The optional load benchmark has an isolated official-runtime install.
+  // Typecheck it explicitly with bench/tsconfig.load.json after preparing it.
+  "exclude": ["bench/load.ts", "bench/load-base.generated.ts", "bench/base.generated", "bench/oracle"]
 }

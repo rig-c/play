@@ -23,6 +23,11 @@ remains the history of the production player: no runtime is added back to its
 public API or published library. `tests/package.spec.ts` checks the exact
 development exception and the runtime-free shipped code and declarations.
 
+The optional load-to-first-draw harness uses `spine-pixi-v8` 4.3.13 with PixiJS
+8.22.0 in the separate private `bench/oracle` install. The same upstream Spine
+Runtime licence applies to that development reference. It is outside production
+source and the library package.
+
 One thing in this repository is Spine data, and it is worth stating where it
 sits. `rigc build`, which `scripts/fetch-assets.sh` runs to make the fixtures,
 writes **Spine skeleton data** (`skeleton.json` and `skeleton.atlas`) beside
@@ -55,7 +60,13 @@ Esoteric Software's terms, not a licence term of this project:
 
 ## Example assets
 
-None are fetched or redistributed. The rigs the demo, the tests and the benchmark
-read are rigc's gallery rigs — rigc's own procedural art, built from a pinned rigc
-tag by `scripts/fetch-assets.sh` — and this repository's test rigs under
-`tests/rigs/`, whose parts `tests/rigs/make_parts.ts` paints.
+`scripts/fetch-assets.sh` builds rigc's gallery rigs (procedural art), this
+repository's test rigs under `tests/rigs/` (parts painted by
+`tests/rigs/make_parts.ts`), and the public parts-built wind-wave fixture.
+
+The optional `scripts/fetch-load-assets.sh` additionally fetches the upstream
+spineboy and raptor examples at a fixed spine-runtimes revision for the load
+comparison, verifies each input's SHA-256, and keeps each example's upstream
+`license.txt` beside its images. These inputs live under gitignored
+`public/bench/`; neither the assets nor the development runtime are included
+in the npm library package. Their upstream notices remain with the fixtures.

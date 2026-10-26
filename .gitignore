@@ -9,3 +9,6 @@ bench-results/
 .DS_Store
 # rigc builds — the gallery from a pinned rigc tag and tests/rigs/, by scripts/fetch-assets.sh
 public/rigs/
+bench/load-base.generated.ts
+bench/base.generated/
+public/bench/
