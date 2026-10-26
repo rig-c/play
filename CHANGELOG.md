@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/rig-c/play/compare/v1.19.0...v1.20.0) (2026-10-26)
+
+
+### Features
+
+* **dom:** add opt-in atlas-backed rigid regions ([#213](https://github.com/rig-c/play/issues/213)) ([#215](https://github.com/rig-c/play/issues/215)) ([af1bff2](https://github.com/rig-c/play/commit/af1bff2699aecf447156bd8022f69b488e824d66))
+
 ## [1.19.0](https://github.com/rig-c/play/compare/v1.18.0...v1.19.0) (2026-10-26)
 
 
