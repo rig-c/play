@@ -234,7 +234,9 @@ mapping (a new array re-rasters the mesh).
 A colour refresh that overwrites borrowed tint data also invalidates checked leases.
 `player.poser` reads `"runtime"` for a covered active animation, or
 `"oracle: <reason>"` naming a missing model/animation feature or an operation
-that needs the oracle. Event keys are not silently ignored. A mixed track,
+that needs the oracle. Covered event keys are delivered to the same listeners, in the same order and
+with the same payload shape as the oracle. Re-entrant listeners keep the rest
+of the current delivery batch. Event keys are not silently ignored. A mixed track,
 local adjustment or attachment-set operation continues on the oracle when the
 runtime cannot execute it. `new RigPlayer(root, assets, { poser: 'oracle' })`
 selects that reference path explicitly.
@@ -265,8 +267,14 @@ nested buffer** after mutation throws `LIVE_FRAME_STALE`; drawing a stale lease
 also refuses before touching the renderer. Writes and backing-storage escape
 routes refuse as `LIVE_FRAME_READONLY`. `liveFrameChecks` can explicitly select
 this diagnostic behavior. Those leases allocate; they are reported separately
-from the production allocation measurement. The oracle fallback packs a borrowed
+from the production allocation measurement. Listener delivery creates the same
+detached callback payloads as the oracle and is measured separately; the
+no-listener advance/liveFrame path reuses event records and frame buffers. The oracle fallback packs a borrowed
 view from its snapshot and also carries no zero-allocation promise.
+
+Supported skin changes rebuild the view and preserve accumulated track time
+and its wrapped animation time. A held checked live view becomes stale; retained
+snapshots keep their old values. Unsupported views still name the oracle fallback.
 
 A production borrowed view is reused and overwritten: keeping its object does
 not keep its values or its old generation. Use `player.posedFrame()` for a

@@ -1,6 +1,6 @@
 import { CanvasRenderer, loadModel, RigPlayer, type PosedFrame } from '../src/index';
 
-function mismatch(a: unknown, b: unknown, path = 'frame'): string | null {
+export function mismatch(a: unknown, b: unknown, path = 'frame'): string | null {
   if (typeof a === 'number' && typeof b === 'number') return Object.is(a, b) ? null : `${path}: ${a} != ${b}`;
   if (a === b) return null;
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return `${path}: ${String(a)} != ${String(b)}`;

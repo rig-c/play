@@ -67,10 +67,11 @@ run('typecheck', ['bunx', '--no-install', 'tsc', '--noEmit'])
 run('lease-controls', ['bun', 'test', 'tests/liveFrame.unit.test.ts'])
 run('browser-install', ['bunx', '--no-install', 'playwright', 'install', 'chromium'])
 if '--precheck' in sys.argv:
+    run('browser-install-webkit', ['bunx', '--no-install', 'playwright', 'install', 'webkit'])
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)
     run('build-turned', ['bun', 'node_modules/rig-c/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
-    run('browser-precheck', ['bunx', '--no-install', 'playwright', 'test', '--config', 'playwright.live-frame.config.ts', '--grep', 'turned|composition|null attachment key'])
+    run('browser-precheck', ['bunx', '--no-install', 'playwright', 'test', '--config', 'playwright.live-frame.config.ts', '--grep', 'turned|composition|null attachment key|runtime stage1'])
 elif '--allocation' in sys.argv:
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)
@@ -79,8 +80,10 @@ elif '--allocation' in sys.argv:
 elif '--bench' in sys.argv or '--final-controls' in sys.argv:
     run('bench-host', ['bun', 'scripts/prepare-runtime-bench.mjs'])
     run('library', ['bun', 'run', 'build:lib'])
-    run('same-frame-bench', ['bun', 'scripts/live-frame-bench.mjs'] + (['--probe-only'] if '--final-controls' in sys.argv else ['--events-diagnostic'] + (['--raptor-only'] if '--raptor-only' in sys.argv else [])))
+    run('same-frame-bench', ['bun', 'scripts/live-frame-bench.mjs'] + (['--probe-only'] if '--final-controls' in sys.argv else (['--raptor-only'] if '--raptor-only' in sys.argv else [])))
     if '--final-controls' in sys.argv:
+        for rig in ['spineboy', 'raptor']:
+            run(f'allocation-{rig}-walk-events', ['bun', 'scripts/live-frame-allocation.mjs', f'node_modules/.cache/adapters-host/public/bench/{rig}/skeleton.model.json', 'walk', '--require-events'])
         run('fixtures', ['bun', 'run', 'fetch-assets'])
         for rig, animation in [('walk', 'walk'), ('portrait', 'idle'), ('portrait', 'gaze'), ('glow', 'burn'), ('glow', 'canary'), ('turned', 'hold')]:
             run(f'allocation-{rig}-{animation}', ['bun', 'scripts/live-frame-allocation.mjs', f'public/rigs/{rig}/skeleton.model.json', animation])

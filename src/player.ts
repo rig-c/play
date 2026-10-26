@@ -891,6 +891,7 @@ export class RigPlayer {
   private runtimeModel: RuntimeModel | null = null;
   private runtimeFrames: RuntimeFrames | null = null;
   private runtimeReadback: RawPose | null = null;
+  private runtimeCompletionClock = { trackTime: 0 };
   private poserLabel = 'oracle: not selected';
   private readonly oracleOnly: boolean;
   private readonly liveChecks: boolean;
@@ -1304,7 +1305,14 @@ export class RigPlayer {
     if (!(time >= 0) || !Number.isFinite(time)) throw new Error(`seek time must be a finite time at or above 0, got ${String(time)}`);
     if (this.beyondBase) throw new Error('seek is defined for a single animation on track 0; after a mix, another track, a queue or a clear the player cannot replay to a time — step it forward with frame/advance instead');
     if (this.runtimeFrames !== null) {
-      this.runtimeFrames.pose.trackTime = time;
+      // Keep the documented replay clock, including floating-point accumulation.
+      // A direct jump to `time` can differ from the old seek's last pose by ulps.
+      const steps = Math.floor(time / this.seekStep);
+      let replayTime = 0;
+      for (let i = 0; i < steps; i++) replayTime += this.seekStep;
+      const rest = time - replayTime;
+      if (rest > 0) replayTime += rest;
+      this.runtimeFrames.pose.trackTime = replayTime;
       this.applyRuntimeTime();
       return;
     }
@@ -1480,12 +1488,24 @@ export class RigPlayer {
       if (this.paused || !(step > 0)) return;
       if (!Number.isFinite(step)) throw new Error(`advance step must be finite, got ${String(step)}`);
       const before = this.runtimeFrames.pose.trackTime;
+      const duration = this.runtimeFrames.model.animations.get(this.animation as string)!.duration;
       this.runtimeFrames.pose.trackTime += step;
       this.lastStep = step;
       this.applyRuntimeTime();
+      const completionClock = this.runtimeCompletionClock;
+      if (this.listeners.event.size > 0) {
+        // A listener may play/seek/advance again, overwriting the borrowed list.
+        // Preserve this delivery batch exactly as the oracle's detached rows do.
+        const events = this.runtimeFrames.pose.events.slice();
+        for (const key of events) {
+          const payload: RigEvent = { name: key.name, time: key.time, int: key.int, float: key.float, string: key.string, track: 0 };
+          for (const listener of this.listeners.event) listener(payload);
+        }
+      }
       if (this.listeners.complete.size > 0) {
-        const duration = this.runtimeFrames.model.animation(this.animation as string).duration;
-        const after = this.runtimeFrames.pose.trackTime;
+        // Retain this play entry, as dispatchSingle retains its LiveTrack.
+        // seek/advance inside delivery changes its clock; play replaces it.
+        const after = completionClock.trackTime;
         const complete = this.loop ? (duration === 0 || Math.floor(after / duration) > Math.floor(before / duration)) : before < duration && after >= duration;
         if (complete) {
           const payload: RigComplete = { animation: this.animation as string, track: 0 };
@@ -1555,6 +1575,17 @@ export class RigPlayer {
     this.clearSeekCache();
     if (this.animation !== null && (this.track !== null || this.tracks !== null)) {
       const time = this.time;
+      const animation = this.animation;
+      const animationTime = this.entry(0)!.animationTime;
+      if (this.tryRuntimePlay(animation, this.loop)) {
+        const frames = this.runtimeFrames!;
+        frames.pose.restore(animation, time, animationTime);
+        this.poseGeneration++;
+        this.cachedIdentity = null;
+        this.runtimeReadback = null;
+        frames.update(this.poseGeneration, this.color, this.draws);
+        return;
+      }
       this.reopen();
       this.stepTo(time);
     } else if (this.rawPose !== null) {
@@ -2206,6 +2237,7 @@ export class RigPlayer {
     frames.pose.setAnimation(name);
     frames.pose.apply(0);
     this.runtimeFrames = frames;
+    this.runtimeCompletionClock = { trackTime: 0 };
     this.animation = name;
     this.loop = loop;
     this.track = null;
@@ -2224,6 +2256,7 @@ export class RigPlayer {
     const frames = this.runtimeFrames!;
     const duration = frames.model.animations.get(this.animation as string)!.duration;
     const time = frames.pose.trackTime;
+    this.runtimeCompletionClock.trackTime = time;
     frames.pose.apply(duration === 0 ? 0 : this.loop ? time % duration : Math.min(time, duration));
     this.poseGeneration++;
     this.cachedIdentity = null;
