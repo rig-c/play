@@ -204,7 +204,7 @@ test('an unlisted subpath is refused by the exports map', () => {
  * (with its map), and one declaration file (with its map) per source module.
  */
 const EMITTED_BUNDLE = ['index.js', 'index.js.map'];
-const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'index', 'loadModel', 'pixelRatio', 'player', 'posedFrame'];
+const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame'];
 
 test('the library build emits those modules and nothing else', () => {
   /**
@@ -332,10 +332,10 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and th
   // pose doubt is a rigc issue against that version.
   expect(typeof manifest.devDependencies?.['rig-c']).toBe('string');
   expect(manifest.devDependencies?.['rig-c']).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(manifest.devDependencies?.['rig-c']).toBe('2.67.0');
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.67.0');
-  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.67.0');
-  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.67.0"');
+  expect(manifest.devDependencies?.['rig-c']).toBe('2.71.0');
+  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.71.0');
+  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.71.0');
+  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.71.0"');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
 });
 

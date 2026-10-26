@@ -1,3 +1,4 @@
+import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
 import { liveCoreProbe } from './liveCoreProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
@@ -212,6 +213,9 @@ export interface RegionGeometryProbeResult {
 }
 
 export interface RigPlayHarness {
+  liveFrameProbe: typeof liveFrameProbe;
+  liveFrameTransitions: typeof liveFrameTransitions;
+  liveFrameNullIdentity: typeof liveFrameNullIdentity;
   batchContextInputProbe: typeof batchContextInputProbe;
   batchContextProbe: typeof batchContextProbe;
   liveCoreProbe: typeof liveCoreProbe;
@@ -10129,6 +10133,9 @@ async function posedFrameInputContractProbe(): Promise<PosedFrameInputContractPr
 }
 
 window.rigPlayHarness = {
+  liveFrameProbe,
+  liveFrameTransitions,
+  liveFrameNullIdentity,
   batchContextInputProbe,
   batchContextProbe,
   liveCoreProbe,

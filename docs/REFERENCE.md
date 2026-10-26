@@ -227,6 +227,56 @@ frame takes the one-`clip-path`-on-the-root path), and a mesh's `uvs` and
 `triangles` are the same arrays from frame to frame for the same texture
 mapping (a new array re-rasters the mesh).
 
+### Borrowing a live frame
+
+`player.liveFrame()` borrows the current draw buffers until the next pose mutation
+(`advance`, `play`, `seek`, `repose`, a set/skin/filter change, or disposal).
+A colour refresh that overwrites borrowed tint data also invalidates checked leases.
+`player.poser` reads `"runtime"` for a covered active animation, or
+`"oracle: <reason>"` naming a missing model/animation feature or an operation
+that needs the oracle. Event keys are not silently ignored. A mixed track,
+local adjustment or attachment-set operation continues on the oracle when the
+runtime cannot execute it. `new RigPlayer(root, assets, { poser: 'oracle' })`
+selects that reference path explicitly.
+
+```ts
+player.advance(dt);
+const live = player.liveFrame();
+renderer.render(live); // DomRenderer and CanvasRenderer accept both frame forms
+for (let i = 0; i < live.count; i++) {
+  const attachment = live.attachments[live.drawOrder[i]];
+  // World x/y pairs: live.vertices[attachment.offset .. offset + count).
+  // Final RGBA: live.tint[attachment.slotIndex * 4 .. + 4).
+  // attachment.uvs, triangles, page, pma, blend, dark and clip describe the draw.
+}
+```
+
+`drawOrder[0..count)` contains attachment indices. The remaining buffer capacity
+is not a draw list. `LiveNumbers` exposes read-only indexed values and length,
+not writable backing storage. Runtime attachment metadata includes the exact
+`skin` and `placeholder` table identity; `attachment` is the display name and
+need not be unique. On the oracle fallback `placeholder` is explicitly `null`,
+because its snapshot does not expose that table key. `slotIndex` always means
+the setup slot index, not the index among visible draws.
+
+The runtime preallocates its production buffers and render view. Development
+builds add generation-capturing leases: reading a held frame **or a retained
+nested buffer** after mutation throws `LIVE_FRAME_STALE`; drawing a stale lease
+also refuses before touching the renderer. Writes and backing-storage escape
+routes refuse as `LIVE_FRAME_READONLY`. `liveFrameChecks` can explicitly select
+this diagnostic behavior. Those leases allocate; they are reported separately
+from the production allocation measurement. The oracle fallback packs a borrowed
+view from its snapshot and also carries no zero-allocation promise.
+
+A production borrowed view is reused and overwritten: keeping its object does
+not keep its values or its old generation. Use `player.posedFrame()` for a
+detached snapshot that survives later steps, including when the runtime is
+selected. Existing `posedFrame(slots)` filtering and `slotIdentity()` generation
+coherence remain available. Bone/identity readback can perform an on-demand
+oracle read; it is not part of the runtime advance/live-frame allocation path.
+The core runtime entry is experimental and the bundled core version is pinned
+exactly; consumers of this package need no separate core installation.
+
 ### Reading the pose
 
 Two reads off the pose the player holds — the last `frame`/`advance`/`seek`,

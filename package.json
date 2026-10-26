@@ -1,7 +1,7 @@
 {
   "name": "@rig-c/play",
   "version": "1.17.1",
-  "description": "Plays skeleton.model.json written by rigc build as plain DOM elements — rigid slots as <img> posed by CSS matrix, deform meshes on small per-part canvases — or as one canvas.",
+  "description": "Plays skeleton.model.json written by rigc build as plain DOM elements \u2014 rigid slots as <img> posed by CSS matrix, deform meshes on small per-part canvases \u2014 or as one canvas.",
   "type": "module",
   "license": "MIT",
   "author": "firejune",
@@ -56,7 +56,11 @@
     "dist/player.d.ts.map",
     "dist/posedFrame.d.ts",
     "dist/posedFrame.d.ts.map",
-    "NOTICE.md"
+    "NOTICE.md",
+    "dist/liveFrame.d.ts",
+    "dist/liveFrame.d.ts.map",
+    "dist/liveFrameSource.d.ts",
+    "dist/liveFrameSource.d.ts.map"
   ],
   "sideEffects": false,
   "scripts": {
@@ -78,7 +82,7 @@
     "@playwright/test": "1.62.1",
     "@rig-c/parts": "1.60.0",
     "@types/node": "^22",
-    "rig-c": "2.67.0",
+    "rig-c": "2.71.0",
     "typescript": "^5.6.0",
     "vite": "^6.0.0"
   }

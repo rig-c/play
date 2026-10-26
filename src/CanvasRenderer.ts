@@ -1,3 +1,5 @@
+import { renderFrameOf } from './liveFrameSource.js';
+import type { LiveFrame } from './liveFrame.js';
 import { syncedPixelRatio } from './pixelRatio.js';
 import { clipThrough, REGION_TRIANGLES } from 'rig-c/core';
 import { defaultMeshSourceRect, drawTexturedTriangle, type MeshSourceRect } from './DomRenderer.js';
@@ -175,7 +177,8 @@ export class CanvasRenderer {
   }
 
   /** Draws one frame. */
-  render(frame: PosedFrame): void {
+  render(input: PosedFrame | LiveFrame): void {
+    const frame = renderFrameOf(input);
     this.drawCalls = 0;
     this.blendFlushes = 0;
     this.trianglesDrawn = 0;

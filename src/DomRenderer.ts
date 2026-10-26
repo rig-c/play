@@ -1,3 +1,5 @@
+import { renderFrameOf } from './liveFrameSource.js';
+import type { LiveFrame } from './liveFrame.js';
 import { syncedPixelRatio } from './pixelRatio.js';
 import { type PageSource, type RegionImage, straightAlphaSource } from './DomTexture.js';
 import { getMeshGlBlitter, type MeshBlitJob } from './MeshGlBlitter.js';
@@ -447,7 +449,8 @@ export class DomRenderer {
    * clipping attachment, an inactive bone, a kind the DOM tier does not draw —
    * are hidden, their elements kept for when they draw again.
    */
-  render(frame: PosedFrame): void {
+  render(input: PosedFrame | LiveFrame): void {
+    const frame = renderFrameOf(input);
     this.clipCount = 0;
     this.clipSkipCount = 0;
     this.clipWriteCount = 0;
