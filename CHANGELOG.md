@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/rig-c/play/compare/v1.18.0...v1.19.0) (2026-10-26)
+
+
+### Features
+
+* **runtime:** adopt rig-c 2.74.0 and re-measure the 58-row live-frame tally ([#209](https://github.com/rig-c/play/issues/209)) ([#210](https://github.com/rig-c/play/issues/210)) ([ef447f8](https://github.com/rig-c/play/commit/ef447f843ca8d68791d32f52ad5558ff854298c8))
+
 ## [1.18.0](https://github.com/rig-c/play/compare/v1.17.1...v1.18.0) (2026-10-26)
 
 
