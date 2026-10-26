@@ -44,6 +44,7 @@ const port = resolveTestPort(process.env.TEST_PORT);
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: ['**/*.unit.test.ts'],
   timeout: 60_000,
   expect: { timeout: 30_000 },
   // Light spec files; cap workers so local runs stay polite next to

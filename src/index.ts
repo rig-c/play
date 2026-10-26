@@ -11,3 +11,5 @@ export type {
   PosedRegion,
   PosedSlot,
 } from './posedFrame.js';
+
+export type { LiveFrame, LiveNumbers, LiveAttachment, LiveClip } from './liveFrame.js';

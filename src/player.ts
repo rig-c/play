@@ -1,4 +1,6 @@
 import { type CompiledDocument, type CoreSlotRow, eventsFired, type LiveTrack, type LiveTracks, type LocalAdjust as CoreLocalAdjust, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawClip, type RawDrawn, type RawPose, type TrackEntryView, underNoSkin, underSkin } from 'rig-c/core';
+import { compileRuntime, RuntimeRefusal, type RuntimeModel } from 'rig-c/runtime';
+import { checkedLiveFrame, oracleLiveFrame, RuntimeFrames, type LiveFrame } from './liveFrame.js';
 import { CanvasRenderer } from './CanvasRenderer.js';
 import { DomRenderer, type MeshBackend } from './DomRenderer.js';
 import type { ModelAssets, ReadDocument, RigSet } from './loadModel.js';
@@ -23,6 +25,10 @@ import { type FrameSource, frameOf, frameSource, type PosedFrame } from './posed
 export type RenderMode = 'dom' | 'canvas';
 
 export interface RigPlayerOptions {
+  /** Auto selects covered runtime features; oracle is the comparison/control path. */
+  poser?: 'auto' | 'oracle';
+  /** Development stale/read-only lease checks; defaults to the development build setting. */
+  liveFrameChecks?: boolean;
   /**
    * The skin to pose under. Absent is the runtime's "no skin set" — a fresh
    * skeleton whose `setSkin` was never called (`underNoSkin`): no skin's bones
@@ -882,6 +888,13 @@ export class RigPlayer {
   private setup: RawPose | null = null;
   private seekCache: SeekCache | null = null;
   private poseGeneration = 0;
+  private runtimeModel: RuntimeModel | null = null;
+  private runtimeFrames: RuntimeFrames | null = null;
+  private runtimeReadback: RawPose | null = null;
+  private poserLabel = 'oracle: not selected';
+  private readonly oracleOnly: boolean;
+  private readonly liveChecks: boolean;
+  private liveDisposed = false;
   private cachedIdentity: SlotIdentitySnapshot | null = null;
   private cachedIdentityGen = -1;
   private readonly setList: readonly RigSet[];
@@ -922,6 +935,9 @@ export class RigPlayer {
   constructor(root: HTMLElement, assets: ModelAssets, options: RigPlayerOptions = {}) {
     const read = assets.document as ReadDocument;
     this.read = read;
+    if (options.poser !== undefined && options.poser !== 'auto' && options.poser !== 'oracle') throw new Error(`poser must be auto or oracle, got ${String(options.poser)}`);
+    this.oracleOnly = options.poser === 'oracle';
+    this.liveChecks = options.liveFrameChecks ?? (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
     this.skinName = options.skin;
     this.view = options.skin === undefined ? underNoSkin(read.doc) : underSkin(read.doc, options.skin);
     this.source = frameSource(this.view, read.parsed);
@@ -938,6 +954,7 @@ export class RigPlayer {
     this.poseGeneration = 0;
     this.cachedIdentity = null;
     this.active = this.create(options.mode ?? 'dom');
+    this.selectRuntime();
   }
 
   /**
@@ -989,7 +1006,7 @@ export class RigPlayer {
 
   /** The player's time — the running sum of the steps since `play` (or the last `seek`). */
   get time(): number {
-    return this.tracks?.trackTime ?? this.track?.trackTime ?? 0;
+    return this.runtimeFrames?.pose.trackTime ?? this.tracks?.trackTime ?? this.track?.trackTime ?? 0;
   }
 
   /**
@@ -1015,6 +1032,8 @@ export class RigPlayer {
     const plain = track === 0 && mix === 0 && alpha === 1 && !additive;
     if (!plain) this.beyondBase = true;
     if (this.tracks === null && plain && !this.trackMode) {
+      if (this.tryRuntimePlay(name, loop)) return;
+      this.oracle('animation not supported by the runtime');
       // A plain play on track 0: the single live track, reopened at the
       // animation's first pose with the physics reset there.
       this.animation = name;
@@ -1096,6 +1115,11 @@ export class RigPlayer {
 
   /** `track`'s current entry, or null where it plays nothing (and before `play`). */
   entry(track = 0): TrackEntry | null {
+    if (this.runtimeFrames !== null) {
+      if (track !== 0 || this.animation === null) return null;
+      const pose = this.runtimeFrames.pose;
+      return { animation: this.animation, loop: this.loop, trackTime: pose.trackTime, animationTime: pose.time, duration: this.runtimeFrames.model.animation(this.animation).duration, alpha: 1, additive: false };
+    }
     if (this.tracks !== null) {
       const view = this.tracks.current(track);
       return view === null
@@ -1123,6 +1147,7 @@ export class RigPlayer {
    * `seekStep` of time played — which `tracks: true` avoids entirely.
    */
   private compose(): LiveTracks {
+    this.oracle('track composition');
     if (this.tracks !== null) return this.tracks;
     this.clearSeekCache();
     const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
@@ -1246,6 +1271,7 @@ export class RigPlayer {
    * there is nothing to move.
    */
   moved(motion: { x?: number; y?: number; rotation?: number }): void {
+    if (this.runtimeFrames !== null && Number.isFinite(motion.x ?? 0) && Number.isFinite(motion.y ?? 0) && Number.isFinite(motion.rotation ?? 0)) return;
     const live = this.stepper();
     if (!live) return;
     const x = motion.x ?? 0;
@@ -1277,6 +1303,11 @@ export class RigPlayer {
     if (this.animation === null) throw new Error('seek before play: no animation is open');
     if (!(time >= 0) || !Number.isFinite(time)) throw new Error(`seek time must be a finite time at or above 0, got ${String(time)}`);
     if (this.beyondBase) throw new Error('seek is defined for a single animation on track 0; after a mix, another track, a queue or a clear the player cannot replay to a time — step it forward with frame/advance instead');
+    if (this.runtimeFrames !== null) {
+      this.runtimeFrames.pose.trackTime = time;
+      this.applyRuntimeTime();
+      return;
+    }
     // A replay has no history to ease through: an eased switch in flight lands at once.
     this.easing = null;
     const cache = this.ensureSeekCache();
@@ -1396,6 +1427,7 @@ export class RigPlayer {
 
   /** What is open: the tracks, the single track, or nothing before `play`. */
   private stepper(): LiveTrack | LiveTracks | null {
+    this.oracle('oracle track operation');
     return this.tracks ?? this.track;
   }
 
@@ -1443,6 +1475,25 @@ export class RigPlayer {
    * the events and `time` stay on the steps themselves (#103).
    */
   advance(dt: number): void {
+    if (this.runtimeFrames !== null) {
+      const step = dt * this.timeScale;
+      if (this.paused || !(step > 0)) return;
+      if (!Number.isFinite(step)) throw new Error(`advance step must be finite, got ${String(step)}`);
+      const before = this.runtimeFrames.pose.trackTime;
+      this.runtimeFrames.pose.trackTime += step;
+      this.lastStep = step;
+      this.applyRuntimeTime();
+      if (this.listeners.complete.size > 0) {
+        const duration = this.runtimeFrames.model.animation(this.animation as string).duration;
+        const after = this.runtimeFrames.pose.trackTime;
+        const complete = this.loop ? (duration === 0 || Math.floor(after / duration) > Math.floor(before / duration)) : before < duration && after >= duration;
+        if (complete) {
+          const payload: RigComplete = { animation: this.animation as string, track: 0 };
+          for (const listener of this.listeners.complete) listener(payload);
+        }
+      }
+      return;
+    }
     if (this.pose === null) return;
     const step = dt * this.timeScale;
     if (this.paused || !(step > 0)) return;
@@ -1467,6 +1518,11 @@ export class RigPlayer {
 
   /** Draws the pose the player holds. */
   draw(): void {
+    if (this.runtimeFrames !== null) {
+      this.runtimeFrames.update(this.poseGeneration, this.color, this.draws, false);
+      this.renderer.render(this.runtimeFrames.live);
+      return;
+    }
     if (this.pose === null) return;
     this.renderer.render(this.posedFrame());
   }
@@ -1489,8 +1545,10 @@ export class RigPlayer {
     if (name === this.skinName) return;
     if (this.beyondBase) throw new Error('skin cannot change after a mix, another track, a queue or a clear: the player cannot replay those to the current time — set it before composing, or play again');
     const view = name === undefined ? underNoSkin(this.read.doc) : underSkin(this.read.doc, name);
+    this.oracle('skin change');
     this.view = view;
     this.source = frameSource(view, this.read.parsed);
+    this.selectRuntime();
     this.skinName = name;
     this.setup = null;
     this.easing = null;
@@ -1910,6 +1968,7 @@ export class RigPlayer {
    * before changing anything, then applies their composition to the held pose.
    */
   private activate(sets: readonly RigSet[], physics?: 'carry' | 'reset', ease = 0): void {
+    this.oracle('attachment sets');
     for (let i = 0; i < sets.length; i++) {
       for (let j = 0; j < i; j++) {
         const other = this.touched(sets[j]);
@@ -2018,6 +2077,7 @@ export class RigPlayer {
 
   set adjust(fn: BoneAdjust | null) {
     if (fn !== null && typeof fn !== 'function') throw new Error(`adjust must be a function or null, got ${typeof fn}`);
+    this.oracle('local adjustment');
     this.adjustFn = fn;
     this.clearSeekCache();
     this.repose();
@@ -2031,6 +2091,7 @@ export class RigPlayer {
    * changed, then `draw`. Nothing before `play`.
    */
   repose(): void {
+    if (this.runtimeFrames !== null) { this.applyRuntimeTime(); return; }
     this.clearSeekCache();
     const stepper = this.tracks ?? this.track;
     if (stepper === null || this.pose === null) return;
@@ -2075,7 +2136,7 @@ export class RigPlayer {
    * mode; nothing is computed until called.
    */
   bounds(): PoseBounds | null {
-    const frame = this.pose === null ? frameOf(this.source, this.posed(), this.color, this.draws) : this.posedFrame();
+    const frame = this.runtimeFrames !== null ? this.posedFrame() : this.pose === null ? frameOf(this.source, this.posed(), this.color, this.draws) : this.posedFrame();
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const slot of frame.order) {
       const points = slot.kind === 'region' ? slot.corners : slot.vertices;
@@ -2105,9 +2166,106 @@ export class RigPlayer {
 
   /** The pose the reads above see: the track's, or the setup pose before `play` (posed once). */
   private posed(): RawPose {
+    if (this.runtimeFrames !== null && this.animation !== null) {
+      if (this.runtimeReadback === null) {
+        const track = openTrack(this.view, this.animation, { loop: this.loop, reset: 'animation', clock: physicsClockStep });
+        this.runtimeReadback = this.time > 0 ? track.step(this.time) : track.first;
+      }
+      return this.runtimeReadback;
+    }
     if (this.pose !== null) return this.pose;
     if (this.setup === null) this.setup = poseRawSetup(this.view);
     return this.activeSet === null ? this.setup : applySetToPose(this.view, this.setup, this.activeSet);
+  }
+
+  /** Selected poser, including the named reason when the oracle is required. */
+  get poser(): string { return this.runtimeFrames !== null ? 'runtime' : this.poserLabel === 'runtime' ? 'oracle: no runtime animation is active' : this.poserLabel; }
+
+  private selectRuntime(): void {
+    this.runtimeModel = null;
+    if (this.oracleOnly) { this.poserLabel = 'oracle: explicitly selected'; return; }
+    try {
+      this.runtimeModel = compileRuntime(this.view);
+      this.poserLabel = this.trackMode ? 'oracle: track composition' : this.adjustFn !== null ? 'oracle: local adjustment' : 'runtime';
+    } catch (error) {
+      if (!(error instanceof RuntimeRefusal)) throw error;
+      this.poserLabel = `oracle: ${error.message}`;
+    }
+  }
+
+  private tryRuntimePlay(name: string, loop: boolean): boolean {
+    if (this.runtimeModel === null) return false;
+    const blocked = this.trackMode ? 'track composition' : this.adjustFn !== null ? 'local adjustment' : this.activeSet !== null ? 'attachment sets' : this.easing !== null ? 'set easing' : this.env !== null ? 'environment configuration' : null;
+    if (blocked !== null) { this.poserLabel = `oracle: ${blocked}`; return false; }
+    if (!this.runtimeModel.animations.has(name)) {
+      const refused = this.runtimeModel.refused.find(value => value.animation === name);
+      if (refused) this.poserLabel = `oracle: ${new RuntimeRefusal(refused.missing).message}`;
+      return false;
+    }
+    const frames = this.runtimeFrames ?? new RuntimeFrames(this.source, this.runtimeModel);
+    frames.pose.setAnimation(name);
+    frames.pose.apply(0);
+    this.runtimeFrames = frames;
+    this.animation = name;
+    this.loop = loop;
+    this.track = null;
+    this.tracks = null;
+    this.pose = null;
+    this.rawPose = null;
+    this.poserLabel = 'runtime';
+    this.poseGeneration++;
+    this.cachedIdentity = null;
+    this.runtimeReadback = null;
+    frames.update(this.poseGeneration, this.color, this.draws);
+    return true;
+  }
+
+  private applyRuntimeTime(): void {
+    const frames = this.runtimeFrames!;
+    const duration = frames.model.animations.get(this.animation as string)!.duration;
+    const time = frames.pose.trackTime;
+    frames.pose.apply(duration === 0 ? 0 : this.loop ? time % duration : Math.min(time, duration));
+    this.poseGeneration++;
+    this.cachedIdentity = null;
+    this.runtimeReadback = null;
+    frames.update(this.poseGeneration, this.color, this.draws);
+  }
+
+  /** Materialize the old track only at an operation stage 0 cannot execute. */
+  private oracle(reason: string): void {
+    if (this.runtimeFrames === null || this.animation === null) return;
+    const time = this.runtimeFrames.pose.trackTime;
+    const generation = this.poseGeneration;
+    this.runtimeFrames = null;
+    this.runtimeReadback = null;
+    if (this.poserLabel === 'runtime') this.poserLabel = `oracle: ${reason}`;
+    this.track = openTrack(this.view, this.animation, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+    this.setRawPose(this.track.first);
+    if (time > 0) this.setRawPose(this.track.step(time));
+    this.poseGeneration = generation;
+    this.applyEnvironment(this.track);
+  }
+
+  /** Borrow buffers until the next pose mutation. Request posedFrame() to retain a snapshot. */
+  liveFrame(): LiveFrame {
+    if (this.liveDisposed) throw new Error('LIVE_FRAME_DISPOSED: cannot borrow a frame after dispose');
+    let frame: LiveFrame;
+    if (this.runtimeFrames !== null) {
+      this.runtimeFrames.update(this.poseGeneration, this.color, this.draws, false);
+      frame = this.runtimeFrames.live;
+    } else {
+      const identities = new Map(this.slotIdentity().slots.map(slot => [slot.slot, slot]));
+      frame = oracleLiveFrame(this.posedFrame(), identities, this.source.slotIndex);
+    }
+    return this.liveChecks ? this.checkedFrame(frame) : frame;
+  }
+
+  /** Keep lease closures out of the production borrow's call environment. */
+  private checkedFrame(frame: LiveFrame): LiveFrame {
+    const generation = this.poseGeneration;
+    const state = this.runtimeFrames;
+    const revision = state?.revision;
+    return checkedLiveFrame(frame, () => this.poseGeneration === generation && (state === null || state.revision === revision) ? generation : -1);
   }
 
   /** Monotonic pose generation counter matching `posedFrame().generation` and `slotIdentity().generation`. */
@@ -2124,7 +2282,8 @@ export class RigPlayer {
    */
   posedFrame(slots?: SlotFilter | null): PosedFrame {
     const draws = slots === undefined ? this.draws : slots === null ? () => true : typeof slots === 'function' ? slots : predicateOf(slots);
-    const frame: PosedFrame = this.pose === null ? { order: [] } : frameOf(this.source, this.pose, this.color, draws);
+    if (this.runtimeFrames !== null) this.runtimeFrames.update(this.poseGeneration, this.color, this.draws, false);
+    const frame: PosedFrame = this.runtimeFrames !== null ? this.runtimeFrames.snapshot(draws) : this.pose === null ? { order: [] } : frameOf(this.source, this.pose, this.color, draws);
     Object.defineProperty(frame, 'generation', {
       value: this.poseGeneration,
       enumerable: false,
@@ -2149,7 +2308,7 @@ export class RigPlayer {
     }
     const setupPose = this.setup ?? (this.setup = poseRawSetup(this.view));
     const pose = this.posed();
-    const raw = this.rawPose ?? setupPose;
+    const raw = this.runtimeFrames !== null ? pose : this.rawPose ?? setupPose;
     const shownBySlot = new Map(pose.shown.map((s) => [s.slot, s]));
     const setupShownSlots = new Set(setupPose.shown.map((s) => s.slot));
     const rawRowBySlot = new Map(raw.slots.map((r) => [r[0], r]));
@@ -2262,6 +2421,10 @@ export class RigPlayer {
 
   /** Removes the renderer's elements and hands its GPU pages back. The assets stay the caller's. */
   dispose(): void {
+    this.runtimeFrames = null;
+    this.runtimeReadback = null;
+    this.liveDisposed = true;
+    this.poseGeneration++;
     this.renderer.dispose();
     this.clearSeekCache();
     this.cachedIdentity = null;

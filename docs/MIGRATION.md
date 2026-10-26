@@ -3,6 +3,34 @@
 Moved from the README unchanged (#182): the 1.8 → 1.9 mesh backend default, and
 the `spine-html` 0.8 → 1.0 guide.
 
+## Adding live-frame consumers
+
+`posedFrame()` keeps its detached snapshot contract. Existing callers may retain
+it across `advance()` calls. There is no migration that turns that snapshot into
+a volatile view.
+
+For a consumer that draws immediately, borrow the runtime buffers instead:
+
+```ts
+player.advance(dt);
+renderer.render(player.liveFrame());
+```
+
+The built-in DOM and canvas renderers accept this view as well as `PosedFrame`.
+Custom renderers read attachment indices from `drawOrder[0..count)`, then use
+that attachment's vertex offset/count and static UV/index/page metadata. Tint
+is indexed by setup slot, `slotIndex * 4`. Do not save the live frame, its nested
+buffers or attachment views for a later pose. Development stale-view checks
+refuse those reads; production reuses the same buffers without per-borrow
+leases. Call `posedFrame()` when retaining data is required.
+
+Selection is automatic for covered models and animations; inspect `player.poser`
+for the named oracle fallback. Unsupported tracks, sets and adjustments preserve
+the old semantics on that path. No event waiver or silent feature drop is used.
+The oracle live view may allocate; development diagnostic leases also allocate.
+Neither is evidence for the production runtime's allocation bar. The raw view's
+oracle `placeholder` is `null`, not a display-name guess.
+
 ## Coming from 1.8: meshes draw through WebGL by default
 
 From 1.9 the element mode rasterizes its meshes through the one shared WebGL
