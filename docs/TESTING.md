@@ -94,3 +94,103 @@ artifact. Use the required nova-run guard and a unique `TEST_PORT` for a
 focused `bun run test tests/oracle.spec.ts --workers=1`; full-suite acceptance
 remains CI. Headless results are raster evidence, never device performance.
 
+
+## Live-frame runtime and fallback tally
+
+Generated from the run-derived `tally.json`, measured with published `rig-c`
+2.72.0 and 2.74.0 on Chromium and WebKit.
+This is correctness coverage at the four advance steps in `tests/liveFrameProbe.ts`,
+not timing evidence or a claim about unsupported features.
+
+Reproduce after installing the pinned dependencies and building fixtures:
+
+```bash
+bun run fetch-assets
+bunx --no-install playwright test --config playwright.live-frame.config.ts > live-frame-contracts.log
+node scripts/summarize-live-frame.mjs live-frame-contracts.log
+```
+
+The table below is generated from `LIVE_FRAME_CASE` records, paired with their
+browser test labels; counts come from `summarize-live-frame.mjs`. All contract
+tests must pass before summarizing; a partial log is not a complete tally.
+
+| rig-c | Rows | Runtime | Fallback | Numeric differences | Pixel differences | Pixel skips |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2.72.0 | 58 | 18 | 40 | 0 | 0 | 0 |
+| 2.74.0 | 58 | 30 | 28 | 0 | 0 | 0 |
+
+Fallback reasons below may overlap. Model-wide refusals preempt per-animation
+checks; unreported features are not proven supported or absent.
+
+| 2.74.0 fallback feature | Rows | Rigs |
+| --- | ---: | --- |
+| `clipping` | 16 | figure |
+| `physics-constraint` | 6 | look |
+| `slider-constraint` | 6 | look |
+| `path-constraint` | 4 | ride |
+| `dark-colour-timeline` | 2 | duo |
+
+Each row is one browser/rig/animation combination. `fallback` denotes the named
+oracle refusal; the feature table above groups those reasons. Numeric and pixel
+difference columns below are from the 2.74.0 run.
+
+| Browser | Rig | Animation | 2.72.0 | 2.74.0 | Numeric differences | Pixel differences |
+| --- | --- | --- | --- | --- | ---: | ---: |
+| chromium | walk | walk | runtime | runtime | 0 | 0 |
+| chromium | flex | wave | fallback | runtime | 0 | 0 |
+| chromium | flex | gust | fallback | runtime | 0 | 0 |
+| chromium | squash | bounce | fallback | runtime | 0 | 0 |
+| chromium | portrait | idle | runtime | runtime | 0 | 0 |
+| chromium | portrait | gaze | runtime | runtime | 0 | 0 |
+| chromium | portrait | turn | fallback | runtime | 0 | 0 |
+| chromium | nod | idle | fallback | runtime | 0 | 0 |
+| chromium | nod | bow | fallback | runtime | 0 | 0 |
+| chromium | look | turn | fallback | fallback | 0 | 0 |
+| chromium | look | tilt | fallback | fallback | 0 | 0 |
+| chromium | look | sweep | fallback | fallback | 0 | 0 |
+| chromium | ride | ride | fallback | fallback | 0 | 0 |
+| chromium | ride | coast | fallback | fallback | 0 | 0 |
+| chromium | figure | walk | runtime | runtime | 0 | 0 |
+| chromium | figure | mask | fallback | fallback | 0 | 0 |
+| chromium | figure | detail | runtime | runtime | 0 | 0 |
+| chromium | figure | bare | runtime | runtime | 0 | 0 |
+| chromium | figure | tilted | fallback | fallback | 0 | 0 |
+| chromium | figure | tilted_moved | fallback | fallback | 0 | 0 |
+| chromium | figure | nudge | fallback | fallback | 0 | 0 |
+| chromium | figure | cover | fallback | fallback | 0 | 0 |
+| chromium | figure | window | fallback | fallback | 0 | 0 |
+| chromium | figure | inverse | fallback | fallback | 0 | 0 |
+| chromium | figure | nested | fallback | fallback | 0 | 0 |
+| chromium | glow | burn | runtime | runtime | 0 | 0 |
+| chromium | glow | canary | runtime | runtime | 0 | 0 |
+| chromium | turned | hold | runtime | runtime | 0 | 0 |
+| chromium | duo | shift | fallback | fallback | 0 | 0 |
+| webkit | walk | walk | runtime | runtime | 0 | 0 |
+| webkit | flex | wave | fallback | runtime | 0 | 0 |
+| webkit | flex | gust | fallback | runtime | 0 | 0 |
+| webkit | squash | bounce | fallback | runtime | 0 | 0 |
+| webkit | portrait | idle | runtime | runtime | 0 | 0 |
+| webkit | portrait | gaze | runtime | runtime | 0 | 0 |
+| webkit | portrait | turn | fallback | runtime | 0 | 0 |
+| webkit | nod | idle | fallback | runtime | 0 | 0 |
+| webkit | nod | bow | fallback | runtime | 0 | 0 |
+| webkit | look | turn | fallback | fallback | 0 | 0 |
+| webkit | look | tilt | fallback | fallback | 0 | 0 |
+| webkit | look | sweep | fallback | fallback | 0 | 0 |
+| webkit | ride | ride | fallback | fallback | 0 | 0 |
+| webkit | ride | coast | fallback | fallback | 0 | 0 |
+| webkit | figure | walk | runtime | runtime | 0 | 0 |
+| webkit | figure | mask | fallback | fallback | 0 | 0 |
+| webkit | figure | detail | runtime | runtime | 0 | 0 |
+| webkit | figure | bare | runtime | runtime | 0 | 0 |
+| webkit | figure | tilted | fallback | fallback | 0 | 0 |
+| webkit | figure | tilted_moved | fallback | fallback | 0 | 0 |
+| webkit | figure | nudge | fallback | fallback | 0 | 0 |
+| webkit | figure | cover | fallback | fallback | 0 | 0 |
+| webkit | figure | window | fallback | fallback | 0 | 0 |
+| webkit | figure | inverse | fallback | fallback | 0 | 0 |
+| webkit | figure | nested | fallback | fallback | 0 | 0 |
+| webkit | glow | burn | runtime | runtime | 0 | 0 |
+| webkit | glow | canary | runtime | runtime | 0 | 0 |
+| webkit | turned | hold | runtime | runtime | 0 | 0 |
+| webkit | duo | shift | fallback | fallback | 0 | 0 |

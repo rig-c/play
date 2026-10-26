@@ -332,10 +332,10 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and th
   // pose doubt is a rigc issue against that version.
   expect(typeof manifest.devDependencies?.['rig-c']).toBe('string');
   expect(manifest.devDependencies?.['rig-c']).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(manifest.devDependencies?.['rig-c']).toBe('2.72.0');
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.72.0');
-  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.72.0');
-  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.72.0"');
+  expect(manifest.devDependencies?.['rig-c']).toBe('2.74.0');
+  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.74.0');
+  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.74.0');
+  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.74.0"');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
 });
 
