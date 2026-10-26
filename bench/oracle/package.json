@@ -1,0 +1,9 @@
+{
+  "name": "play-load-bench-oracle",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@esotericsoftware/spine-pixi-v8": "4.3.13",
+    "pixi.js": "8.22.0"
+  }
+}

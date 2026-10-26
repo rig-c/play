@@ -144,3 +144,54 @@ nothing in the suite asserts timing, and headless-WebKit fps/ms readings do
 not transfer (software rasterizer, measured up to 28× off real Safari). The
 perf oracle is the demo's stats line on a real device.
 
+## Load to first draw (development harness)
+
+`bench/load.html` profiles loading separately from the steady-state benchmark.
+Its official reference is `spine-pixi-v8` 4.3.13 in a private, non-workspace
+install under `bench/oracle`; no official code enters the library bundle.
+
+Prepare the isolated reference with
+`npm ci --prefix bench/oracle --legacy-peer-deps --ignore-scripts`, then run
+`bash scripts/fetch-load-assets.sh`, `bash scripts/fetch-assets.sh` and
+`node scripts/prepare-load-bench.mjs`. The last command fetches the baseline
+player and renderer sources from an immutable origin revision and records
+their archive hash. The baseline renderer is independent of the candidate;
+changing a renderer cannot silently change both arms. Check with
+`bun scripts/check-load-profile.mjs` and
+`bunx tsc --noEmit -p bench/tsconfig.load.json`.
+
+Run `node scripts/load-bench.mjs --dry-run` before admitting a timed run.
+It uses the actual browser, checks one model request per load, requires the
+instrumented phases, and compares baseline/candidate first frames and three
+RawPoses with signed zero preserved. Measurement uses
+`node scripts/load-bench.mjs --runs 12` on the exclusive remote runner.
+The output is `bench-results/203/load-results.json`, including raw spans,
+input hashes, nearest-rank p50/p95, IQR and paired differences. Do not use dry-run timings
+as measurements.
+
+The cases are the adapters benchmark's checksum-pinned spineboy and raptor
+inputs and the public parts-built wind-wave fixture. Each runs in default DOM
+mode and canvas mode (`regions: 'none'`), with cold and warm results separate.
+Cold means a fresh browser context with an empty browser asset cache; OS,
+server and network caches are not cleared. Warm means loading the assets
+again in the same context, with a new player and the renderer's shared GPU
+context retained. JavaScript imports precede the clock. Order reverses on
+alternate pairs; asynchronous loads cannot be compared within one animation
+frame.
+
+The opt-in Vite transform records fetch/body, the core JSON parse, model read
+(which includes that parse), the second sequence-metadata parse, page-image
+onload, sets and region cuts. The page records player construction, first pose,
+frame assembly and draw submission including uploads. Development-only WebGL
+wrappers also record `texImage2D` CPU submission time and drain the GL queue
+with `finish()` after submission; `glCompletedMs` includes that drain, while
+`submitMs` does not. This is GL command completion, not compositor completion.
+The actual GL renderer strings are recorded in every raw row.
+Nested or overlapping
+spans are not additive; multiple page loads are reported as an envelope.
+A following two-rAF boundary is a paint opportunity, not a display timestamp.
+Headless Chromium measures the CPU/submission and software GPU path here;
+neither its uploads nor rAF imply hardware GPU or real-device performance.
+The queue-drain figure does not isolate hardware execution from driver waits.
+
+

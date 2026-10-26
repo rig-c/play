@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 
 import { defineConfig } from 'vite';
+import { loadProfilePlugin } from './load-profile-plugin';
 
 /**
  * The benchmark page is its own vite project, not a third entry in the root
@@ -13,6 +14,12 @@ import { defineConfig } from 'vite';
 const here = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig({
+  plugins: process.env.LOAD_PROFILE === '1' ? [loadProfilePlugin()] : [],
+  optimizeDeps: {
+    // The normal benchmark must not scan the optional reference install.
+    entries: [fileURLToPath(new URL(process.env.LOAD_PROFILE === '1' ? './load.html' : './index.html', import.meta.url))],
+    exclude: process.env.LOAD_PROFILE === '1' ? ['rig-c/core'] : [],
+  },
   root: here,
   // The rigc builds live in the repository's own public/rigs/ (built by
   // scripts/fetch-assets.sh), shared with the demo rather than copied.

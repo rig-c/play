@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "include": ["load.ts", "load-base.generated.ts", "load-profile-plugin.ts"],
+  "exclude": []
+}

@@ -249,6 +249,8 @@ so here is what is true of this package and this repository, stated plainly:
    covers those runtimes, not this project's MIT license. They remain outside
    production source, the public API and the library package; package guards
    and the library-only pack allowlist hold that boundary.
+   The optional load-profile harness keeps `spine-pixi-v8` 4.3.13 and PixiJS
+   in a separate private install under `bench/oracle`.
 3. `rigc build`, which this repository runs to make its fixtures, also writes Spine
    skeleton data (`skeleton.json` and `skeleton.atlas`) beside each model document.
    Development tooling reads this paired export independently. Generated fixtures
@@ -264,5 +266,7 @@ so here is what is true of this package and this repository, stated plainly:
 > Software's terms**, not by this package — @rig-c/play neither adds those terms nor
 > removes them.
 
-No example assets of Esoteric Software's are fetched or redistributed. See
+The optional load-profile harness fetches checksum-pinned spineboy and raptor
+example assets together with their upstream `license.txt`. These development
+fixtures are gitignored and excluded from the library package. See
 [NOTICE.md](NOTICE.md) for the full notice.
