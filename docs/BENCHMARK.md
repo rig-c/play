@@ -162,8 +162,11 @@ changing a renderer cannot silently change both arms. Check with
 
 Run `node scripts/load-bench.mjs --dry-run` before admitting a timed run.
 It uses the actual browser, checks one model request per load, requires the
-instrumented phases, and compares baseline/candidate first frames and three
-RawPoses with signed zero preserved. Measurement uses
+instrumented phases, and compares baseline/candidate first frames, three
+RawPoses with signed zero preserved, and decoded pixels of every returned
+region image. Correctness serialization and image decoding happen outside
+the clock. Timed runs compare first frames; the additional RawPoses and region
+pixel checks run only in the dry-run. Measurement uses
 `node scripts/load-bench.mjs --runs 12` on the exclusive remote runner.
 The output is `bench-results/203/load-results.json`, including raw spans,
 input hashes, nearest-rank p50/p95, IQR and paired differences. Do not use dry-run timings
@@ -189,9 +192,16 @@ with `finish()` after submission; `glCompletedMs` includes that drain, while
 The actual GL renderer strings are recorded in every raw row.
 Nested or overlapping
 spans are not additive; multiple page loads are reported as an envelope.
+Region cutting is subdivided into page unpremultiplication (including separate
+readback, arithmetic and writeback spans), per-region draw submission, and PNG
+encode/callback wait. Synchronous child spans are summed; concurrent PNG waits
+are an envelope. A missing phase means it had no calls, not a measured zero.
+The runner hashes every baseline and candidate source module, its harness and
+configuration, and the input fixtures.
 A following two-rAF boundary is a paint opportunity, not a display timestamp.
 Headless Chromium measures the CPU/submission and software GPU path here;
 neither its uploads nor rAF imply hardware GPU or real-device performance.
 The queue-drain figure does not isolate hardware execution from driver waits.
 
-
+The current-head warm tables, region-cut subdivision, and two rejected
+candidates are recorded in [the #203 findings](../bench/LOAD_FINDINGS.md).

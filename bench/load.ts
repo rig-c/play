@@ -67,6 +67,7 @@ state.loadBench = {
     let cleanup: () => void;
     let snapshot = '';
     let snapshotFrame: unknown;
+    let regionPixels: (() => Promise<unknown>) | undefined;
     let rawCheck: (() => unknown) | undefined;
     if (arm !== 'official') {
       const assets = await (arm === 'base' ? loadBase : loadModel)({ modelUrl: rig.model, regions });
@@ -83,6 +84,14 @@ state.loadBench = {
         const track = openTrack(underNoSkin((assets.document as ReadDocument).doc), rig.animation, { loop: true, reset: 'animation' });
         return [track.first, track.step(0), track.step(1 / 60)];
       };
+      if (verifyRaw) regionPixels = async () => Promise.all([...assets.regionImages].map(async ([name, region]) => {
+        const img = await image(region.url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(img, 0, 0);
+        return [name, region.width, region.height, canvas.width, canvas.height, Array.from(ctx.getImageData(0, 0, canvas.width, canvas.height).data)];
+      }));
       sync('first-draw-submit-including-upload', () => player.renderer.render(frame));
       cleanup = () => { player.dispose(); assets.dispose(); playerRoot.remove(); };
     } else {
@@ -128,7 +137,7 @@ state.loadBench = {
     const spans = state.__loadTrace;
     state.__loadTrace = undefined;
     // Correctness serialization is deliberately outside the measured interval.
-    if (snapshotFrame) snapshot = JSON.stringify({ frame: snapshotFrame, raw: rawCheck?.() }, (_key, value) => {
+    if (snapshotFrame) snapshot = JSON.stringify({ frame: snapshotFrame, raw: rawCheck?.(), regionPixels: await regionPixels?.() }, (_key, value) => {
       if (typeof value !== 'number') return value;
       if (Object.is(value, -0)) return { number: '-0' };
       if (!Number.isFinite(value)) throw new Error('LOAD_NONFINITE_FRAME');

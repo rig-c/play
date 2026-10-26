@@ -7,9 +7,17 @@ export function loadProfilePlugin(): Plugin {
     enforce: 'pre',
     transform(source, id) {
       const coreReader = id.split('?')[0].endsWith('/rig-c/src/core/index.ts');
-      if (!coreReader && !id.split('?')[0].endsWith('/src/loadModel.ts')) return;
+      const textureReader = id.split('?')[0].endsWith('/src/DomTexture.ts');
+      if (!coreReader && !textureReader && !id.split('?')[0].endsWith('/src/loadModel.ts')) return;
       const replacements: [string, string][] = coreReader ? [
         ['value = JSON.parse(text);', "value = __sync('core-json-parse', () => JSON.parse(text));"],
+      ] : textureReader ? [
+        ['unpremultiply(page, width, height);', "__sync('page-unpremultiply', () => unpremultiply(page, width, height));"],
+        ['pixels = ctx.getImageData(0, 0, width, height);', "pixels = __sync('page-readback', () => ctx.getImageData(0, 0, width, height));"],
+        ['const data = pixels.data;', 'const __pixelStart = performance.now();\n  const data = pixels.data;'],
+        ['ctx.putImageData(pixels, 0, 0);', "__record('page-unpremultiply-loop', __pixelStart);\n  __sync('page-writeback', () => ctx.putImageData(pixels, 0, 0));"],
+        ['ctx.drawImage(source, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.sw, plan.sh);', "__sync('region-draw-submit', () => ctx.drawImage(source, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.sw, plan.sh));"],
+        ["const blob = await new Promise<Blob>((resolve, reject) => {\n    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');\n  });", "const blob = await __async('region-png-encode-wait', () => new Promise<Blob>((resolve, reject) => {\n    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');\n  }));"],
       ] : [
         ['readModel(text, where)', "__sync('model-read-including-parse', () => readModel(text, where))"],
         ['parsed: JSON.parse(text) as unknown', "parsed: __sync('sequence-json-parse', () => JSON.parse(text)) as unknown"],
