@@ -1,3 +1,4 @@
+import { physicsScopeNativeAA, physicsScopeAB, physicsScopeContracts, physicsScopeShow } from './physicsScopeProbe';
 import { atlasNativeRoundtrip } from './atlasNativeRoundtrip';
 import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
 import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity } from './liveFrameProbe';
@@ -216,6 +217,10 @@ export interface RegionGeometryProbeResult {
 }
 
 export interface RigPlayHarness {
+  physicsScopeNativeAA: typeof physicsScopeNativeAA;
+  physicsScopeAB: typeof physicsScopeAB;
+  physicsScopeContracts: typeof physicsScopeContracts;
+  physicsScopeShow: typeof physicsScopeShow;
   runtimeEventsProbe: typeof runtimeEventsProbe;
   runtimeSeekEventsProbe: typeof runtimeSeekEventsProbe;
   runtimeSkinProbe: typeof runtimeSkinProbe;
@@ -10167,6 +10172,7 @@ window.rigPlayHarness = {
   canvasCountersProbe,
   canvasPmaStage,
   canvasContractProbe,
+  physicsScopeNativeAA, physicsScopeAB, physicsScopeContracts, physicsScopeShow,
   environmentProbe,
   physicsClockProbe,
   playerBasicsProbe,

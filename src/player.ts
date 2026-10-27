@@ -73,6 +73,13 @@ export interface RigEnvironment {
   readonly gravity: readonly [number, number];
 }
 
+/** Select constraint owners by exact bone, inclusive subtree, or exact physics names. */
+export type PhysicsMotionScope = { bone: string } | { subtree: string } | { constraints: readonly string[] };
+/** Additional apparent movement in skeleton world units (Y up), or XY roll in degrees CCW. */
+export type PhysicsMotion =
+  | { translation: { x: number; y: number } }
+  | { rotation: { degrees: number; pivot: readonly [number, number] } };
+
 /** The runtime's start values — spine-core 4.3.13's `Skeleton` defaults. */
 const DEFAULT_ENVIRONMENT: RigEnvironment = Object.freeze({ wind: Object.freeze([1, 0] as const), gravity: Object.freeze([0, 1] as const) });
 
@@ -1279,6 +1286,71 @@ export class RigPlayer {
     const y = motion.y ?? 0;
     if (x !== 0 || y !== 0) live.physicsTranslate(x, y);
     if (motion.rotation) live.physicsRotate(0, 0, motion.rotation);
+  }
+
+  /**
+   * Extra apparent motion for selected physics, synchronously before evaluation.
+   * World distances are X right/Y up; rotation is XY roll around an explicit
+   * world pivot, not yaw/pitch. Does not move bones or draw. A step(0), reset,
+   * seek/skin replay or track promotion may consume/discard external history.
+   * Writes outside the selection are untouched; solver dependencies still apply.
+   */
+  physicsMoved(scope: PhysicsMotionScope, motion: PhysicsMotion): void {
+    const object = (value: unknown, fields: readonly string[], where: string): Record<string, unknown> => {
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`physicsMoved: ${where} must be an object`);
+      for (const key of Reflect.ownKeys(value)) if (typeof key !== 'string' || !fields.includes(key)) throw new Error(`physicsMoved: unknown ${where} field ${String(key)}`);
+      return value as Record<string, unknown>;
+    };
+    const finite = (value: unknown, field: string): number => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`physicsMoved: ${field} must be a finite number, got ${String(value)}`);
+      return value;
+    };
+    const selection = object(scope, ['bone', 'subtree', 'constraints'], 'scope');
+    const keys = Object.keys(selection);
+    if (keys.length !== 1) throw new Error('physicsMoved: scope must name exactly one of bone, subtree, constraints');
+    const kind = keys[0];
+    let names: string[];
+    if (kind === 'constraints') {
+      if (!Array.isArray(selection.constraints)) throw new Error('physicsMoved: constraints must be an array of exact physics names');
+      names = [];
+      for (const name of selection.constraints) {
+        if (typeof name !== 'string') throw new Error(`physicsMoved: constraint name ${String(name)} must be a string`);
+        const c = this.view.constraints.find((c) => c.kind === 'physics' && c.name === name)
+          ?? this.view.constraints.find((c) => c.name === name);
+        if (c === undefined) throw new Error(`physicsMoved: no constraint ${JSON.stringify(name)}`);
+        if (c.kind !== 'physics') throw new Error(`physicsMoved: constraint ${JSON.stringify(name)} is ${c.kind}, not physics`);
+        if (!names.includes(name)) names.push(name);
+      }
+    } else {
+      const name = selection[kind];
+      if (typeof name !== 'string' || !this.view.bones.some((b) => b.name === name)) throw new Error(`physicsMoved: no bone ${JSON.stringify(name)}`);
+      const parents = new Map(this.view.bones.map((b) => [b.name, b.parent]));
+      const includes = (bone: string | undefined): boolean => {
+        if (kind === 'bone') return bone === name;
+        for (let at = bone; at !== undefined; at = parents.get(at)) if (at === name) return true;
+        return false;
+      };
+      names = this.view.constraints.filter((c) => c.kind === 'physics' && includes((c.record as { bone?: string } | undefined)?.bone)).map((c) => c.name);
+    }
+    const input = object(motion, ['translation', 'rotation'], 'motion');
+    if (Object.keys(input).length !== 1) throw new Error('physicsMoved: motion must name exactly one of translation, rotation');
+    let x: number, y: number, degrees: number | undefined;
+    if ('translation' in input) {
+      const t = object(input.translation, ['x', 'y'], 'translation');
+      x = finite(t.x, 'translation.x'); y = finite(t.y, 'translation.y');
+    } else {
+      const r = object(input.rotation, ['degrees', 'pivot'], 'rotation');
+      degrees = finite(r.degrees, 'rotation.degrees');
+      if (!Array.isArray(r.pivot) || r.pivot.length !== 2) throw new Error('physicsMoved: rotation.pivot must be two finite world coordinates');
+      x = finite(r.pivot[0], 'rotation.pivot[0]'); y = finite(r.pivot[1], 'rotation.pivot[1]');
+    }
+    // Validate even zero/before-play calls, then preserve the exact no-op path.
+    if (names.length === 0 || (degrees === undefined ? x === 0 && y === 0 : degrees === 0)) return;
+    const live = this.stepper();
+    if (live === null) return;
+    if (degrees === undefined) live.physicsTranslate(x, y, names);
+    else live.physicsRotate(x, y, degrees, names);
+    this.clearSeekCache();
   }
 
   /** Stops stepping; `frame` keeps drawing the pose it holds. */
