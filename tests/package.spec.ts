@@ -331,12 +331,14 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and th
   // The poser is rig-c, bundled into `index.js` at the version this names — a
   // bare version, never a range, so a build is a function of one rig-c and a
   // pose doubt is a rigc issue against that version.
-  expect(typeof manifest.devDependencies?.['rig-c']).toBe('string');
-  expect(manifest.devDependencies?.['rig-c']).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(manifest.devDependencies?.['rig-c']).toBe('2.74.0');
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe('2.74.0');
-  expect(lock.packages['rig-c'][0]).toBe('rig-c@2.74.0');
-  expect(readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8')).toContain('RIGC_TAG="v2.74.0"');
+  const rigcPin = manifest.devDependencies?.['rig-c'];
+  expect(typeof rigcPin).toBe('string');
+  expect(rigcPin).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe(rigcPin);
+  expect(lock.packages['rig-c'][0]).toBe(`rig-c@${rigcPin}`);
+  const fetchAssets = readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8');
+  const rigcTag = fetchAssets.match(/^RIGC_TAG="([^"]+)"$/m)?.[1];
+  expect(rigcTag, 'scripts/fetch-assets.sh RIGC_TAG must match the manifest rig-c pin').toBe(`v${rigcPin}`);
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
 });
 

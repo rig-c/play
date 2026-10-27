@@ -102,6 +102,11 @@ Generated from the run-derived `tally.json`, measured with published `rig-c`
 This is correctness coverage at the four advance steps in `tests/liveFrameProbe.ts`,
 not timing evidence or a claim about unsupported features.
 
+The package spec derives its rig-c pin expectations from `package.json`, so a
+bump edits one source for those expectations. It checks both lockfile entries
+and the fixture script's `RIGC_TAG` against that pin; the lockfile and fixture
+tag still need to be updated together when changing the dependency.
+
 Reproduce after installing the pinned dependencies and building fixtures:
 
 ```bash
