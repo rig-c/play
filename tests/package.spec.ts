@@ -163,7 +163,7 @@ test.afterAll(() => {
 test('the package entry resolves by name in node and exposes its public API', () => {
   const run = probe(
     'probe-index.mjs',
-    "const m = await import('@rig-c/play');\nfor (const name of ['setPhysicsParameters', 'readPhysicsParameters', 'clearPhysicsParameters']) { if (typeof m.RigPlayer.prototype[name] !== 'function') throw new Error(name); }\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
+    "const m = await import('@rig-c/play');\nfor (const name of ['setPhysicsParameters', 'readPhysicsParameters', 'clearPhysicsParameters', 'physicsMoved']) { if (typeof m.RigPlayer.prototype[name] !== 'function') throw new Error(name); }\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
   );
   expect(run.status, `import('@rig-c/play') failed:\n${run.stderr}`).toBe(0);
   // Exhaustive on purpose: what the root entry exports is the package's API.

@@ -1,0 +1,174 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "physics-scope",
+  "images": "parts",
+  "skeleton": {
+    "x": -130,
+    "y": 0,
+    "width": 280,
+    "height": 270
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "head",
+      "parent": "root",
+      "y": 190
+    },
+    {
+      "name": "hair_1",
+      "parent": "head",
+      "x": -28,
+      "y": 25,
+      "rotation": -90,
+      "length": 45
+    },
+    {
+      "name": "hair_2",
+      "parent": "hair_1",
+      "x": 45,
+      "length": 45
+    },
+    {
+      "name": "hair_tip",
+      "parent": "hair_2",
+      "x": 45
+    },
+    {
+      "name": "body_root",
+      "parent": "root",
+      "x": 65,
+      "y": 85,
+      "rotation": -90,
+      "length": 45
+    },
+    {
+      "name": "body_tip",
+      "parent": "body_root",
+      "x": 45
+    },
+    {
+      "name": "ik_target",
+      "parent": "root",
+      "x": 65,
+      "y": 40
+    },
+    {
+      "name": "transform_probe",
+      "parent": "root",
+      "x": 10
+    }
+  ],
+  "constraints": [
+    {
+      "type": "ik",
+      "name": "body_ik",
+      "bones": [
+        "body_root"
+      ],
+      "target": "ik_target",
+      "mix": 1
+    },
+    {
+      "type": "transform",
+      "name": "hair_1_phys",
+      "source": "root",
+      "bones": [
+        "transform_probe"
+      ],
+      "properties": {
+        "x": {
+          "to": {
+            "x": {
+              "scale": 1
+            }
+          }
+        }
+      }
+    }
+  ],
+  "slots": [
+    {
+      "name": "head",
+      "bone": "head",
+      "attachment": "head"
+    },
+    {
+      "name": "hair_1",
+      "bone": "hair_1",
+      "attachment": "hair"
+    },
+    {
+      "name": "hair_2",
+      "bone": "hair_2",
+      "attachment": "hair"
+    },
+    {
+      "name": "body",
+      "bone": "body_root",
+      "attachment": "body"
+    }
+  ],
+  "skins": {
+    "default": {
+      "head": {
+        "head": {
+          "type": "mesh",
+          "image": "head.png",
+          "hull": 4,
+          "uvs": [
+            0,
+            0,
+            1,
+            0,
+            1,
+            1,
+            0,
+            1
+          ],
+          "vertices": [
+            -40,
+            40,
+            40,
+            40,
+            40,
+            -40,
+            -40,
+            -40
+          ],
+          "triangles": [
+            0,
+            1,
+            2,
+            0,
+            2,
+            3
+          ]
+        }
+      },
+      "hair_1": {
+        "hair": {
+          "image": "hair.png",
+          "x": 22.5,
+          "rotation": -90
+        }
+      },
+      "hair_2": {
+        "hair": {
+          "image": "hair.png",
+          "x": 22.5,
+          "rotation": -90
+        }
+      },
+      "body": {
+        "body": {
+          "image": "body.png",
+          "x": 22.5,
+          "rotation": -90
+        }
+      }
+    }
+  }
+}

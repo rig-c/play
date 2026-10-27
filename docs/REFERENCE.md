@@ -166,6 +166,51 @@ layer answers the same world, and a `seek` replays under the environment as it
 stands — no history is kept. A rig with no physics ignores both.
 `tests/readme-page.spec.ts` runs this block in the minimal page.
 
+**Moving only some physics (`physicsMoved`)**. When an external/deform-only
+head turn moves the artwork without moving its hair-root bones, provide the
+additional apparent world displacement only to the intended physics:
+
+```ts
+player.physicsMoved({ subtree: 'head' }, { translation: { x: dx, y: dy } });
+player.physicsMoved({ bone: 'hair_root' }, { rotation: { degrees: rollDelta, pivot: [px, py] } });
+player.physicsMoved({ constraints: ['hair_left', 'hair_right'] }, { translation: { x: dx, y: 0 } });
+```
+
+`bone` selects constraints whose owner is exactly that bone; `subtree` includes
+that bone and all descendants; `constraints` selects exact physics constraint
+names (repeats apply once). Rotation always names its world pivot. Distances
+are skeleton world units, x right/y up; rotation is degrees CCW in the XY plane.
+Yaw/pitch are not roll: derive projected displacement from the producer's actual
+geometry/depth and supply its change since the preceding sample. No automatic
+gain, force conversion or dt multiplier is applied. If the bones already make
+that displacement, do not send it again. Use `moved()` for movement of the whole
+rig/display object, including its existing rotation about the skeleton origin.
+
+The complete scope and motion are validated before any state changes. Unknown
+bones (even before `play`), unknown/non-physics constraints, extra fields,
+ambiguous variants and non-finite numbers refuse by name. Valid calls before
+play have no state to move; an empty selection or valid zero motion is an exact
+no-op. The call changes selected remembered origins synchronously, leaving the
+held pose, generation and rendered picture alone until evaluation; it does not
+rotate remembered tip direction or inject angular velocity. An origin exactly
+at a rotation pivot has zero displacement.
+
+Call immediately before `advance`/`frame`. Explicit `repose()`/`step(0)` may
+consume input; reset/first activation may overwrite it. Pause/zero advance does
+not evaluate. Seek, skin replay and promotion to composed tracks do not replay
+external motion history; use `tracks: true` from the start when composing.
+No unselected state is written by this input. Independent chains stay identical
+to a matched no-input baseline after stepping; normal descendant/constraint
+coupling still applies. Both renderer modes use the same posing path.
+
+A head-local input agrees with native bone motion up to floating-point
+reassociation, which the physics solver can amplify by stepping; it is not
+bit-for-bit, and the acceptance cap in the test is empirical for its fixture,
+not a bound on every rig. The fixture's peak cap is `F * ulp(nativePeak)`,
+with the actual rotational integration count `F` taken up to the earliest peak
+frame of a fresh native run. It is frozen before the scoped comparison. The
+coordinatewise maximum difference is reported separately, without that gate.
+
 The demo's `wind.html` is the same thing with controls: wind and gravity
 sliders, a drag on the stage, and the rig named by `?model=` (the `cloth` test
 rig by default; `bun run dev`, then `/wind.html?model=rigs/<name>/skeleton.model.json`).

@@ -183,6 +183,9 @@ package built from this tree.
 - [docs/REFERENCE.md](docs/REFERENCE.md) — what the player does once it is on
   the page: what ships and what is measured (*Status*), then every API section
   from wind, gravity and dragging to the runtime knobs and what they cost.
+  `physicsMoved(scope, motion)` supplies apparent world movement to named bone,
+  subtree or constraint physics; `moved()` continues to report whole-rig motion.
+  See the reference for explicit pivots, units and evaluation/history limits.
 - [docs/MIGRATION.md](docs/MIGRATION.md) — coming from 1.8 (meshes draw through
   WebGL by default since 1.9) and from `spine-html` 0.8 (the 0.8 → 1.0 table,
   what has no counterpart, before and after).
