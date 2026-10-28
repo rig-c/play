@@ -95,7 +95,47 @@ focused `bun run test tests/oracle.spec.ts --workers=1`; full-suite acceptance
 remains CI. Headless results are raster evidence, never device performance.
 
 
-## Live-frame runtime and fallback tally
+## Reproducing a runtime upgrade census
+
+`scripts/runtime-corpus.mjs` enumerates every generated model under both
+`public/rigs/` and `public/bench/`, including packed, PMA and still variants.
+Build the first group with `bun run fetch-assets`, and the checksum-pinned
+spineboy/raptor examples with `bash scripts/fetch-load-assets.sh`. For a
+dependency comparison, preserve the baseline-built fixtures and feed those
+same bytes to both checkouts; additionally census the candidate-built fixtures.
+Use an immutable origin revision for the baseline source.
+
+```bash
+bun scripts/runtime-corpus.mjs --fixtures /path/to/fixtures/public \
+  --player /path/to/checkout --out /path/to/receipts/census.json --dry-run
+bun scripts/runtime-corpus.mjs --fixtures /path/to/fixtures/public \
+  --player /path/to/checkout --out /path/to/receipts/census.json
+```
+
+This CPU census compares the real player's selected poser, frame, slot
+identity and borrowed vertices/tints with its explicit oracle. Its four
+cumulative track times are 0, 0.125, 0.5 and 1.25, at `Object.is` tolerance
+zero. It makes no draw or pixel claim. A model with no animations is reported
+explicitly rather than counted as a runtime row.
+
+On the remote pool, serve the candidate with Vite and run
+`node scripts/runtime-corpus-browser.mjs <census.json> <base-url> <out.json>`.
+It verifies the served model SHA-256 and complete animation list, then runs
+the existing `liveFrameProbe` on every model in Chromium and WebKit. The probe
+also compares borrowed dark/clip metadata directly with snapshot and oracle,
+preserves shared clip identity, and checks snapshot/lease contracts. It records
+no-draw pixel skips explicitly; they never count as pixel passes.
+`scripts/live-frame-allocation.mjs <model> <animation>` remains the separate
+production-loop meter, with its unretained object plant.
+
+`scripts/pose-clipping-bench.mjs --help` describes the CPU-only clipping adapter
+for the checksum-pinned core#1589 stage helpers. It measures the core oracle's
+`openTrack` path against spine-core, with A/A and same-frame AB/BA controls;
+it does not measure the runtime live-buffer loop. Its stage timings are reported,
+not an acceptance bar. Use an external scratch directory and the exclusive
+remote runner for timing; all browser verification uses the ordinary pool.
+
+## Historical live-frame runtime and fallback tally
 
 Generated from the run-derived `tally.json`, measured with published `rig-c`
 2.72.0 and 2.74.0 on Chromium and WebKit.

@@ -2287,6 +2287,13 @@ export class RigPlayer {
   private selectRuntime(): void {
     this.runtimeModel = null;
     if (this.oracleOnly) { this.poserLabel = 'oracle: explicitly selected'; return; }
+    // RuntimePose.apply defaults to physics='none'; its looping step() alone
+    // does not implement this player's clamped/replayed clock and movement API.
+    const physics = this.view.constraints.find(constraint => constraint.kind === 'physics');
+    if (physics) {
+      this.poserLabel = `oracle: physics constraint "${physics.name}" requires player clock, seek and movement integration`;
+      return;
+    }
     try {
       this.runtimeModel = compileRuntime(this.view);
       this.poserLabel = this.trackMode ? 'oracle: track composition' : this.adjustFn !== null ? 'oracle: local adjustment' : 'runtime';

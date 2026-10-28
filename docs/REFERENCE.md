@@ -286,6 +286,18 @@ local adjustment or attachment-set operation continues on the oracle when the
 runtime cannot execute it. `new RigPlayer(root, assets, { poser: 'oracle' })`
 selects that reference path explicitly.
 
+The bundled runtime reads animated dark colour, draw order (including each
+slot's full-order `z`) and clipping polygons from the core's live buffers.
+Covered slots share one borrowed clip object; detached snapshots copy its
+polygon while preserving that sharing within the snapshot. Filtering a clip's
+own slot suppresses its effect, just as on the oracle path.
+
+Models containing a physics constraint stay on the oracle with a named
+`physics constraint "…" requires player clock, seek and movement integration`
+reason. The player's nonloop clamp, seek replay and movement APIs continue to
+use that existing path. Track composition, local adjustment, attachment sets,
+set easing and environment configuration also retain their oracle policies.
+
 ```ts
 player.advance(dt);
 const live = player.liveFrame();

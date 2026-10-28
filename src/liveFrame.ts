@@ -1,7 +1,7 @@
 import { liveDrawings as drawings } from './liveFrameSource.js';
 import { poseRawSetup } from 'rig-c/core';
 import { compileRuntime, RuntimePose, type RuntimeAttachment, type RuntimeModel } from 'rig-c/runtime';
-import { frameOf, type BlendMode, type FrameSource, type PosedFrame, type PosedSlot } from './posedFrame.js';
+import { frameOf, type BlendMode, type FrameSource, type PosedClip, type PosedFrame, type PosedSlot } from './posedFrame.js';
 
 /** An indexed, read-only buffer. Buffer mutation methods are deliberately absent. */
 export interface LiveNumbers {
@@ -9,14 +9,14 @@ export interface LiveNumbers {
   readonly [index: number]: number;
 }
 
-/** A borrowed clipping polygon on the oracle fallback. */
+/** A borrowed clipping polygon, shared by the slots it covers. */
 export interface LiveClip {
   readonly polygon: LiveNumbers;
   readonly inverse: boolean;
   readonly convex: boolean;
 }
 
-/** Static draw metadata resolved once for an attachment. */
+/** Attachment metadata resolved once; dark and clip borrow the current pose. */
 export interface LiveAttachment {
   readonly slot: string;
   readonly slotIndex: number;
@@ -113,6 +113,12 @@ export function checkedLiveFrame(frame: LiveFrame, current: () => number): LiveF
   return lease;
 }
 
+/** Keep the optional accessor's capture out of data-only attachment creation. */
+function withLiveClip(metadata: LiveAttachment, template: PosedSlot | null): LiveAttachment {
+  Object.defineProperty(metadata, 'clip', { get: () => template?.clip ?? null });
+  return metadata;
+}
+
 /** @internal Runtime draw state. Constructed once per document view. */
 export class RuntimeFrames {
   readonly model: RuntimeModel;
@@ -122,6 +128,7 @@ export class RuntimeFrames {
   private readonly order: Int32Array;
   private readonly tint: Float64Array;
   private readonly templates: Array<PosedSlot | null>;
+  private readonly clips: Array<PosedClip | null>;
   private readonly colours: ReadonlyArray<readonly number[]>;
   /** Incremented when a draw refresh changes colour without a pose step. */
   revision = 0;
@@ -136,6 +143,10 @@ export class RuntimeFrames {
     this.tint = new Float64Array(this.model.slots.length * 4);
     const colours: number[][] = [];
     const metadata: LiveAttachment[] = [];
+    this.clips = this.model.attachments.map(attachment => attachment.clip === undefined ? null : {
+      polygon: numbers(this.pose.vertices, attachment.offset, attachment.count),
+      inverse: attachment.clip.inverse, convex: attachment.clip.convex,
+    });
     this.templates = this.model.attachments.map((attachment, index) => {
       const identity = attachment as RuntimeAttachment & { readonly skin?: string; readonly placeholder?: string };
       if (identity.skin === undefined || identity.placeholder === undefined) {
@@ -154,16 +165,22 @@ export class RuntimeFrames {
         if (template.kind === 'region') template.corners = vertices;
         else template.vertices = vertices;
         template.tint = numbers(this.tint, attachment.slot * 4, 4) as [number, number, number, number];
+        if (slot.dark !== null) template.dark = numbers(this.pose.dark, attachment.slot * 3, 3) as [number, number, number];
       }
-      metadata.push(Object.freeze({
+      const item = {
         slot: slot.name, slotIndex: attachment.slot, attachment: attachment.name,
         skin: identity.skin, placeholder: identity.placeholder,
-        kind: template?.kind ?? 'none', region: template?.kind === 'region' ? template.region : null,
+        kind: template?.kind ?? 'none' as const, region: template?.kind === 'region' ? template.region : null,
         page: template?.page ?? null, pma: template?.pma ?? false, blend: slot.blend,
         offset: attachment.offset, count: attachment.count,
         uvs: Object.freeze(template?.uvs ?? []), triangles: Object.freeze(template?.kind === 'mesh' ? template.triangles : []),
-        dark: template?.dark ? Object.freeze(template.dark) : null, clip: null,
-      }));
+        dark: template?.dark ?? null,
+        clip: null,
+      };
+      // Keep data-only metadata for a model with no clips. Besides being
+      // unnecessary there, the accessor changes JSC's allocation behavior
+      // when callers read the attachment's offset on the loose path fixture.
+      metadata.push(Object.freeze(this.pose.clipping === null ? item : withLiveClip(item, template)));
       return template;
     });
     this.colours = colours;
@@ -184,16 +201,34 @@ export class RuntimeFrames {
     }
     if (colorChanged) this.revision++;
     let count = 0;
-    for (let si = 0; si < this.pose.shown.length; si++) {
+    let clip: PosedClip | null = null;
+    let end: string | null = null;
+    for (let z = 0; z < this.pose.drawOrder.length; z++) {
+      const si = this.pose.drawOrder[z];
       const ai = this.pose.shown[si];
+      const slot = this.model.slots[si];
+      const attachment = ai < 0 ? null : this.model.attachments[ai];
+      if (attachment?.clip !== undefined) {
+        if (clip !== null && end === slot.name) clip = null;
+        if (clip === null && this.model.active[attachment.bone] && draws(slot.name)) {
+          clip = this.clips[ai]; end = attachment.clip.end;
+        }
+        continue;
+      }
       const template = ai < 0 ? null : this.templates[ai];
-      if (!template || !this.model.active[this.model.slots[si].bone]) continue;
-      const offset = si * 4;
-      const colour = this.colours[ai];
-      for (let c = 0; c < 4; c++) this.tint[offset + c] = this.pose.light[offset + c] * colour[c] * color[c];
-      if (!draws(template.slot)) continue;
-      this.order[count] = ai;
-      this.renderFrame.order[count++] = template;
+      if (template && this.model.active[slot.bone]) {
+        template.z = z;
+        if (clip === null) { if (template.clip !== undefined) delete template.clip; }
+        else template.clip = clip;
+        const offset = si * 4;
+        const colour = this.colours[ai];
+        for (let c = 0; c < 4; c++) this.tint[offset + c] = this.pose.light[offset + c] * colour[c] * color[c];
+        if (draws(template.slot)) {
+          this.order[count] = ai;
+          this.renderFrame.order[count++] = template;
+        }
+      }
+      if (clip !== null && end === slot.name) clip = null;
     }
     this.renderFrame.order.length = count;
     this.drawn = count;
@@ -201,18 +236,38 @@ export class RuntimeFrames {
   }
 
   snapshot(draws?: (slot: string) => boolean): PosedFrame {
-    const selected: PosedSlot[] = [];
-    for (let si = 0; si < this.pose.shown.length; si++) {
+    const order: PosedSlot[] = [];
+    const copies = new Map<PosedClip, PosedClip>();
+    let clip: PosedClip | null = null;
+    let end: string | null = null;
+    for (let z = 0; z < this.pose.drawOrder.length; z++) {
+      const si = this.pose.drawOrder[z];
       const ai = this.pose.shown[si];
+      const attachment = ai < 0 ? null : this.model.attachments[ai];
+      const name = this.model.slots[si].name;
+      if (attachment?.clip !== undefined) {
+        if (clip !== null && end === name) clip = null;
+        if (clip === null && this.model.active[attachment.bone] && (draws === undefined || draws(name))) {
+          clip = this.clips[ai]; end = attachment.clip.end;
+        }
+        continue;
+      }
       const slot = ai < 0 ? null : this.templates[ai];
-      if (slot && this.model.active[this.model.slots[si].bone] && (draws === undefined || draws(slot.slot))) selected.push(slot);
+      if (slot && this.model.active[this.model.slots[si].bone] && (draws === undefined || draws(name))) {
+        const common = { ...slot, z, tint: slot.tint.slice() as [number, number, number, number] };
+        if (slot.dark) common.dark = slot.dark.slice() as [number, number, number];
+        delete common.clip;
+        if (clip !== null) {
+          let copy = copies.get(clip);
+          if (!copy) { copy = { ...clip, polygon: clip.polygon.slice() }; copies.set(clip, copy); }
+          common.clip = copy;
+        }
+        order.push(slot.kind === 'region'
+          ? { ...common, kind: 'region' as const, region: slot.region, corners: slot.corners.slice(), page: slot.page, pma: slot.pma, uvs: slot.uvs }
+          : { ...common, kind: 'mesh' as const, vertices: slot.vertices.slice(), page: slot.page, pma: slot.pma, uvs: slot.uvs, triangles: slot.triangles, sequence: slot.sequence });
+      }
+      if (clip !== null && end === name) clip = null;
     }
-    const order = selected.map(slot => {
-      const common = { ...slot, tint: slot.tint.slice() as [number, number, number, number] };
-      return slot.kind === 'region'
-        ? { ...common, kind: 'region' as const, region: slot.region, corners: slot.corners.slice(), page: slot.page, pma: slot.pma, uvs: slot.uvs }
-        : { ...common, kind: 'mesh' as const, vertices: slot.vertices.slice(), page: slot.page, pma: slot.pma, uvs: slot.uvs, triangles: slot.triangles, sequence: slot.sequence };
-    });
     return { order };
   }
 }
