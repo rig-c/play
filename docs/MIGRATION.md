@@ -76,7 +76,7 @@ name, and unloading is still elements first, bitmaps second.
 
 | 0.8.0 (`spine-html`) | 1.x (`@rig-c/play`, formerly `rig-play`) | Note |
 | --- | --- | --- |
-| `npm i spine-html @esotericsoftware/spine-core` | `npm i @rig-c/play`, and `npm i -D rig-c` for the build tool | 0.8 declared spine-core as a peer dependency (`>=4.0.0 <4.4.0`). 1.0.0 declares no dependencies and no peer dependencies. |
+| `npm i spine-html @esotericsoftware/spine-core` | `npm i @rig-c/play`, and `npm i -D @rig-c/core` for the build tool | 0.8 declared spine-core as a peer dependency (`>=4.0.0 <4.4.0`). 1.0.0 declares no dependencies and no peer dependencies. |
 | `loadSkeletonAssets(options)` | `loadModel(options)` | One URL instead of two. The `.atlas` and `skeleton.json` a build writes beside the document are not fetched. |
 | `LoadSkeletonAssetsOptions.atlasUrl`, `skeletonUrl` | `LoadModelOptions.modelUrl` | |
 | `resolvePage(pageName, atlasUrl)` | `resolvePage(pageName, modelUrl)` | The default now resolves a page name against the model URL's directory. |
