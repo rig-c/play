@@ -14,8 +14,8 @@ DOM**: one absolutely-positioned `<img>` per rigid slot, posed with a single CSS
 `matrix()` write per frame, and deforming meshes on small per-part canvases; or
 as **one canvas** per player. It poses through `rig-c/core`, rigc's own posing
 core, bundled into the package, and links nothing from Esoteric Software.
-`rig-play` and `spine-html` are the same package under the names it shipped as
-before; the compiler is [rig-c/core](https://github.com/rig-c/core) (npm `rig-c`)
+`rig-play` is the convenience install name; `spine-html` is the legacy install name.
+The compiler is [@rig-c/core](https://github.com/rig-c/core) (npm `@rig-c/core`)
 and the part generator [rig-c/parts](https://github.com/rig-c/parts).
 
 ## Why
@@ -103,7 +103,7 @@ and the 0.x numbers are in [docs/BENCHMARK.md](docs/BENCHMARK.md).
 
 ```bash
 npm i @rig-c/play
-npm i -D rig-c    # the build tool: `rigc build` writes the model the player loads
+npm i -D @rig-c/core    # the build tool: `rigc build` writes the model the player loads
 ```
 
 The package plays rigs built by [rigc](https://github.com/rig-c/core):
