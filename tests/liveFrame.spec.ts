@@ -1,5 +1,52 @@
 import { expect, test } from '@playwright/test';
 
+test('runtime dark, order and shared clips preserve snapshots, filters and nested leases', async ({ page }) => {
+  await page.goto('/tests/harness.html');
+  await page.waitForFunction(() => Boolean(window.rigPlayHarness));
+  const rows = await page.evaluate(() => window.rigPlayHarness.runtimeMetadataProbe());
+  expect(rows).toHaveLength(4);
+  for (const row of rows) {
+    expect(row.poser).toBe('runtime');
+    expect(row.difference, row.rig).toBeNull();
+    expect(row.filterDifference, row.rig).toBeNull();
+    expect(row.afterFilterDifference, row.rig).toBeNull();
+    expect(row.snapshotKept, row.rig).toBe(true);
+    expect(row.nestedStale, row.rig).toBe(true);
+    expect(row.readonly, row.rig).toBe(true);
+  }
+  expect(rows.find(row => row.rig === 'figure')!.shared).toBe(true);
+});
+
+test('physics names its oracle policy and preserves nonloop timeScale, replay and movement', async ({ page }) => {
+  await page.goto('/tests/harness.html');
+  await page.waitForFunction(() => Boolean(window.rigPlayHarness));
+  const rows = await page.evaluate(() => window.rigPlayHarness.runtimePhysicsPolicyProbe());
+  for (const row of rows) {
+    expect(row.poser).toMatch(/^oracle: physics constraint ".+" requires player clock, seek and movement integration$/);
+    expect(row.difference, row.operation).toBeNull();
+    expect(row.timeDifference, row.operation).toBeNull();
+  }
+});
+
+test('runtime clip movement reuses mesh rasters, inverse uses path and disappearance restores the root', async ({ page }) => {
+  await page.goto('/tests/harness.html');
+  await page.waitForFunction(() => Boolean(window.rigPlayHarness));
+  const rows = await page.evaluate(() => window.rigPlayHarness.runtimeClipRendererProbe());
+  expect(rows.every(row => row.poser === 'runtime')).toBe(true);
+  expect(rows[0].meshes).toBeGreaterThan(0);
+  for (const row of rows.slice(1)) {
+    expect(row.meshes).toBe(0);
+    expect(row.reused).toBeGreaterThan(0);
+  }
+  expect(rows[1].clipWrites).toBe(0);
+  expect(rows[2].rootClip).not.toBe(rows[1].rootClip);
+  expect(rows[3].elementPaths.some(path => path.startsWith('path('))).toBe(true);
+  expect(rows[3].rootClip).toBe('inset(0px)');
+  expect(rows[4].rootClip).toBe('inset(0px)');
+  expect(rows[4].elementPaths.every(path => path === '')).toBe(true);
+  expect(rows[4].frameHasClip).toBe(false);
+});
+
 for (const rig of ['walk', 'flex', 'squash', 'portrait', 'nod', 'look', 'ride', 'figure', 'glow', 'turned', 'duo']) {
   test(`live frame exact values, snapshots and pixels: ${rig}`, async ({ page }) => {
     await page.goto('/tests/harness.html');

@@ -1,7 +1,7 @@
 import { physicsScopeNativeAA, physicsScopeAB, physicsScopeContracts, physicsScopeShow } from './physicsScopeProbe';
 import { atlasNativeRoundtrip } from './atlasNativeRoundtrip';
 import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
-import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity } from './liveFrameProbe';
+import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity, runtimeMetadataProbe, runtimePhysicsPolicyProbe, runtimeClipRendererProbe } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
 import { liveCoreProbe } from './liveCoreProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
@@ -225,6 +225,9 @@ export interface RigPlayHarness {
   runtimeSeekEventsProbe: typeof runtimeSeekEventsProbe;
   runtimeSkinProbe: typeof runtimeSkinProbe;
   liveFrameProbe: typeof liveFrameProbe;
+  runtimeMetadataProbe: typeof runtimeMetadataProbe;
+  runtimePhysicsPolicyProbe: typeof runtimePhysicsPolicyProbe;
+  runtimeClipRendererProbe: typeof runtimeClipRendererProbe;
   liveFrameTransitions: typeof liveFrameTransitions;
   liveFrameNullIdentity: typeof liveFrameNullIdentity;
   batchContextInputProbe: typeof batchContextInputProbe;
@@ -10154,6 +10157,9 @@ window.rigPlayHarness = {
   runtimeSeekEventsProbe,
   runtimeSkinProbe,
   liveFrameProbe,
+  runtimeMetadataProbe,
+  runtimePhysicsPolicyProbe,
+  runtimeClipRendererProbe,
   liveFrameTransitions,
   liveFrameNullIdentity,
   batchContextInputProbe,

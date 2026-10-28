@@ -1,4 +1,4 @@
-import { CanvasRenderer, loadModel, RigPlayer, type PosedFrame } from '../src/index';
+import { CanvasRenderer, DomRenderer, loadModel, RigPlayer, type PosedFrame } from '../src/index';
 
 export function mismatch(a: unknown, b: unknown, path = 'frame'): string | null {
   if (typeof a === 'number' && typeof b === 'number') return Object.is(a, b) ? null : `${path}: ${a} != ${b}`;
@@ -71,6 +71,21 @@ export async function liveFrameProbe(rig: string, mutant: 'none' | 'vertices' | 
             const points = slot.kind === 'region' ? slot.corners : slot.vertices;
             for (let c = 0; c < points.length; c++) if (!Object.is(view.vertices[attachment.offset + c], points[c])) numeric.push(`live vertex ${attachment.slot}[${c}] differs`);
             for (let c = 0; c < 4; c++) if (!Object.is(view.tint[attachment.slotIndex * 4 + c], slot.tint[c])) numeric.push(`live tint ${attachment.slot}[${c}] differs`);
+            const darkDifference = mismatch(attachment.dark, slot.dark ?? null, `live dark ${slot.slot}`);
+            if (darkDifference) numeric.push(darkDifference);
+            const clipDifference = mismatch(attachment.clip, slot.clip ?? null, `live clip ${slot.slot}`);
+            if (clipDifference) numeric.push(clipDifference);
+            const expected = b.order[i];
+            if (expected) {
+              const oracleDark = mismatch(attachment.dark, expected.dark ?? null, `oracle live dark ${slot.slot}`);
+              if (oracleDark) numeric.push(oracleDark);
+              const oracleClip = mismatch(attachment.clip, expected.clip ?? null, `oracle live clip ${slot.slot}`);
+              if (oracleClip) numeric.push(oracleClip);
+            }
+            for (let j = 0; j < i; j++) {
+              const previous = a.order[j], previousAttachment = view.attachments[view.drawOrder[j]];
+              if (slot.clip && slot.clip === previous.clip && attachment.clip !== previousAttachment.clip) numeric.push(`live shared clip ${slot.slot} differs`);
+            }
           }
           try { Reflect.set(view.vertices, '0', 123); } catch (error) { readonly = String(error).includes('LIVE_FRAME_READONLY'); }
           const bounds = oracle.bounds();
@@ -102,6 +117,80 @@ export async function liveFrameProbe(rig: string, mutant: 'none' | 'vertices' | 
     }
     return { rig, rows };
   } finally { assets.dispose(); }
+}
+
+/** Dynamic metadata stays borrowed in live views and detached in snapshots. */
+export async function runtimeMetadataProbe() {
+  const results = [];
+  for (const [rig, animation] of [['figure', 'tilted_moved'], ['duo', 'shift'], ['draw', 'reorder'], ['topology', 'swap']]) {
+    const assets = await loadModel({ modelUrl: `/rigs/${rig}/skeleton.model.json` });
+    const roots = [document.createElement('div'), document.createElement('div')];
+    const players = [new RigPlayer(roots[0], assets, { liveFrameChecks: true }), new RigPlayer(roots[1], assets, { poser: 'oracle' })];
+    try {
+      players.forEach(player => player.play(animation));
+      players.forEach(player => player.advance(.125));
+      const snapshot = players[0].posedFrame(), kept = JSON.stringify(snapshot);
+      const live = players[0].liveFrame();
+      const clip = live.attachments[live.drawOrder[0]]?.clip;
+      const polygon = clip?.polygon;
+      const clips = snapshot.order.filter(slot => slot.clip).map(slot => slot.clip!);
+      const shared = clips.length > 1 ? clips.every(value => value === clips[0]) : null;
+      const filtered = players.map(player => player.posedFrame(slot => slot !== 'clip'));
+      const filterDifference = mismatch(filtered[0], filtered[1]);
+      const afterFilterDifference = mismatch(players[0].posedFrame(), players[1].posedFrame());
+      let readonly = polygon === undefined;
+      if (polygon) try { Reflect.set(polygon, '0', 10); } catch (error) { readonly = String(error).includes('LIVE_FRAME_READONLY'); }
+      players.forEach(player => player.advance(.375));
+      let nestedStale = polygon === undefined;
+      if (polygon) try { void polygon[0]; } catch (error) { nestedStale = String(error).includes('LIVE_FRAME_STALE'); }
+      results.push({ rig, poser: players[0].poser, shared, readonly, nestedStale,
+        snapshotKept: kept === JSON.stringify(snapshot), filterDifference, afterFilterDifference,
+        difference: mismatch(players[0].posedFrame(), players[1].posedFrame()) });
+    } finally { players.forEach(player => player.dispose()); assets.dispose(); }
+  }
+  return results;
+}
+
+/** Physics keeps the existing clock, clamp, replay and movement path by name. */
+export async function runtimePhysicsPolicyProbe() {
+  const assets = await loadModel({ modelUrl: '/rigs/cloth/skeleton.model.json' });
+  const roots = [document.createElement('div'), document.createElement('div')];
+  const players = [new RigPlayer(roots[0], assets), new RigPlayer(roots[1], assets, { poser: 'oracle' })];
+  try {
+    const rows: Array<{ operation: string; poser: string; difference: string | null; timeDifference: string | null }> = [];
+    const record = (operation: string) => rows.push({ operation, poser: players[0].poser,
+      difference: mismatch(players[0].posedFrame(), players[1].posedFrame()),
+      timeDifference: mismatch(players[0].time, players[1].time) });
+    for (const player of players) { player.timeScale = .5; player.play('hang', { loop: false }); }
+    record('play nonloop');
+    for (const dt of [.125, .375, 8]) { players.forEach(player => player.advance(dt)); record(`advance ${dt}`); }
+    players.forEach(player => player.seek(.25)); record('seek backward');
+    players.forEach(player => { player.moved({ x: 3, y: 1, rotation: 2 }); player.advance(1 / 60); }); record('moved');
+    players.forEach(player => { player.skin = 'default'; player.advance(.125); }); record('skin replay');
+    return rows;
+  } finally { players.forEach(player => player.dispose()); assets.dispose(); }
+}
+
+/** The live adapter's changing clip must not invalidate a stationary mesh. */
+export async function runtimeClipRendererProbe() {
+  const assets = await loadModel({ modelUrl: '/rigs/figure/skeleton.model.json' });
+  const root = document.createElement('div');
+  root.style.clipPath = 'inset(0px)';
+  document.body.append(root);
+  const player = new RigPlayer(root, assets);
+  const renderer = player.renderer as DomRenderer;
+  const rows = [];
+  try {
+    for (const animation of ['tilted', 'tilted', 'tilted_moved', 'inverse', 'bare']) {
+      player.play(animation, { loop: false });
+      player.draw();
+      rows.push({ animation, poser: player.poser, meshes: renderer.meshCount, reused: renderer.meshReuseCount,
+        clipCount: renderer.clipCount, clipWrites: renderer.clipWriteCount, rootClip: root.style.clipPath,
+        elementPaths: [...root.querySelectorAll<HTMLElement>('img,canvas')].map(element => element.style.clipPath),
+        frameHasClip: player.posedFrame().order.some(slot => slot.clip !== undefined) });
+    }
+    return rows;
+  } finally { player.dispose(); root.remove(); assets.dispose(); }
 }
 
 export async function liveFrameTransitions() {
