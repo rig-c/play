@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.1](https://github.com/rig-c/play/compare/v1.21.0...v1.21.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **docs:** name @rig-c/core as the build tool's canonical package in the README and the migration guide ([#223](https://github.com/rig-c/play/issues/223)) ([0b16a15](https://github.com/rig-c/play/commit/0b16a15e1aee081e2303428138fbd1329bad5377)), closes [#222](https://github.com/rig-c/play/issues/222)
+
 ## [1.21.0](https://github.com/rig-c/play/compare/v1.20.0...v1.21.0) (2026-10-28)
 
 
