@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.21.0](https://github.com/rig-c/play/compare/v1.20.0...v1.21.0) (2026-10-28)
+
+
+### Features
+
+* **physics:** a head-local physics input — physicsMoved(scope, motion) moves only the named constraints ([#218](https://github.com/rig-c/play/issues/218)) ([fb67c3c](https://github.com/rig-c/play/commit/fb67c3c501ba2b8f1a7193c759dc6a6eb98f5a8e))
+* **runtime:** play the finished runtime poser (rig-c 2.79) and read its dark colour, draw order and clipping ([#221](https://github.com/rig-c/play/issues/221)) ([eaedd3a](https://github.com/rig-c/play/commit/eaedd3a01a928190f01f32d3042a4f13c337fc7f)), closes [#220](https://github.com/rig-c/play/issues/220)
+
 ## [1.20.0](https://github.com/rig-c/play/compare/v1.19.0...v1.20.0) (2026-10-26)
 
 
