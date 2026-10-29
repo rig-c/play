@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.2](https://github.com/rig-c/play/compare/v1.21.1...v1.21.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **docs:** describe the runtime-poser draw path and point at the moved reference sections ([#226](https://github.com/rig-c/play/issues/226)) ([619ef10](https://github.com/rig-c/play/commit/619ef1016cc052dd45693f2eb0883ac507bd49d8)), closes [#225](https://github.com/rig-c/play/issues/225)
+
 ## [1.21.1](https://github.com/rig-c/play/compare/v1.21.0...v1.21.1) (2026-10-28)
 
 
