@@ -9,7 +9,8 @@ DOM — rigid slots as `<img>` posed
 by CSS `matrix()`, mesh slots on small per-part canvases (canvas2d or WebGL-blit
 backend), interleaved in one stacking context. It loads the compiled model
 document `rigc build` writes (`skeleton.model.json`, `rigc-compiled/3`), poses it
-through `rig-c/core`, and draws each pose as a `PosedFrame`. Production since
+through the bundled `rig-c/runtime` and `rig-c/core`, and draws each pose as a
+borrowed `LiveFrame` or detached `PosedFrame`. Production since
 v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
 `docs/BENCHMARK.md`, for architecture and measured numbers. `rig-play` and `spine-html` are the same package under earlier names.
 
@@ -32,21 +33,30 @@ v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
 
 ## Architecture invariants
 
-- **`rig-c/core` is the player's only math source; the renderer only draws.**
+- **`rig-c/core` and `rig-c/runtime` (both bundled) are the player's only math
+  sources; the renderer only draws.**
   Nothing under `src/` imports an Esoteric Software runtime. Issue #39 adds
   a development-only official WebGL oracle and comparison tool outside that
   import graph; it independently reads the paired Spine export, never the
-  player's `PosedFrame`. This is a raster comparison, not a second production
+  player's frames. This is a raster comparison, not a second production
   poser or a revival of the old Spine-generation compatibility matrix (#63).
-  The pose comes from `openTrack` (rig-c `src/core/track.ts`, the live track
-  issue #1276 added: pose 0, then one pose per `step(dt)`), and the renderer is
-  handed a **`PosedFrame`**, never a skeleton: per slot in draw order the kind,
-  four world corners or world vertices + page UVs + triangles, the region or the
-  page + `pma`, a tint, a blend, a clip polygon, a z. `DomRenderer.render(frame)`
-  is the whole interface between posing and drawing, so another poser — or the
-  one-canvas mode — feeds the same record.
-- **The adapter is `src/posedFrame.ts` (`frameOf`), re-cut over `rig-c/core`
-  alone from rigc's `src/render_core.ts`**, which is its specification and
+  With the default `poser: 'auto'`, covered models and animations use
+  `compileRuntime` and `RuntimePose` from `rig-c/runtime`, drawn through the
+  borrowed `LiveFrame` that `player.liveFrame()` exposes. The oracle path uses
+  `rig-c/core`'s `openTrack` or `openTracks` for unsupported features and
+  operations, including physics constraints and track composition;
+  `poser: 'oracle'` selects it explicitly. `player.poser` names the selected
+  path and any fallback reason. Renderers accept a **`LiveFrame`** or a detached
+  **`PosedFrame`**; both describe draw order and per-slot drawing data. A snapshot
+  holds each slot's kind, region corners or mesh vertices, page UVs and triangles,
+  region/page identity and `pma`, tint, blend, clip and z.
+  `DomRenderer.render(frame)` and `CanvasRenderer.render(frame)` form the
+  interface between posing and drawing. `posedFrame()` remains a retained
+  snapshot on either poser; a live frame expires at the next pose mutation.
+  See [Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame) for
+  the buffer layout, lifetime and fallback policy.
+- **The `rig-c/core` adapter is `src/posedFrame.ts` (`frameOf`), re-cut from
+  rigc's `src/render_core.ts`**, which is its specification and
   cannot be imported (it value-imports node-bound modules). The rules, each one
   rigc's: `order` is `pose.drawn` on active bones (`activeBones` of the view —
   `pose.drawn` lists inactive-bone slots too, the oracle's convention), `z` the
@@ -81,12 +91,14 @@ v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
 - **The poser is `rig-c`, pinned to an exact version, and a pose doubt is a
   rigc issue.** `devDependencies["rig-c"]` is a bare version (no range;
   `tests/package.spec.ts` asserts it), the build bundles that version's
-  `./core` into `index.js`, and `scripts/fetch-assets.sh` builds every fixture
-  with the same version's `rigc build` from the same tag. What the player poses
-  is what rig-c's own CI
-  holds to spine-core 4.3.13 at tolerance 0 (`core_gate`, `--raw`; rigc
+  `./core` and `./runtime` into `index.js`, and `scripts/fetch-assets.sh` builds
+  every fixture with the same version's `rigc build` from the same tag. The
+  oracle pose is what rig-c's own CI holds to spine-core 4.3.13 at tolerance 0
+  (`core_gate`, `--raw`; rigc
   `docs/SECOND_ORACLE.md` §4–§5, and §7 on this player posing through
-  `rig-c/core`). One crossing was measured here and needs no standing gate:
+  `rig-c/core`). Runtime coverage and the player's fallback policy are described
+  in [Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame).
+  One crossing was measured here and needs no standing gate:
   moving the player onto `rig-c/core` changed no frame (#60: 14 builds, 28
   animations, 1,034 frames, 0 mismatches). So when a pose looks wrong, the
   move is a rigc issue with a public repro — the rig spec, the motion spec, the
@@ -237,9 +249,10 @@ v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
   guard is `tests/package.spec.ts`'s nodenext consumer typecheck.
 - **The package is one self-contained bundle** (`scripts/build-lib.mjs`):
   vite library mode bundles `src/index.ts` with `rig-c` **not** external — its
-  `./core` entry is TypeScript source in a devDependency, which no consumer has
-  and no node loads from `node_modules` — and `tsc --emitDeclarationOnly`
-  writes the types, with `stripInternal` dropping every `@internal` declaration
+  `./core` and `./runtime` entries are TypeScript source in a devDependency,
+  which no consumer has and no node loads from `node_modules` — and
+  `tsc --emitDeclarationOnly` writes the types, with `stripInternal` dropping
+  every `@internal` declaration
   (the adapter's and the loader's helpers, the only ones whose signatures name
   a rig-c type), so the shipped `.d.ts` name nothing a consumer lacks.
   `tests/package.spec.ts` installs the built package with nothing beside it,

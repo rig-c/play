@@ -12,8 +12,8 @@
 compiled model document `rigc build` writes, `skeleton.model.json` — as **plain
 DOM**: one absolutely-positioned `<img>` per rigid slot, posed with a single CSS
 `matrix()` write per frame, and deforming meshes on small per-part canvases; or
-as **one canvas** per player. It poses through `rig-c/core`, rigc's own posing
-core, bundled into the package, and links nothing from Esoteric Software.
+as **one canvas** per player. It poses through rigc's bundled `rig-c/runtime`
+and `rig-c/core`, and links nothing from Esoteric Software.
 `rig-play` is the convenience install name; `spine-html` is the legacy install name.
 The compiler is [@rig-c/core](https://github.com/rig-c/core) (npm `@rig-c/core`)
 and the part generator [rig-c/parts](https://github.com/rig-c/parts).
@@ -112,8 +112,7 @@ The package plays rigs built by [rigc](https://github.com/rig-c/core):
 is what the player loads, and it states everything posing and drawing need —
 the skeleton, the animations, and where every region sits on its page — so the
 `.atlas` and `skeleton.json` beside it are not fetched. Poses are computed by
-`rig-c/core`, rigc's own posing core, which is bundled into this package: there
-is nothing else to install.
+the bundled `rig-c/runtime` and `rig-c/core`: there is nothing else to install.
 
 ```ts
 import { loadModel, RigPlayer } from '@rig-c/play';
@@ -186,9 +185,9 @@ package built from this tree.
   `physicsMoved(scope, motion)` supplies apparent world movement to named bone,
   subtree or constraint physics; `moved()` continues to report whole-rig motion.
   See the reference for explicit pivots, units and evaluation/history limits.
-- [docs/MIGRATION.md](docs/MIGRATION.md) — coming from 1.8 (meshes draw through
-  WebGL by default since 1.9) and from `spine-html` 0.8 (the 0.8 → 1.0 table,
-  what has no counterpart, before and after).
+- [docs/MIGRATION.md](docs/MIGRATION.md) — adding live-frame consumers, coming
+  from 1.8 (meshes draw through WebGL by default since 1.9) and from `spine-html`
+  0.8 (the 0.8 → 1.0 table, what has no counterpart, before and after).
 - [docs/TESTING.md](docs/TESTING.md) — how the suite holds the picture: the two
   render modes' parity, the clipping oracle, the loading harness, and the
   independent official raster oracle.
@@ -224,16 +223,28 @@ deterministic captures.
 
 ## How it works
 
-`loadModel` reads the rig's compiled model document (`rig-c/core`'s `readModel`),
-and `RigPlayer` opens an animation on a live track (`openTrack`): bones,
-constraints, physics, deform and draw order are posed by the core — all
-CPU-side, renderer-agnostic — one `dt` at a time. At load time each region of
-the document's `pages` section is cut into its own bitmap (rotation restored),
-one blob URL per region — except regions that already cover their whole page,
-which are used as they are. Per frame, the pose becomes a `PosedFrame`: for
-each slot in draw order, a region's four world corners (order **BL, UL, UR,
-BR**) or a mesh's world vertices, page UVs and triangles, its tint, blend and
-clip. For a region: flip Y (the frame is Y-up), derive the affine from three
+`loadModel` reads the rig's compiled model document (`rig-c/core`'s `readModel`).
+With the default `poser: 'auto'`, `RigPlayer` uses `rig-c/runtime`'s
+`compileRuntime` and `RuntimePose` for covered models and animations, drawing
+from a borrowed `LiveFrame` exposed by `player.liveFrame()`. Features and
+operations outside that path's coverage use the `rig-c/core` oracle —
+`openTrack` for a single track, `openTracks` for track composition. Models with
+physics constraints stay on that oracle path. `player.poser` reports `"runtime"` or
+`"oracle: <reason>"`; `poser: 'oracle'` selects the oracle explicitly. Posing
+stays CPU-side and renderer-agnostic, advancing one `dt` at a time.
+
+Both renderers accept a borrowed `LiveFrame` or a detached `PosedFrame`.
+`player.posedFrame()` returns a snapshot that survives later pose mutations;
+a live frame is valid only until the next pose mutation. See
+[Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame) for the
+buffer layout, lifetime and fallback policy.
+
+At load time each region of the document's `pages` section is cut into its own
+bitmap (rotation restored), one blob URL per region — except regions that
+already cover their whole page, which are used as they are. Both frame forms
+describe, for each slot in draw order, a region's four world corners (order
+**BL, UL, UR, BR**) or a mesh's world vertices, page UVs and triangles, its tint,
+blend and clip. For a region: flip Y (the frame is Y-up), derive the affine from three
 corners, write one `matrix()` string. That's the whole rigid render path.
 
 ## License
@@ -243,7 +254,8 @@ so here is what is true of this package and this repository, stated plainly:
 
 1. The published package — `@rig-c/play`, and `rig-play` and `spine-html`, the same files — **links
    nothing from Esoteric Software**. Its one module bundles the renderer and
-   `rig-c/core` (MIT), which poses rigc's model document; no part of the
+   `rig-c/core` and `rig-c/runtime` (MIT), which pose rigc's model document;
+   no part of the
    [Spine Runtimes](https://github.com/EsotericSoftware/spine-runtimes) is in it or
    required beside it.
 2. Development tooling pins `@esotericsoftware/spine-webgl` 4.3.13 and its matching

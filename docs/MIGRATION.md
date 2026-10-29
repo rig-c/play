@@ -1,7 +1,8 @@
 # Migrating to @rig-c/play
 
-Moved from the README unchanged (#182): the 1.8 → 1.9 mesh backend default, and
-the `spine-html` 0.8 → 1.0 guide.
+This guide covers adding live-frame consumers and the earlier migration notes
+moved from the README (#182): the 1.8 → 1.9 mesh backend default, and the
+`spine-html` 0.8 → 1.0 guide.
 
 ## Adding live-frame consumers
 
