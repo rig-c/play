@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.3](https://github.com/rig-c/play/compare/v1.21.2...v1.21.3) (2026-10-30)
+
+
+### Bug Fixes
+
+* **docs:** move the Measured table to BENCHMARK.md and hold the README cap ([#229](https://github.com/rig-c/play/issues/229)) ([5668f2e](https://github.com/rig-c/play/commit/5668f2e1c9b81f884a08b7b9676c44141dff1a37)), closes [#228](https://github.com/rig-c/play/issues/228)
+
 ## [1.21.2](https://github.com/rig-c/play/compare/v1.21.1...v1.21.2) (2026-10-29)
 
 
