@@ -14,6 +14,23 @@ borrowed `LiveFrame` or detached `PosedFrame`. Production since
 v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
 `docs/BENCHMARK.md`, for architecture and measured numbers. `rig-play` and `spine-html` are the same package under earlier names.
 
+## README scope
+
+The README is what a person reads to decide and to get a first result: what the
+package is, install, one first run with its output shown, one line per command
+with a link, and links. It holds no flag lists, refusal catalogues, dated or
+machine-specific figures, version history, or licence text beyond a pointer.
+**A feature PR adds at most one line to it.** Move detail to the relevant docs
+without losing content; keep inbound headings as a sentence and a link, and
+repoint content pins. Documents absent from the package's `files` need absolute
+GitHub blob links from the README so npm readers can follow them.
+
+Run `node scripts/check-readme.mjs` and
+`node --test scripts/check-readme.test.mjs` for the word cap, `##` allowlist and
+dated-measurement guard, including named planted failures. The fixed cap comes
+from #228's post-cut count plus 10%, rounded up to 50, bounded by #182's 3,000;
+do not recalculate it on each feature PR.
+
 ## Measurement rules (hard-won — do not relearn these)
 
 - **Headless WebKit is a software rasterizer.** Never cite its timings as Safari
