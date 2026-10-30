@@ -43,6 +43,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
+      - name: Check README scope and planted failures (offline)
+        run: |
+          node scripts/check-readme.mjs
+          node --test scripts/check-readme.test.mjs
       - name: Check release workflow decisions (offline)
         timeout-minutes: 2
         run: bun test scripts/release-workflow.test.ts

@@ -1,9 +1,68 @@
 # Benchmarking @rig-c/play
 
-Moved from the README unchanged (#182). The standing comparison table itself is
-the README's [*Measured*](../README.md#measured); what follows it there — where
-each side wins and loses, the Safari mesh-backend readings and the 0.x numbers —
-is here, then the benchmark that produces the table.
+The README's [*Measured*](../README.md#measured) summarizes this standing
+comparison. The full table and its conditions, where each side wins and loses,
+the Safari mesh-backend readings and the 0.x numbers are here, followed by the
+benchmark that produces the table.
+
+## Measured
+
+**Standing comparison against `@esotericsoftware/spine-webgl 4.3.13` (`npm run bench`, #39)** —
+measured on 2026-10-17 in **headed** Chromium `151.0.7922.34` on an Apple M4 GPU
+(`ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)`, macOS `Darwin 25.6.0`,
+10 cores, 32 GiB RAM, `1280×720` viewport, `devicePixelRatio: 1`, 100 warm-up frames +
+600 measured frames per row, `loadPerCoreBefore: 0.33`, `loadPerCoreAfter: 0.33` under the
+`1.0` load guard; each row is its own page load with only that runtime animating, and grid
+scenes batch the official skeletons through one shared WebGL canvas while `small players`
+mounts independent player instances):
+
+| scene | runtime | rig | clipped to | fps | pose ms | render ms | drawn players | triangles | draw calls | origin Δpx | live contexts |
+| --- | --- | --- | --- | --: | --: | --: | --: | --: | --: | --: | --: |
+| 1 meshed rig animating | dom | `portrait-packed` `turn` | pane | 59.99 | 0.17 | 0.16 | —/1 | 48 | — | 0.007 | —/1 |
+| 1 meshed rig animating | canvas | `portrait-packed` `turn` | pane | 59.99 | 0.23 | 0.18 | —/1 | 0 | 0 | 0.007 | —/1 |
+| 1 meshed rig animating | official | `portrait-packed` `turn` | pane | 60.00 | 0.05 | 0.13 | 1/1 | 88 | 1 | 0.000 | 1/1 |
+| 4 meshed rigs animating | dom | `portrait-packed` `turn` | pane | 60.01 | 0.46 | 0.48 | —/4 | 96 | — | 0.009 | —/1 |
+| 4 meshed rigs animating | canvas | `portrait-packed` `turn` | pane | 60.00 | 0.60 | 0.49 | —/4 | 176 | 2 | 0.009 | —/1 |
+| 4 meshed rigs animating | official | `portrait-packed` `turn` | pane | 59.99 | 0.13 | 0.17 | 4/4 | 352 | 1 | 0.000 | 1/1 |
+| 16 meshed rigs animating | dom | `portrait-packed` `turn` | pane | 60.00 | 0.66 | 0.74 | —/16 | 384 | — | 0.010 | —/1 |
+| 16 meshed rigs animating | canvas | `portrait-packed` `turn` | pane | 59.87 | 0.84 | 0.50 | —/16 | 704 | 8 | 0.010 | —/1 |
+| 16 meshed rigs animating | official | `portrait-packed` `turn` | pane | 60.00 | 0.21 | 0.30 | 16/16 | 1408 | 1 | 0.000 | 1/1 |
+| 36 meshed rigs animating | dom | `portrait-packed` `turn` | pane | 48.28 | 1.24 | 1.42 | —/36 | 1104 | — | 0.010 | —/1 |
+| 36 meshed rigs animating | canvas | `portrait-packed` `turn` | pane | 60.11 | 1.15 | 0.85 | —/36 | 1760 | 20 | 0.010 | —/1 |
+| 36 meshed rigs animating | official | `portrait-packed` `turn` | pane | 60.00 | 0.43 | 0.49 | 36/36 | 3168 | 1 | 0.000 | 1/1 |
+| 64 meshed rigs animating | dom | `portrait-packed` `turn` | pane | 29.07 | 2.13 | 2.69 | —/64 | 1824 | — | 0.010 | —/1 |
+| 64 meshed rigs animating | canvas | `portrait-packed` `turn` | pane | 53.99 | 1.62 | 1.17 | —/64 | 3168 | 36 | 0.010 | —/1 |
+| 64 meshed rigs animating | official | `portrait-packed` `turn` | pane | 59.99 | 0.42 | 0.54 | 64/64 | 5632 | 1 | 0.000 | 1/1 |
+| 1 meshed rig animating (canvas2d) | dom | `portrait-packed` `turn` | pane | 60.00 | 0.18 | 0.28 | —/1 | 48 | — | 0.007 | —/0 |
+| 1 meshed rig animating (canvas2d) | canvas | `portrait-packed` `turn` | pane | 60.00 | 0.20 | 0.18 | —/1 | 88 | 1 | 0.007 | —/1 |
+| 1 meshed rig animating (canvas2d) | official | `portrait-packed` `turn` | pane | 59.99 | 0.06 | 0.14 | 1/1 | 88 | 1 | 0.000 | 1/1 |
+| 16 meshed rigs animating (canvas2d) | dom | `portrait-packed` `turn` | pane | 59.89 | 0.65 | 0.99 | —/16 | 384 | — | 0.010 | —/0 |
+| 16 meshed rigs animating (canvas2d) | canvas | `portrait-packed` `turn` | pane | 60.00 | 0.93 | 0.59 | —/16 | 792 | 9 | 0.010 | —/1 |
+| 16 meshed rigs animating (canvas2d) | official | `portrait-packed` `turn` | pane | 60.00 | 0.18 | 0.31 | 16/16 | 1408 | 1 | 0.000 | 1/1 |
+| 1 held pose | dom | `portrait-packed` `turn` | pane | 60.11 | 0.00 | 0.15 | —/1 | 0 | — | 0.007 | —/1 |
+| 1 held pose | canvas | `portrait-packed` `turn` | pane | 60.02 | 0.01 | 0.11 | —/1 | 0 | 0 | 0.007 | —/1 |
+| 1 held pose | official | `portrait-packed` `turn` | pane | 60.00 | 0.00 | 0.13 | 1/1 | 88 | 1 | 0.000 | 1/1 |
+| 16 held poses | dom | `portrait-packed` `turn` | pane | 60.09 | 0.00 | 0.43 | —/16 | 0 | — | 0.010 | —/1 |
+| 16 held poses | canvas | `portrait-packed` `turn` | pane | 59.99 | 0.01 | 0.55 | —/16 | 0 | 0 | 0.010 | —/1 |
+| 16 held poses | official | `portrait-packed` `turn` | pane | 60.08 | 0.00 | 0.35 | 16/16 | 1408 | 1 | 0.000 | 1/1 |
+| 64 held poses | dom | `portrait-packed` `turn` | pane | 59.99 | 0.02 | 2.43 | —/64 | 0 | — | 0.010 | —/1 |
+| 64 held poses | canvas | `portrait-packed` `turn` | pane | 60.10 | 0.02 | 2.56 | —/64 | 0 | 0 | 0.010 | —/1 |
+| 64 held poses | official | `portrait-packed` `turn` | pane | 60.10 | 0.00 | 0.90 | 64/64 | 5632 | 1 | 0.000 | 1/1 |
+| 1 rigid rig animating | dom | `walk-packed` `walk` | pane | 59.99 | 0.30 | 0.15 | —/1 | 0 | — | 0.007 | —/1 |
+| 1 rigid rig animating | canvas | `walk-packed` `walk` | pane | 59.99 | 0.33 | 0.21 | —/1 | 30 | 1 | 0.007 | —/1 |
+| 1 rigid rig animating | official | `walk-packed` `walk` | pane | 60.00 | 0.04 | 0.16 | 1/1 | 30 | 1 | 0.000 | 1/1 |
+| 16 rigid rigs animating | dom | `walk-packed` `walk` | pane | 60.00 | 0.77 | 0.65 | —/16 | 0 | — | 0.010 | —/1 |
+| 16 rigid rigs animating | canvas | `walk-packed` `walk` | pane | 60.00 | 0.62 | 0.47 | —/16 | 480 | 16 | 0.010 | —/1 |
+| 16 rigid rigs animating | official | `walk-packed` `walk` | pane | 60.00 | 0.15 | 0.22 | 16/16 | 480 | 1 | 0.000 | 1/1 |
+| 64 rigid rigs animating | dom | `walk-packed` `walk` | pane | 59.89 | 1.58 | 1.63 | —/64 | 0 | — | 0.010 | —/1 |
+| 64 rigid rigs animating | canvas | `walk-packed` `walk` | pane | 42.00 | 1.50 | 1.21 | —/64 | 1920 | 64 | 0.010 | —/1 |
+| 64 rigid rigs animating | official | `walk-packed` `walk` | pane | 60.00 | 0.14 | 0.13 | 64/64 | 1920 | 1 | 0.000 | 1/1 |
+| 8 small players | dom | `walk-packed` `walk` | cell | 60.00 | 0.24 | 0.18 | —/8 | 0 | — | 0.012 | —/1 |
+| 8 small players | canvas | `walk-packed` `walk` | cell | 60.00 | 0.33 | 0.30 | —/8 | 240 | 8 | 0.012 | —/1 |
+| 8 small players | official | `walk-packed` `walk` | cell | 60.00 | 0.09 | 0.24 | 8/8 | 240 | 8 | 0.007 | 8/8 |
+| 20 small players | dom | `walk-packed` `walk` | cell | 60.00 | 1.03 | 0.84 | —/20 | 0 | — | 0.015 | —/1 |
+| 20 small players | canvas | `walk-packed` `walk` | cell | 59.99 | 0.69 | 0.54 | —/20 | 600 | 20 | 0.015 | —/1 |
+| 20 small players | official | `walk-packed` `walk` | cell | 60.00 | 0.13 | 0.24 | 16/20 | 480 | 16 | 0.006 | 16/20 |
 
 
 Where each side wins and loses on that table:
