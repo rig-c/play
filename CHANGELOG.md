@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.0](https://github.com/rig-c/play/compare/v1.21.3...v1.22.0) (2026-11-01)
+
+
+### Features
+
+* ship the rig-play agent skill ([#236](https://github.com/rig-c/play/issues/236)) ([a5e8efd](https://github.com/rig-c/play/commit/a5e8efdf9bfb01c89b81c6f943fb76f77e8352fd)), closes [#235](https://github.com/rig-c/play/issues/235)
+
 ## [1.21.3](https://github.com/rig-c/play/compare/v1.21.2...v1.21.3) (2026-11-01)
 
 
