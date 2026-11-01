@@ -400,6 +400,7 @@ test('the real tarball includes every library output but excludes planted dev as
   const source = resolve(sandbox, 'contaminated-package');
   mkdirSync(source, { recursive: true });
   cpSync(pkgDist, resolve(source, 'dist'), { recursive: true });
+  cpSync(resolve(repoRoot, 'skills'), resolve(source, 'skills'), { recursive: true });
   for (const file of ['package.json', 'NOTICE.md', 'README.md', 'LICENSE']) cpSync(resolve(repoRoot, file), resolve(source, file));
   // A clean build alone cannot hold the npm allowlist: the checkout can have
   // a Vite demo build, whose official oracle bundle must never be published.
@@ -421,7 +422,7 @@ test('the real tarball includes every library output but excludes planted dev as
   expect(packed.status, `${packed.stdout}${packed.stderr}`).toBe(0);
   const result = JSON.parse(packed.stdout) as Array<{ filename: string; files: Array<{ path: string }> }>;
   const libraryFiles = readdirSync(pkgDist).map(String).sort();
-  const expected = ['LICENSE', 'NOTICE.md', 'README.md', 'package.json', ...libraryFiles.map((file) => `dist/${file}`)].sort();
+  const expected = ['LICENSE', 'NOTICE.md', 'README.md', 'package.json', 'skills/rig-play/SKILL.md', ...libraryFiles.map((file) => `dist/${file}`)].sort();
   expect(result[0].files.map(({ path }) => path).sort()).toEqual(expected);
   const extracted = resolve(sandbox, 'contaminated-read');
   const actual = unpack(resolve(destination, result[0].filename), extracted);
@@ -437,6 +438,7 @@ for (const ALIAS of ALIASES) test(`the ${ALIAS} tarball is the package tarball u
   const src = resolve(sandbox, `alias-src-${ALIAS}`);
   mkdirSync(src, { recursive: true });
   cpSync(pkgDist, resolve(src, 'dist'), { recursive: true });
+  cpSync(resolve(repoRoot, 'skills'), resolve(src, 'skills'), { recursive: true });
   for (const file of ['package.json', 'NOTICE.md', 'README.md', 'LICENSE']) {
     cpSync(resolve(repoRoot, file), resolve(src, file));
   }

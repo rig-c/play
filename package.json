@@ -60,7 +60,8 @@
     "dist/liveFrame.d.ts",
     "dist/liveFrame.d.ts.map",
     "dist/liveFrameSource.d.ts",
-    "dist/liveFrameSource.d.ts.map"
+    "dist/liveFrameSource.d.ts.map",
+    "skills"
   ],
   "sideEffects": false,
   "scripts": {
