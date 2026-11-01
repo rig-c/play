@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="@rig-c/play - plays rigc's compiled model as DOM elements or one canvas" width="100%" />
+  <img src="https://raw.githubusercontent.com/rig-c/play/main/assets/banner.svg" alt="@rig-c/play — Plays rig-c's compiled model as plain DOM elements or one canvas" width="100%" />
 </p>
 
 <p align="center">
