@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.1](https://github.com/rig-c/play/compare/v1.22.0...v1.22.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** title the README @rig-c/play ([#239](https://github.com/rig-c/play/issues/239)) ([a4389c6](https://github.com/rig-c/play/commit/a4389c6bf652c4fe00c8362c8a6c26e465624467)), closes [#238](https://github.com/rig-c/play/issues/238)
+
 ## [1.22.0](https://github.com/rig-c/play/compare/v1.21.3...v1.22.0) (2026-11-01)
 
 
