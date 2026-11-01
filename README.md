@@ -8,6 +8,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
 </p>
 
+# @rig-c/play
+
 `@rig-c/play` plays the rigs [rigc](https://github.com/rig-c/core) builds — the
 compiled model document `rigc build` writes, `skeleton.model.json` — as **plain
 DOM**: one absolutely-positioned `<img>` per rigid slot, posed with a single CSS
