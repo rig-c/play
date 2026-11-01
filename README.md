@@ -145,6 +145,7 @@ package built from this tree.
   not evidence of.
 - [CHANGELOG.md](https://github.com/rig-c/play/blob/main/CHANGELOG.md) — what each version changed;
   [RELEASING.md](https://github.com/rig-c/play/blob/main/RELEASING.md) — how a version is cut.
+- [`skills/rig-play/SKILL.md`](skills/rig-play/SKILL.md) — the agent skill that routes a web-page playback or live-frame request to the guides above.
 
 ## Demo (this repository)
 
