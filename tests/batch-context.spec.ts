@@ -18,7 +18,8 @@ for (const ratio of RATIOS) {
     expect(r.sourceSlots).toEqual(['pad_a', 'pad_b', 'core']);
     expect(r.contentPixels).toBeGreaterThan(0);
     expect(r.highPack.target).toEqual([512, 3328]);
-    expect(r.highPack.common).toEqual([1, 1649]);
+    // The second shelf starts on the blitter's 32 px placement phase (#245): 1 + 52 × 32.
+    expect(r.highPack.common).toEqual([1, 1665]);
     expect(r.controls).toEqual({ normal: 0, defect: 1, emptyRefused: true });
     // The exact #187 byte regression is measured on Linux SwiftShader.
     // Other renderers still run the source/cache/state controls below and
