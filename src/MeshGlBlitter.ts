@@ -23,6 +23,16 @@
  * grows quantized and never shrinks, mirroring the per-part backing policy
  * (reallocating GPU surfaces per frame is a Safari killer).
  *
+ * It only ever holds a size the browser granted in full. The WebGL spec lets
+ * the browser hand back a drawing buffer smaller than the canvas's
+ * width × height, and Chromium does once the area passes its cap (5760 ×
+ * 5760 for an 8192 × 8192 request, measured): drawing and reading back
+ * through the canvas's size then copies the wrong texels into every part —
+ * rectangles of another part's texture, cloth cut along straight edges, on a
+ * zoomed-in stage (rig-c/review#332). So a growth the browser does not grant
+ * in full is undone, that area is not asked for again, and the batch is
+ * declined to the caller's canvas2d path, as a batch past `maxSize` always was.
+ *
  * Page textures are the one thing here with a lifetime, and since this object
  * outlives every renderer they are reference-counted: a renderer retains each
  * page it queues a job for and releases them in dispose(), and the last
@@ -246,6 +256,11 @@ class MeshGlBlitter {
    */
   private textures = new WeakMap<HTMLImageElement, PageTexture>();
   private readonly maxSize: number;
+  /**
+   * The smallest drawing-buffer area the browser has refused to grant in full
+   * (see the module comment); a growth to this area or more is not attempted.
+   */
+  private refusedArea = Number.POSITIVE_INFINITY;
   private vertexData = new Float32Array(8192);
   /** Per-job packed rect origins, filled by flush(). */
   private packX: number[] = [];
@@ -338,17 +353,7 @@ class MeshGlBlitter {
       if (job.height > shelfH) shelfH = job.height;
       if (shelfY + job.height + GUTTER > height) height = shelfY + job.height + GUTTER;
     }
-    if (height > this.maxSize) return false;
-
-    // Grow-only quantized drawing buffer. Resizing clears it, which is fine:
-    // every rect below is cleared and redrawn anyway.
-    if (width > this.canvas.width || height > this.canvas.height) {
-      this.canvas.width = Math.min(this.maxSize, Math.ceil(width / GROW_STEP) * GROW_STEP);
-      this.canvas.height = Math.min(
-        this.maxSize,
-        Math.ceil(Math.max(height, this.canvas.height) / GROW_STEP) * GROW_STEP,
-      );
-    }
+    if (!this.reserve(width, height)) return false;
     const bufH = this.canvas.height;
     this.bindMesh();
 
@@ -420,6 +425,39 @@ class MeshGlBlitter {
   }
 
   /**
+   * Makes the drawing buffer hold at least `width` × `height`, growing it
+   * grow-only and quantized, and returns whether it does — as granted, not as
+   * asked. A growth the browser grants only in part is undone (the previous
+   * size was granted in full) and its area remembered, so a zoom held past
+   * the cap declines each frame without reallocating the buffer twice per
+   * frame. Resizing clears the buffer, which is fine: every rect is cleared
+   * and redrawn anyway.
+   */
+  private reserve(width: number, height: number): boolean {
+    const canvas = this.canvas;
+    const gl = this.gl;
+    if (width > this.maxSize || height > this.maxSize) return false;
+    if (width > canvas.width || height > canvas.height) {
+      const w = Math.min(this.maxSize, Math.ceil(Math.max(width, canvas.width) / GROW_STEP) * GROW_STEP);
+      const h = Math.min(this.maxSize, Math.ceil(Math.max(height, canvas.height) / GROW_STEP) * GROW_STEP);
+      if (w * h >= this.refusedArea) return false;
+      const previousW = canvas.width;
+      const previousH = canvas.height;
+      canvas.width = w;
+      canvas.height = h;
+      if (gl.drawingBufferWidth < w || gl.drawingBufferHeight < h) {
+        this.refusedArea = Math.min(this.refusedArea, w * h);
+        canvas.width = previousW;
+        canvas.height = previousH;
+        return false;
+      }
+    }
+    // Held on every flush, not only after a resize: a canvas whose buffer is
+    // smaller than itself is exactly the state that draws the wrong texels.
+    return gl.drawingBufferWidth === canvas.width && gl.drawingBufferHeight === canvas.height;
+  }
+
+  /**
    * Draws one player's frame (the canvas render mode) into a rect of the
    * offscreen buffer and blits it onto `job.canvas`, whose full backing is
    * cleared first. Returns false when the context is lost or the rect cannot
@@ -428,13 +466,7 @@ class MeshGlBlitter {
   flushFrame(job: FrameJob): boolean {
     const gl = this.gl;
     if (this.lost || gl.isContextLost()) return false;
-    const width = job.width + GUTTER * 2;
-    const height = job.height + GUTTER * 2;
-    if (width > this.maxSize || height > this.maxSize) return false;
-    if (width > this.canvas.width || height > this.canvas.height) {
-      this.canvas.width = Math.min(this.maxSize, Math.ceil(Math.max(width, this.canvas.width) / GROW_STEP) * GROW_STEP);
-      this.canvas.height = Math.min(this.maxSize, Math.ceil(Math.max(height, this.canvas.height) / GROW_STEP) * GROW_STEP);
-    }
+    if (!this.reserve(job.width + GUTTER * 2, job.height + GUTTER * 2)) return false;
     const bufW = this.canvas.width;
     const bufH = this.canvas.height;
     gl.viewport(0, 0, bufW, bufH);
