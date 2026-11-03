@@ -123,7 +123,9 @@ default stays `dom`.
   Everything element-level is unchanged: z-index interleave, tint filter,
   `mix-blend-mode`, dirty-skip, grow-only backing. GL rasterizes shared triangle
   edges seamlessly, so this path needs no crack overdraw. Falls back to canvas2d
-  when WebGL is unavailable or the context is lost. Backend parity verified by
+  when WebGL is unavailable or the context is lost, and for a frame whose batch
+  needs a larger buffer than the browser grants — a zoomed-in stage can ask for
+  one, and Chromium caps the area (rig-c/review#332). Backend parity verified by
   headless Chromium+WebKit screenshot diffs (glow / clipping / tint scenes;
   sub-pixel edge differences only). On-device Safari, meshed ×10 with every mesh
   redrawn per frame: **3–4 fps (canvas2d) → 45 fps (webgl)**
