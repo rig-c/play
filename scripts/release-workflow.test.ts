@@ -349,7 +349,7 @@ describe('release workflow contract', () => {
     expect(workflow.permissions).toEqual({});
     expect(workflow.jobs.release.permissions).toEqual({contents:'write','pull-requests':'write',issues:'write','id-token':'write'});
     expect(workflow.jobs.alias.permissions).toEqual({contents:'read','id-token':'write'});
-    expect(workflow.jobs.release['runs-on']).toBe('ubuntu-latest');
+    expect(workflow.jobs.release['runs-on']).toBe('ubuntu-24.04');
     expect(workflow.jobs.alias.needs).toBe('release');
     expect(workflow.on.workflow_dispatch.inputs.tag.required).toBe(false);
     expect(workflow.on.workflow_dispatch.inputs.alias_version.required).toBe(false);
