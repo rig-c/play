@@ -256,6 +256,9 @@ export interface FlushStats {
  * else: headless WebKit on macOS (Apple GPU) drew 7–14 pixels one level off
  * at shifts of 1, 2, 3, 4, 7, 8, 15, 16, 31 and 48 px, and identically at 32,
  * 64, 96, 128, 256 and 512; SwiftShader drew identically at every shift.
+ * The phase makes macOS WebKit's dom mode exact across tilings; it does not
+ * do that for WebKit on Linux, which differs on it too (tests/zoom-buffer.spec.ts
+ * says where identity is held). It is kept because it costs nothing else.
  */
 const ALIGN = 32;
 

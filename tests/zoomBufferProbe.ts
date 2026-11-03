@@ -21,7 +21,7 @@ import { frameAt, loadRig } from './rigFrames';
  * blitter keeps it on WebGL, in passes and tiles through the buffer it was
  * granted.
  *
- * Two comparisons, both exact:
+ * Two comparisons, each exact where it is held:
  *
  * - **zoomed**: one mesh (the canvas mode: the frame, on a square stage box)
  *   drawn with its long side at `ZOOMED_LONG_SIDE` device px — past the area
@@ -37,7 +37,9 @@ import { frameAt, loadRig } from './rigFrames';
  *   are placed from its top edge). Since #245 the blitter places every rect
  *   on a 32 px phase of the window, which is what headless WebKit on macOS
  *   needs to draw a mesh job the same after such a move (582 differing pixels
- *   here before); its canvas mode still differs, see the spec.
+ *   here before). Both comparisons are held at 0 on Chromium; WebKit differs
+ *   in both, by host and mode, and the spec reports it there rather than
+ *   holding it (`identityHeld` in tests/zoom-buffer.spec.ts).
  */
 
 const RIG = 'figure-packed';
