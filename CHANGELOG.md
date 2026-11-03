@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.3](https://github.com/rig-c/play/compare/v1.22.2...v1.22.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **blitter:** draw past the grant in passes and tiles instead of canvas2d ([#245](https://github.com/rig-c/play/issues/245)) ([#246](https://github.com/rig-c/play/issues/246)) ([a78f2ca](https://github.com/rig-c/play/commit/a78f2ca82a0bc6a085bd1df8199b40aa14425f35))
+
 ## [1.22.2](https://github.com/rig-c/play/compare/v1.22.1...v1.22.2) (2026-11-03)
 
 
