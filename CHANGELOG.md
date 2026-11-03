@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.2](https://github.com/rig-c/play/compare/v1.22.1...v1.22.2) (2026-11-03)
+
+
+### Bug Fixes
+
+* **blitter:** draw only through a buffer the browser granted in full (rig-c/review[#332](https://github.com/rig-c/play/issues/332)) ([#241](https://github.com/rig-c/play/issues/241)) ([7c46667](https://github.com/rig-c/play/commit/7c4666735069e85e7d35d2efee68bc4ff2eacb41))
+
 ## [1.22.1](https://github.com/rig-c/play/compare/v1.22.0...v1.22.1) (2026-11-01)
 
 
