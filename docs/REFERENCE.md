@@ -123,9 +123,16 @@ default stays `dom`.
   Everything element-level is unchanged: z-index interleave, tint filter,
   `mix-blend-mode`, dirty-skip, grow-only backing. GL rasterizes shared triangle
   edges seamlessly, so this path needs no crack overdraw. Falls back to canvas2d
-  when WebGL is unavailable or the context is lost, and for a frame whose batch
-  needs a larger buffer than the browser grants — a zoomed-in stage can ask for
-  one, and Chromium caps the area (rig-c/review#332). Backend parity verified by
+  only when WebGL is unavailable or the context is lost. A batch larger than the
+  buffer the browser grants — a zoomed-in stage can ask for one, and Chromium
+  caps the area (rig-c/review#332) — is drawn in passes through the granted
+  buffer, and a part larger than it in tiles, each rastered in its own part's
+  rect (#245). Every such frame stays on WebGL on every engine tested. On
+  Chromium the pixels are the single-pass draw's, held at 0 in both modes; WebKit
+  rasterizes a job differently at different buffer positions, so there passes
+  and tiles can differ from one pass (measured 0–6,130 px a frame across macOS
+  and Linux, up to 51 levels on macOS where the level was read), and that is
+  reported rather than held. Backend parity verified by
   headless Chromium+WebKit screenshot diffs (glow / clipping / tint scenes;
   sub-pixel edge differences only). On-device Safari, meshed ×10 with every mesh
   redrawn per frame: **3–4 fps (canvas2d) → 45 fps (webgl)**

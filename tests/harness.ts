@@ -4,7 +4,7 @@ import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './
 import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity, runtimeMetadataProbe, runtimePhysicsPolicyProbe, runtimeClipRendererProbe } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
 import { liveCoreProbe } from './liveCoreProbe';
-import { zoomBufferProbe } from './zoomBufferProbe';
+import { capIdentityProbe, zoomBufferProbe } from './zoomBufferProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
@@ -235,6 +235,7 @@ export interface RigPlayHarness {
   batchContextProbe: typeof batchContextProbe;
   liveCoreProbe: typeof liveCoreProbe;
   zoomBufferProbe: typeof zoomBufferProbe;
+  capIdentityProbe: typeof capIdentityProbe;
   setupMeshLookDiagnosisProbe: typeof setupMeshLookDiagnosisProbe;
   setupMeshLiteralProbe: typeof setupMeshLiteralProbe;
   setupMeshGalleryProbe: typeof setupMeshGalleryProbe;
@@ -10168,6 +10169,7 @@ window.rigPlayHarness = {
   batchContextProbe,
   liveCoreProbe,
   zoomBufferProbe,
+  capIdentityProbe,
   setupMeshLookDiagnosisProbe,
   setupMeshLiteralProbe,
   setupMeshGalleryProbe,

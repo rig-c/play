@@ -1,5 +1,6 @@
 import { CanvasRenderer, type CanvasViewport } from '../src/CanvasRenderer';
 import { DomRenderer } from '../src/DomRenderer';
+import { getMeshGlBlitter } from '../src/MeshGlBlitter';
 import type { PosedFrame } from '../src/posedFrame';
 import { frameAt, loadRig } from './rigFrames';
 
@@ -13,29 +14,32 @@ import { frameAt, loadRig } from './rigFrames';
  * may not grant: the WebGL spec lets it hand back a smaller drawing buffer
  * than the canvas's width × height, and Chromium does — 5760 × 5760 for an
  * 8192 × 8192 request, an area cap, measured on the CI engine. Drawing and
- * blitting through the canvas's size rather than the buffer's then copies the
+ * blitting through the canvas's size rather than the buffer's copied the
  * wrong texels into the part canvases: axis-aligned rectangles of another
- * part's texture, and cloth cut along straight edges.
+ * part's texture, and cloth cut along straight edges. #241 then declined such
+ * a batch to canvas2d, whose seams show at screen scale; since #245 the
+ * blitter keeps it on WebGL, in passes and tiles through the buffer it was
+ * granted.
  *
- * Two comparisons, both exact, both against a draw that cannot share the
- * defect:
+ * Two comparisons, each exact where it is held:
  *
  * - **zoomed**: one mesh (the canvas mode: the frame, on a square stage box)
- *   drawn with its long side at `ZOOMED_LONG_SIDE` device px — inside the blitter's 8192 px axis limit, so the GL path is attempted,
- *   and over the area such an engine grants — against the same frame at the
- *   same ratio on a renderer forced onto canvas2d. When the GL path declines
- *   the batch (the buffer it was granted cannot hold it) the renderer draws it
- *   on canvas2d, so the pixels are those of the forced renderer exactly. When
- *   the GL path draws it, that is only correct if the browser granted the
- *   buffer it needed, which the probe measures on a throwaway context.
+ *   drawn with its long side at `ZOOMED_LONG_SIDE` device px — past the area
+ *   such an engine grants — must stay on WebGL, through a buffer granted in
+ *   full, and must be the same pixels as the same frame drawn under a
+ *   test-only cap a quarter of that buffer's area, which tiles it
+ *   differently. A wrong texel depends on where its tile sat in which buffer,
+ *   so two tilings cannot share one; that a tiling is the single-pass draw is
+ *   `capIdentityProbe`'s claim, at a size every engine grants.
  * - **after**: the full frame at ratio 1 on a fresh renderer, drawn after the
- *   zoom, against the same frame at ratio 1 drawn before it. A zoom the
- *   browser refused must leave the buffer as it was, so the two draws are the
- *   same draw — 0 pixels. A zoom the browser granted grows the buffer, and a
- *   rect's window position moves with the buffer's height (rects are placed
- *   from its top edge); some rasterizers are not invariant under that move
- *   (headless WebKit on macOS: 582 px, up to 42 levels, measured), so the
- *   granted case is reported, not held to 0 — it is not the defect here.
+ *   zoom, against the same frame at ratio 1 drawn before it: 0 pixels. The
+ *   zoom grows the buffer, which moves every rect's window position (rects
+ *   are placed from its top edge). Since #245 the blitter places every rect
+ *   on a 32 px phase of the window, which is what headless WebKit on macOS
+ *   needs to draw a mesh job the same after such a move (582 differing pixels
+ *   here before). Both comparisons are held at 0 on Chromium; WebKit differs
+ *   in both, by host and mode, and the spec reports it there rather than
+ *   holding it (`identityHeld` in tests/zoom-buffer.spec.ts).
  */
 
 const RIG = 'figure-packed';
@@ -63,7 +67,21 @@ export interface ZoomBufferCase {
   /** The drawing buffer that throwaway canvas got. */
   grantedWidth: number;
   grantedHeight: number;
-  /** Pixels that differ from the canvas2d renderer's draw of the same frame and ratio. */
+  /** The blitter's buffer after the zoomed draw, and whether its drawing buffer is all of it. */
+  bufferWidth: number;
+  bufferHeight: number;
+  bufferGranted: boolean;
+  /** The zoomed draw's passes, pieces and tiled jobs. */
+  passes: number;
+  pieces: number;
+  tiledJobs: number;
+  /** The same frame under the test cap: its backend, cap, passes, pieces and tiled jobs. */
+  cappedBackend: string;
+  cappedArea: number;
+  cappedPasses: number;
+  cappedPieces: number;
+  cappedTiledJobs: number;
+  /** Pixels that differ between the two zoomed draws. */
   zoomedDiff: number;
   /** Pixels compared there, and the largest per-channel difference among them. */
   zoomedPixels: number;
@@ -205,6 +223,9 @@ function makeRoot(): HTMLElement {
 const GUTTER = 1;
 
 export async function zoomBufferProbe(mode: 'dom' | 'canvas'): Promise<ZoomBufferCase> {
+  const gpu = getMeshGlBlitter();
+  if (!gpu) throw new Error('zoomBufferProbe: WebGL unavailable');
+  const blitter = gpu as unknown as { canvas: HTMLCanvasElement; gl: WebGLRenderingContext };
   const assets = await loadRig(RIG);
   const frame = frameAt(assets, POSE.animation, POSE.time);
   const roots: HTMLElement[] = [];
@@ -215,85 +236,295 @@ export async function zoomBufferProbe(mode: 'dom' | 'canvas'): Promise<ZoomBuffe
     return r;
   };
 
-  type Draw = (r: HTMLElement, ratio: number, f: PosedFrame, forced2d?: boolean, box?: CanvasViewport) => string;
+  type Draw = (r: HTMLElement, ratio: number, f: PosedFrame, box?: CanvasViewport) => string;
   const draw: Draw =
     mode === 'dom'
-      ? (r, ratio, f, forced2d = false) => {
+      ? (r, ratio, f) => {
           const renderer = new DomRenderer(r, assets.regionImages, assets.pageImages);
           disposers.push(() => renderer.dispose());
-          if (forced2d) renderer.meshBackend = 'canvas2d';
           renderer.pixelRatio = ratio;
           renderer.render(f);
           return renderer.meshBackendActive;
         }
-      : (r, ratio, f, forced2d = false, box) => {
+      : (r, ratio, f, box) => {
           const renderer = new CanvasRenderer(r, assets.pageImages);
           disposers.push(() => renderer.dispose());
-          if (forced2d) renderer.backend = 'canvas2d';
           if (box) renderer.viewport = box;
           renderer.pixelRatio = ratio;
           renderer.render(f);
           return renderer.backendActive;
         };
 
-  // The DOM mode zooms one mesh, so the batch is that mesh alone; the canvas
-  // mode draws the whole frame as one job.
-  const zoomFrame: PosedFrame =
-    mode === 'dom' ? { order: frame.order.filter((slot) => slot.kind === 'mesh' && slot.slot === ZOOM_SLOT) } : frame;
-  if (zoomFrame.order.length === 0) throw new Error(`zoomBufferProbe: ${RIG} has no mesh ${ZOOM_SLOT}`);
+  try {
+    // The DOM mode zooms one mesh, so the batch is that mesh alone; the canvas
+    // mode draws the whole frame as one job.
+    const zoomFrame: PosedFrame =
+      mode === 'dom' ? { order: frame.order.filter((slot) => slot.kind === 'mesh' && slot.slot === ZOOM_SLOT) } : frame;
+    if (zoomFrame.order.length === 0) throw new Error(`zoomBufferProbe: ${RIG} has no mesh ${ZOOM_SLOT}`);
 
-  // Before: the full frame at ratio 1, on a blitter that has never grown.
-  const before = root();
-  draw(before, 1, frame);
-  const referenceInk = ink(before);
+    // Before: the full frame at ratio 1.
+    const before = root();
+    draw(before, 1, frame);
+    const referenceInk = ink(before);
 
-  // The zoom.
-  const box = mode === 'canvas' ? squareBox(zoomFrame) : undefined;
-  const size = box ?? extent(zoomFrame);
-  const ratio = ZOOMED_LONG_SIDE / Math.max(size.width, size.height);
-  const zoomed = root();
-  const backend = draw(zoomed, ratio, zoomFrame, false, box);
-  const forced = root();
-  draw(forced, ratio, zoomFrame, true, box);
-  const zoomedCompare = diffRoots(zoomed, forced);
-  // The rect the blitter is asked for: the DOM mode's mesh raster (its canvas
-  // carries 25% slack beyond it), the canvas mode's whole backing.
-  const largest =
-    mode === 'dom'
-      ? { width: Math.ceil(size.width * ratio), height: Math.ceil(size.height * ratio) }
-      : { width: canvasesOf(zoomed)[0].width, height: canvasesOf(zoomed)[0].height };
-  const want = { width: largest.width + GUTTER * 2, height: largest.height + GUTTER * 2 };
-  // Give the zoomed canvases' memory back before anything else is drawn:
-  // two of them hold over 200 MB, and the next draws do not need them.
-  for (const canvas of [...canvasesOf(zoomed), ...canvasesOf(forced)]) {
-    canvas.width = 0;
-    canvas.height = 0;
+    // The zoom, through what this engine grants.
+    const box = mode === 'canvas' ? squareBox(zoomFrame) : undefined;
+    const size = box ?? extent(zoomFrame);
+    const ratio = ZOOMED_LONG_SIDE / Math.max(size.width, size.height);
+    const zoomed = root();
+    const backend = draw(zoomed, ratio, zoomFrame, box);
+    const stats = { ...gpu.stats };
+    const buffer = {
+      width: blitter.canvas.width,
+      height: blitter.canvas.height,
+      granted: blitter.gl.drawingBufferWidth === blitter.canvas.width && blitter.gl.drawingBufferHeight === blitter.canvas.height,
+    };
+
+    // The same zoom under a cap a quarter of that buffer's area: another tiling.
+    const cappedArea = Math.floor((buffer.width * buffer.height) / 4);
+    const capped = root();
+    gpu.limitForTesting({ area: cappedArea });
+    let cappedBackend: string;
+    let cappedStats: typeof stats;
+    try {
+      cappedBackend = draw(capped, ratio, zoomFrame, box);
+      cappedStats = { ...gpu.stats };
+    } finally {
+      gpu.limitForTesting(null);
+    }
+    const zoomedCompare = diffRoots(zoomed, capped);
+    // The rect the blitter is asked for: the DOM mode's mesh raster (its canvas
+    // carries 25% slack beyond it), the canvas mode's whole backing.
+    const largest =
+      mode === 'dom'
+        ? { width: Math.ceil(size.width * ratio), height: Math.ceil(size.height * ratio) }
+        : { width: canvasesOf(zoomed)[0].width, height: canvasesOf(zoomed)[0].height };
+    const want = { width: largest.width + GUTTER * 2, height: largest.height + GUTTER * 2 };
+    // Give the zoomed canvases' memory back before anything else is drawn:
+    // two of them hold over 200 MB, and the next draws do not need them.
+    for (const canvas of [...canvasesOf(zoomed), ...canvasesOf(capped)]) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    const got = grantedBuffer(want.width, want.height);
+
+    // After: the same ratio-1 frame on a fresh renderer, so every part is rastered again.
+    const after = root();
+    draw(after, 1, frame);
+    const afterCompare = diffRoots(before, after);
+
+    return {
+      backend,
+      width: largest.width,
+      height: largest.height,
+      granted: got.width >= want.width && got.height >= want.height,
+      grantedWidth: got.width,
+      grantedHeight: got.height,
+      bufferWidth: buffer.width,
+      bufferHeight: buffer.height,
+      bufferGranted: buffer.granted,
+      passes: stats.passes,
+      pieces: stats.pieces,
+      tiledJobs: stats.tiledJobs,
+      cappedBackend,
+      cappedArea,
+      cappedPasses: cappedStats.passes,
+      cappedPieces: cappedStats.pieces,
+      cappedTiledJobs: cappedStats.tiledJobs,
+      zoomedDiff: zoomedCompare.diff,
+      zoomedPixels: zoomedCompare.pixels,
+      zoomedMaxDelta: zoomedCompare.maxDelta,
+      afterDiff: afterCompare.diff,
+      afterPixels: afterCompare.pixels,
+      afterCanvases: afterCompare.canvases,
+      afterMaxDelta: afterCompare.maxDelta,
+      referenceInk,
+    };
+  } finally {
+    for (const dispose of disposers) dispose();
+    for (const r of roots) r.remove();
+    assets.dispose();
   }
-  const got = grantedBuffer(want.width, want.height);
+}
 
-  // After: the same ratio-1 frame on a fresh renderer, so every part is rastered again.
-  const after = root();
-  draw(after, 1, frame);
-  const afterCompare = diffRoots(before, after);
+/**
+ * Past the grant, the blitter draws in passes and tiles instead of falling to
+ * canvas2d (#245) — and a pixel must not depend on either (#187's rule: each
+ * job is rastered in its own rect). This draws the same frames twice, on two
+ * renderers of one kind: once with the blitter's real limits, which hold every
+ * frame in one pass, and once under a test-only cap on the granted buffer
+ * (`limitForTesting`) far below the fixture's size. The capped renderer must
+ * stay on WebGL on every frame and its canvases must be the uncapped ones,
+ * exactly.
+ *
+ * The caps are derived from a dry run's jobs, never written as numbers:
+ *
+ * - **passes**: the buffer's width and height just hold the largest job with
+ *   its gutter (on the blitter's 32 px placement grid), so every job fits
+ *   whole and the batch cannot fit one buffer.
+ * - **tile**: the buffer's area is that of a square half the largest job's
+ *   long side, so that job is tiled; the blitter finds the buffer itself, as
+ *   it does under a browser's area cap. The batch is that job alone (the DOM
+ *   mode), or the whole frame, which the canvas mode draws as one job.
+ * - **mixed**: the DOM mode's whole frame in a buffer that just holds the
+ *   second-largest job (on the same grid) and not the largest, so a tiled job
+ *   and a whole one share the passes.
+ *
+ * `plant: 'no-tiling'` is the planted control: the blitter declines a job
+ * larger than the buffer instead of tiling it, which is what it did before
+ * #245, so the checks must fail by name.
+ */
+export type CapCase = 'passes' | 'tile' | 'mixed';
 
-  const result: ZoomBufferCase = {
-    backend,
-    width: largest.width,
-    height: largest.height,
-    granted: got.width >= want.width && got.height >= want.height,
-    grantedWidth: got.width,
-    grantedHeight: got.height,
-    zoomedDiff: zoomedCompare.diff,
-    zoomedPixels: zoomedCompare.pixels,
-    zoomedMaxDelta: zoomedCompare.maxDelta,
-    afterDiff: afterCompare.diff,
-    afterPixels: afterCompare.pixels,
-    afterCanvases: afterCompare.canvases,
-    afterMaxDelta: afterCompare.maxDelta,
-    referenceInk,
-  };
-  for (const dispose of disposers) dispose();
-  for (const r of roots) r.remove();
-  assets.dispose();
-  return result;
+export interface CapCheck {
+  name: string;
+  pass: boolean;
+  detail: string;
+}
+
+interface Size {
+  width: number;
+  height: number;
+}
+
+export interface CapIdentityResult {
+  mode: 'dom' | 'canvas';
+  cap: CapCase;
+  plant: 'none' | 'no-tiling';
+  /** The cap applied to the capped renderer's buffer. */
+  limits: { area?: number; width?: number; height?: number };
+  /** The largest job of the dry run, and the largest smaller than it, device px. */
+  largest: Size;
+  second: Size;
+  /** Per frame: the capped draw's backend, jobs, passes, pieces and tiled jobs, the reference's passes, and the comparison. */
+  perFrame: {
+    time: number;
+    backend: string;
+    jobs: number;
+    passes: number;
+    pieces: number;
+    tiledJobs: number;
+    referencePasses: number;
+    diff: number;
+    pixels: number;
+    maxDelta: number;
+  }[];
+  checks: CapCheck[];
+}
+
+const CAP_TIMES = [0, 0.3, 0.6, 0.9, 1.2];
+/** A fractional ratio, so that the vertices sit off the pixel grid. */
+const CAP_RATIO = 1.75;
+const GUTTERS = 2;
+/** The blitter's placement grid (ALIGN in MeshGlBlitter.ts): a side cap below it is floored to it. */
+const GRID = 32;
+
+const longOf = (s: Size): number => Math.max(s.width, s.height);
+
+export async function capIdentityProbe(mode: 'dom' | 'canvas', cap: CapCase, plant: 'none' | 'no-tiling' = 'none'): Promise<CapIdentityResult> {
+  const gpu = getMeshGlBlitter();
+  if (!gpu) throw new Error('capIdentityProbe: WebGL unavailable');
+  if (mode === 'canvas' && cap !== 'tile') throw new Error(`capIdentityProbe: the canvas mode draws one job; no ${cap} case`);
+  const assets = await loadRig(RIG);
+  const roots: HTMLElement[] = [];
+  const disposers: Array<() => void> = [];
+  const originalFlush = gpu.flush;
+  const originalFlushFrame = gpu.flushFrame;
+  try {
+    const frames = CAP_TIMES.map((time) => frameAt(assets, POSE.animation, time));
+    const select = (f: PosedFrame): PosedFrame =>
+      mode === 'dom' && cap === 'tile' ? { order: f.order.filter((slot) => slot.kind === 'mesh' && slot.slot === ZOOM_SLOT) } : f;
+
+    const make = () => {
+      const r = makeRoot();
+      roots.push(r);
+      if (mode === 'dom') {
+        const renderer = new DomRenderer(r, assets.regionImages, assets.pageImages);
+        disposers.push(() => renderer.dispose());
+        renderer.pixelRatio = CAP_RATIO;
+        return { root: r, draw: (f: PosedFrame) => (renderer.render(f), renderer.meshBackendActive as string) };
+      }
+      const renderer = new CanvasRenderer(r, assets.pageImages);
+      disposers.push(() => renderer.dispose());
+      renderer.pixelRatio = CAP_RATIO;
+      // One stage box, so the canvas is one size on every frame.
+      renderer.viewport = squareBox(frames[frames.length - 1]);
+      return { root: r, draw: (f: PosedFrame) => (renderer.render(f), renderer.backendActive as string) };
+    };
+
+    // A dry run on a throwaway renderer measures the jobs the caps are derived from.
+    const sizes: Size[] = [];
+    gpu.flush = function (jobs) {
+      for (const job of jobs) sizes.push({ width: job.width, height: job.height });
+      return originalFlush.call(this, jobs);
+    };
+    gpu.flushFrame = function (job) {
+      sizes.push({ width: job.width, height: job.height });
+      return originalFlushFrame.call(this, job);
+    };
+    gpu.limitForTesting(null);
+    const dry = make();
+    for (const f of frames) dry.draw(select(f));
+    gpu.flush = originalFlush;
+    gpu.flushFrame = originalFlushFrame;
+
+    const empty: Size = { width: 0, height: 0 };
+    const largest = sizes.reduce((a, b) => (longOf(b) > longOf(a) ? b : a), empty);
+    const long = longOf(largest);
+    const second = sizes.filter((s) => longOf(s) < long).reduce((a, b) => (longOf(b) > longOf(a) ? b : a), empty);
+    const grid = (v: number) => Math.ceil(v / GRID) * GRID;
+    const limits: CapIdentityResult['limits'] =
+      cap === 'passes'
+        ? { width: grid(largest.width + GUTTERS), height: grid(largest.height + GUTTERS) }
+        : cap === 'tile'
+          ? { area: (Math.ceil(long / 2) + GUTTERS) ** 2 }
+          : { width: grid(second.width + GUTTERS), height: grid(second.height + GUTTERS) };
+
+    const reference = make();
+    const capped = make();
+    const perFrame: CapIdentityResult['perFrame'] = [];
+    for (let i = 0; i < frames.length; i++) {
+      const f = select(frames[i]);
+      gpu.limitForTesting(null);
+      gpu.stats = { jobs: 0, passes: 0, pieces: 0, tiledJobs: 0 };
+      reference.draw(f);
+      const referencePasses = gpu.stats.passes;
+      gpu.limitForTesting({ ...limits, tiling: plant !== 'no-tiling' });
+      gpu.stats = { jobs: 0, passes: 0, pieces: 0, tiledJobs: 0 };
+      const backend = capped.draw(f);
+      const stats = { ...gpu.stats };
+      gpu.limitForTesting(null);
+      const d = diffRoots(reference.root, capped.root);
+      perFrame.push({ time: CAP_TIMES[i], backend, ...stats, referencePasses, diff: d.diff, pixels: d.pixels, maxDelta: d.maxDelta });
+    }
+
+    const checks: CapCheck[] = [];
+    const check = (name: string, pass: boolean, detail: string) => checks.push({ name, pass, detail });
+    const first = perFrame[0];
+    check('reference: one pass on every frame that drew', perFrame.every((p) => p.referencePasses <= 1), perFrame.map((p) => p.referencePasses).join(','));
+    check(
+      'cap: below what the uncapped draw used',
+      (limits.area ?? Infinity) < (largest.width + GUTTERS) * (largest.height + GUTTERS) || (limits.width ?? Infinity) < 512 || (limits.height ?? Infinity) < largest.height + GUTTERS,
+      JSON.stringify({ limits, largest, second }),
+    );
+    check('webgl on every frame', perFrame.every((p) => p.backend === 'webgl'), perFrame.map((p) => p.backend).join(','));
+    if (cap === 'passes') {
+      check('passes: the first frame is drawn in several passes', first.passes > 1, `passes ${first.passes}`);
+      check('passes: no job is tiled', perFrame.every((p) => p.tiledJobs === 0), perFrame.map((p) => p.tiledJobs).join(','));
+    } else {
+      check(`${cap}: the first frame tiles a job`, first.tiledJobs >= 1 && first.pieces >= 4, `tiled ${first.tiledJobs}, pieces ${first.pieces}, passes ${first.passes}`);
+    }
+    if (cap === 'mixed') {
+      check('mixed: tiles and whole jobs share the passes', second.width > 0 && first.tiledJobs < first.jobs && first.passes > 1, `jobs ${first.jobs}, tiled ${first.tiledJobs}, passes ${first.passes}`);
+    }
+    check('identical: part canvases', perFrame.every((p) => p.diff === 0 && p.pixels > 0), perFrame.map((p) => `${p.diff}/${p.pixels}`).join(','));
+    return { mode, cap, plant, limits, largest, second, perFrame, checks };
+  } finally {
+    gpu.flush = originalFlush;
+    gpu.flushFrame = originalFlushFrame;
+    gpu.limitForTesting(null);
+    for (const dispose of disposers) dispose();
+    for (const r of roots) r.remove();
+    assets.dispose();
+  }
 }

@@ -30,8 +30,10 @@
  * through the canvas's size then copies the wrong texels into every part —
  * rectangles of another part's texture, cloth cut along straight edges, on a
  * zoomed-in stage (rig-c/review#332). So a growth the browser does not grant
- * in full is undone, that area is not asked for again, and the batch is
- * declined to the caller's canvas2d path, as a batch past `maxSize` always was.
+ * in full is undone and that area is not asked for again. A batch the granted
+ * buffer cannot hold — or one past `maxSize` — is drawn in passes through it,
+ * and a job larger than the buffer in tiles (see flush()); the canvas2d path
+ * is the caller's for a lost context only, never for size.
  *
  * Page textures are the one thing here with a lifetime, and since this object
  * outlives every renderer they are reference-counted: a renderer retains each
@@ -43,7 +45,8 @@
  * The canvas render mode (`CanvasRenderer`) draws through the same context: a
  * `FrameJob` is a whole player's frame — every region and mesh as textured,
  * vertex-coloured triangles in draw order, with the blend mode as batch state —
- * into one rect, blitted onto that player's one visible canvas. It has its own
+ * into one rect (or tiles of one, past the grant), blitted onto that player's
+ * one visible canvas, and rastered in that rect's own frame like a mesh job. It has its own
  * program (colour and optional dark attributes) so the mesh tier's program and
  * its output stay exactly what they were; both share the page textures and
  * their reference counts.
@@ -113,7 +116,7 @@ export interface FrameRun {
  * Positions are device px relative to the job's rect, top-left origin; the
  * colour is premultiplied by its alpha and so is the dark colour. Drawn into
  * one rect of the offscreen buffer, then blitted onto `canvas` in one
- * `drawImage`.
+ * `drawImage` — or, past the grant, tile by tile (see flushFrame).
  */
 export interface FrameJob {
   canvas: HTMLCanvasElement;
@@ -141,13 +144,13 @@ attribute vec2 aPos;
 attribute vec2 aUV;
 attribute vec4 aColor;
 attribute vec3 aDark;
-uniform vec2 uResolution;
+uniform vec2 uScale;
 uniform vec2 uOrigin;
 varying vec2 vUV;
 varying vec4 vColor;
 varying vec3 vDark;
 void main() {
-  vec2 clip = (aPos + uOrigin) / uResolution * 2.0 - 1.0;
+  vec2 clip = (aPos - uOrigin) * uScale - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   vUV = aUV;
   vColor = aColor;
@@ -189,13 +192,14 @@ export function glContextCount(): number {
 const VERTEX_SHADER = `
 attribute vec2 aPos;
 attribute vec2 aUV;
-uniform vec2 uResolution;
+uniform vec2 uScale;
 uniform vec2 uOrigin;
 varying vec2 vUV;
 void main() {
-  // aPos is in offscreen-canvas device px, top-left origin (matching the
-  // top-left-origin drawImage read of the same rect).
-  vec2 clip = (aPos - uOrigin) / uResolution * 2.0 - 1.0;
+  // aPos is in the job's own device px, top-left origin (matching the
+  // top-left-origin drawImage read of the same rect); uOrigin is the top-left
+  // of the viewport window within the job, 0 unless the job passes maxSize.
+  vec2 clip = (aPos - uOrigin) * uScale - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
   vUV = aUV;
 }`;
@@ -212,6 +216,93 @@ void main() {
 const GUTTER = 1;
 /** Drawing-buffer growth quantum (device px). */
 const GROW_STEP = 256;
+
+/**
+ * One rect of the offscreen buffer in one pass: a whole job, or one tile of
+ * it. `tx`, `ty`, `tw`, `th` are the tile in the job's own device px (the
+ * whole job for an untiled one), and `bx`, `by` its top-left in the buffer.
+ */
+interface Piece {
+  job: number;
+  tx: number;
+  ty: number;
+  tw: number;
+  th: number;
+  bx: number;
+  by: number;
+  pass: number;
+}
+
+/**
+ * What the last flush() or flushFrame() did: its jobs, the passes it drew,
+ * the pieces it drew in them, and how many of its jobs were tiled.
+ *
+ * @internal Read by the test harness; not part of the package API.
+ */
+export interface FlushStats {
+  jobs: number;
+  passes: number;
+  pieces: number;
+  tiledJobs: number;
+}
+
+/**
+ * The buffer phase every piece is placed at: its top-left corner sits at
+ * GUTTER modulo ALIGN in both axes, and the buffer's sides are multiples of
+ * it, so a job's raster lands on the same phase of the window wherever it is
+ * packed and whichever tile of it is drawn. Some rasterizers are invariant
+ * under a translation of the window only by whole raster tiles. Measured on
+ * one mesh job at pixel ratio 1.75, the buffer's height shifted and nothing
+ * else: headless WebKit on macOS (Apple GPU) drew 7–14 pixels one level off
+ * at shifts of 1, 2, 3, 4, 7, 8, 15, 16, 31 and 48 px, and identically at 32,
+ * 64, 96, 128, 256 and 512; SwiftShader drew identically at every shift.
+ * The phase makes macOS WebKit's dom mode exact across tilings; it does not
+ * do that for WebKit on Linux, which differs on it too (tests/zoom-buffer.spec.ts
+ * says where identity is held). It is kept because it costs nothing else.
+ */
+const ALIGN = 32;
+
+/** The smallest position at or after `v` on the piece phase (GUTTER modulo ALIGN). */
+function onPhase(v: number): number {
+  return v + ((((GUTTER - v) % ALIGN) + ALIGN) % ALIGN);
+}
+
+/**
+ * Shelf-packs pieces, tallest first, into a `bufW`-wide buffer, starting a
+ * new pass when a piece would cross `bufH`. Every piece must fit the buffer
+ * with its gutter. Sets each piece's position and pass, and returns the
+ * height the packing needs (the last pass's, when there are several).
+ */
+function shelfPack(pieces: Piece[], bufW: number, bufH: number): number {
+  // Array.prototype.sort is stable, so equal heights keep job and tile order.
+  const order = pieces.slice().sort((a, b) => b.th - a.th);
+  let pass = 0;
+  let shelfX = GUTTER;
+  let shelfY = GUTTER;
+  let shelfH = 0;
+  let height = GUTTER;
+  for (const piece of order) {
+    if (shelfX + piece.tw + GUTTER > bufW) {
+      shelfY = onPhase(shelfY + shelfH + GUTTER);
+      shelfX = GUTTER;
+      shelfH = 0;
+    }
+    if (shelfY + piece.th + GUTTER > bufH) {
+      pass++;
+      shelfX = GUTTER;
+      shelfY = GUTTER;
+      shelfH = 0;
+      height = GUTTER;
+    }
+    piece.bx = shelfX;
+    piece.by = shelfY;
+    piece.pass = pass;
+    shelfX = onPhase(shelfX + piece.tw + GUTTER);
+    if (piece.th > shelfH) shelfH = piece.th;
+    if (shelfY + piece.th + GUTTER > height) height = shelfY + piece.th + GUTTER;
+  }
+  return height;
+}
 
 /** Cache entry for one atlas page: the upload, and how many renderers want it. */
 interface PageTexture {
@@ -234,13 +325,13 @@ class MeshGlBlitter {
 
   private readonly canvas = document.createElement('canvas');
   private readonly gl: WebGLRenderingContext;
-  private readonly uResolution: WebGLUniformLocation;
+  private readonly uScale: WebGLUniformLocation;
   private readonly uOrigin: WebGLUniformLocation;
   private readonly meshProgram: WebGLProgram;
   private readonly meshPos: number;
   private readonly meshUV: number;
   private readonly frameProgram: WebGLProgram;
-  private readonly frameResolution: WebGLUniformLocation;
+  private readonly frameScale: WebGLUniformLocation;
   private readonly frameOrigin: WebGLUniformLocation;
   private readonly framePos: number;
   private readonly frameUV: number;
@@ -261,8 +352,19 @@ class MeshGlBlitter {
    * (see the module comment); a growth to this area or more is not attempted.
    */
   private refusedArea = Number.POSITIVE_INFINITY;
+  /** Test-only caps on the grant, and the tiling plant — see limitForTesting(). */
+  private testArea = Number.POSITIVE_INFINITY;
+  private testWidth = Number.POSITIVE_INFINITY;
+  private testHeight = Number.POSITIVE_INFINITY;
+  private tiling = true;
+  /**
+   * What the last flush() or flushFrame() did.
+   *
+   * @internal Read by the test harness; not part of the package API.
+   */
+  stats: FlushStats = { jobs: 0, passes: 0, pieces: 0, tiledJobs: 0 };
   private vertexData = new Float32Array(8192);
-  /** Per-job packed rect origins, filled by flush(). */
+  /** Per-job packed rect origins (a tiled job's first tile), filled by flush(). */
   private packX: number[] = [];
   private packY: number[] = [];
 
@@ -287,10 +389,10 @@ class MeshGlBlitter {
     const program = this.link(VERTEX_SHADER, FRAGMENT_SHADER);
     this.meshProgram = program;
     gl.useProgram(program);
-    const uResolution = gl.getUniformLocation(program, 'uResolution');
+    const uScale = gl.getUniformLocation(program, 'uScale');
     const uOrigin = gl.getUniformLocation(program, 'uOrigin');
-    if (!uResolution || !uOrigin) throw new Error('mesh program uniforms not found');
-    this.uResolution = uResolution;
+    if (!uScale || !uOrigin) throw new Error('mesh program uniforms not found');
+    this.uScale = uScale;
     this.uOrigin = uOrigin;
     gl.uniform1i(gl.getUniformLocation(program, 'uTex'), 0);
     this.meshPos = gl.getAttribLocation(program, 'aPos');
@@ -299,10 +401,10 @@ class MeshGlBlitter {
     const frame = this.link(FRAME_VERTEX_SHADER, FRAME_FRAGMENT_SHADER);
     this.frameProgram = frame;
     gl.useProgram(frame);
-    const frameResolution = gl.getUniformLocation(frame, 'uResolution');
+    const frameScale = gl.getUniformLocation(frame, 'uScale');
     const frameOrigin = gl.getUniformLocation(frame, 'uOrigin');
-    if (!frameResolution || !frameOrigin) throw new Error('frame program uniforms not found');
-    this.frameResolution = frameResolution;
+    if (!frameScale || !frameOrigin) throw new Error('frame program uniforms not found');
+    this.frameScale = frameScale;
     this.frameOrigin = frameOrigin;
     gl.uniform1i(gl.getUniformLocation(frame, 'uTex'), 0);
     this.framePos = gl.getAttribLocation(frame, 'aPos');
@@ -317,111 +419,220 @@ class MeshGlBlitter {
     gl.enable(gl.SCISSOR_TEST);
     gl.clearColor(0, 0, 0, 0);
     gl.activeTexture(gl.TEXTURE0);
-    this.maxSize = Math.min((gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number) || 4096, 8192);
+    // No larger than MAX_VIEWPORT_DIMS, so that a job's window up to maxSize
+    // is one viewport (see placePiece), and on the ALIGN grid, so that a
+    // window's corner keeps the piece phase.
+    const viewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array | null;
+    const side = Math.min((gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number) || 4096, 8192, viewport?.[0] || 4096, viewport?.[1] || 4096);
+    this.maxSize = Math.floor(side / ALIGN) * ALIGN;
   }
 
   /**
-   * Rasterize every job into the offscreen buffer, then blit each rect onto
-   * its per-part canvas. Returns false when the context is lost (or the jobs
-   * cannot fit) so the caller can rasterize the batch on the canvas2d path.
+   * Rasterizes every job and blits it onto its per-part canvas. Returns false
+   * only when the context is lost, so that the caller draws the batch on its
+   * canvas2d path; a batch's size never sends it there.
+   *
+   * A batch that fits one buffer is one pass, shelf-packed as it always was.
+   * One that does not — a zoomed-in stage asks for more than the browser
+   * grants, or for more than `maxSize` — is drawn in passes through the
+   * largest buffer the browser grants in full: its pieces are shelf-packed
+   * into that buffer, a pass is drawn and blitted, and the next pass reuses
+   * the buffer. A piece is a whole job, or one tile of a job larger than the
+   * buffer.
+   *
+   * Every piece is rastered in its own job's rect (#187): the vertex upload is
+   * relative to the job and nothing else, and the viewport is the job's rect
+   * wherever the piece sits. A tile is the same viewport moved so that the
+   * tile lands in the buffer, scissored to the tile and blitted into the
+   * matching sub-rect of the part canvas — so a pixel does not depend on how
+   * its job was packed, which pass drew it, or how it was tiled.
    */
   flush(jobs: MeshBlitJob[]): boolean {
     const gl = this.gl;
+    this.stats = { jobs: jobs.length, passes: 0, pieces: 0, tiledJobs: 0 };
     if (this.lost || gl.isContextLost()) return false;
 
-    // Shelf-pack, tallest first (indices keep job order for the draw pass).
+    // One pass if the buffer holds the whole batch: every job whole, shelf-packed.
     let width = Math.max(512, this.canvas.width);
     for (const job of jobs) width = Math.max(width, job.width + GUTTER * 2);
-    if (width > this.maxSize) return false;
-    const order = jobs.map((_, i) => i).sort((a, b) => jobs[b].height - jobs[a].height);
+    let pieces: Piece[] = jobs.map((job, i) => ({ job: i, tx: 0, ty: 0, tw: job.width, th: job.height, bx: 0, by: 0, pass: 0 }));
+    const height = shelfPack(pieces, width, Number.POSITIVE_INFINITY);
+    if (!this.reserve(width, height)) {
+      if (!this.acquire(width, height)) return false;
+      const planned = this.plan(jobs, this.canvas.width, this.canvas.height);
+      if (!planned) return false;
+      pieces = planned;
+    }
+    // Where each job's first piece went, for whoever reads the packing.
     const packX = (this.packX = new Array<number>(jobs.length));
     const packY = (this.packY = new Array<number>(jobs.length));
-    let shelfX = GUTTER;
-    let shelfY = GUTTER;
-    let shelfH = 0;
-    let height = GUTTER;
-    for (const i of order) {
-      const job = jobs[i];
-      if (shelfX + job.width + GUTTER > width) {
-        shelfY += shelfH + GUTTER;
-        shelfX = GUTTER;
-        shelfH = 0;
-      }
-      packX[i] = shelfX;
-      packY[i] = shelfY;
-      shelfX += job.width + GUTTER;
-      if (job.height > shelfH) shelfH = job.height;
-      if (shelfY + job.height + GUTTER > height) height = shelfY + job.height + GUTTER;
+    for (let k = pieces.length - 1; k >= 0; k--) {
+      packX[pieces[k].job] = pieces[k].bx;
+      packY[pieces[k].job] = pieces[k].by;
     }
-    if (!this.reserve(width, height)) return false;
-    const bufH = this.canvas.height;
     this.bindMesh();
 
     // Build one interleaved vertex array for the whole batch (unindexed —
     // meshes are a few hundred triangles, expansion is cheaper than managing
-    // index buffers).
+    // index buffers), in each job's own device px: no pack offset is folded
+    // in, so the Float32 a vertex is rounded to is the job's alone.
     let floats = 0;
     for (const job of jobs) floats += job.triangles.length * 4;
     if (this.vertexData.length < floats) {
       this.vertexData = new Float32Array(1 << Math.ceil(Math.log2(floats)));
     }
     const data = this.vertexData;
+    const firsts = new Array<number>(jobs.length);
     let f = 0;
     for (let i = 0; i < jobs.length; i++) {
       const { vertices, uvs, ratio } = jobs[i];
       const triangles = triangleReadSource(jobs[i].triangles);
-      const ox = packX[i];
-      const oy = packY[i];
+      firsts[i] = f / 4;
       for (let t = 0; t < triangles.length; t++) {
         const vi = triangles[t] * 2;
-        data[f++] = ox + vertices[vi] * ratio;
-        data[f++] = oy + vertices[vi + 1] * ratio;
+        data[f++] = vertices[vi] * ratio;
+        data[f++] = vertices[vi + 1] * ratio;
         data[f++] = uvs[vi];
         data[f++] = uvs[vi + 1];
       }
     }
-    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, floats), gl.DYNAMIC_DRAW);
+    if (floats > 0) gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, floats), gl.DYNAMIC_DRAW);
 
-    let boundPage: HTMLImageElement | null = null;
-    let first = 0;
-    for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i];
-      if (job.page !== boundPage) {
-        gl.bindTexture(gl.TEXTURE_2D, this.textureFor(job.page, job.pma));
-        boundPage = job.page;
+    const cleared = new Uint8Array(jobs.length);
+    const bufH = this.canvas.height;
+    let start = 0;
+    while (start < pieces.length) {
+      const pass = pieces[start].pass;
+      let end = start;
+      while (end < pieces.length && pieces[end].pass === pass) end++;
+
+      let boundPage: HTMLImageElement | null = null;
+      for (let k = start; k < end; k++) {
+        const piece = pieces[k];
+        const job = jobs[piece.job];
+        if (job.page !== boundPage) {
+          gl.bindTexture(gl.TEXTURE_2D, this.textureFor(job.page, job.pma));
+          boundPage = job.page;
+        }
+        this.placePiece(piece, job.width, job.height, bufH, this.uScale, this.uOrigin);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, firsts[piece.job], job.triangles.length);
       }
-      // Scissor is bottom-left origin; pack coords are top-left origin.
-      // Normalize in the job's own rect: a global clip-space mapping lets
-      // unrelated packed jobs change the same mesh's subpixel raster (#187).
-      // Keep the packed Float32 upload and the 1:1 blit unchanged.
-      gl.viewport(packX[i], bufH - packY[i] - job.height, job.width, job.height);
-      gl.uniform2f(this.uResolution, job.width, job.height);
-      gl.uniform2f(this.uOrigin, packX[i], packY[i]);
-      gl.scissor(packX[i], bufH - packY[i] - job.height, job.width, job.height);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLES, first, job.triangles.length);
-      first += job.triangles.length;
-    }
 
-    // If the context died mid-batch the draws above were no-ops; report it
-    // before blitting stale/blank rects onto the part canvases.
-    if (gl.isContextLost()) {
-      this.markLost();
-      return false;
-    }
+      // If the context died mid-batch the draws above were no-ops; report it
+      // before blitting stale/blank rects onto the part canvases.
+      if (gl.isContextLost()) {
+        this.markLost();
+        return false;
+      }
 
-    // Blit each rect onto its per-part canvas: same-task read (no
-    // preserveDrawingBuffer needed), 1:1 device px (no filtering).
+      // Blit each piece onto its per-part canvas: same-task read (no
+      // preserveDrawingBuffer needed), 1:1 device px (no filtering).
+      for (let k = start; k < end; k++) {
+        const piece = pieces[k];
+        const job = jobs[piece.job];
+        const ctx = job.canvas.getContext('2d');
+        if (!ctx) continue;
+        if (!cleared[piece.job]) {
+          cleared[piece.job] = 1;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          // Clear the full backing: the previous raster may have been larger.
+          ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
+        }
+        if (piece.tw > 0 && piece.th > 0) {
+          ctx.drawImage(this.canvas, piece.bx, piece.by, piece.tw, piece.th, piece.tx, piece.ty, piece.tw, piece.th);
+        }
+      }
+      this.stats.passes++;
+      start = end;
+    }
+    this.stats.pieces = pieces.length;
+    // A job that drew no piece (none on a context it could get) is still cleared.
     for (let i = 0; i < jobs.length; i++) {
-      const job = jobs[i];
-      const ctx = job.canvas.getContext('2d');
+      if (cleared[i]) continue;
+      const ctx = jobs[i].canvas.getContext('2d');
       if (!ctx) continue;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      // Clear the full backing: the previous raster may have been larger.
-      ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
-      ctx.drawImage(this.canvas, packX[i], packY[i], job.width, job.height, 0, 0, job.width, job.height);
+      ctx.clearRect(0, 0, jobs[i].canvas.width, jobs[i].canvas.height);
     }
     return true;
+  }
+
+  /**
+   * Sets the viewport, the two uniforms and the scissor for one piece. The
+   * viewport is the job's own rect — or, for a job wider or taller than
+   * `maxSize`, the `maxSize` window of it that holds the piece, since a
+   * viewport cannot be larger — placed so that the piece's sub-rect lands on
+   * the piece's rect of the buffer; the scissor is that rect. Scissor and
+   * viewport are bottom-left origin; pieces are placed top-left.
+   *
+   * The clip-space mapping is `(p - origin) * scale - 1` with `scale` the
+   * window's 2 / size, a function of the job and the window alone. Written as
+   * `(p - origin) / size * 2 - 1` instead, SwiftShader drew the canvas mode's
+   * 6,901 px frame differently in two tilings (51,537 pixels); this form drew
+   * them identically, and the mesh tier identically either way.
+   */
+  private placePiece(piece: Piece, width: number, height: number, bufH: number, scale: WebGLUniformLocation, origin: WebGLUniformLocation): void {
+    const gl = this.gl;
+    const wx = piece.tx - (piece.tx % this.maxSize);
+    const wy = piece.ty - (piece.ty % this.maxSize);
+    const ww = Math.min(this.maxSize, width - wx);
+    const wh = Math.min(this.maxSize, height - wy);
+    // The job's top-left corner in buffer px: off the buffer for a tile past its first.
+    const left = piece.bx - piece.tx;
+    const top = piece.by - piece.ty;
+    gl.viewport(left + wx, bufH - (top + wy) - wh, ww, wh);
+    gl.uniform2f(scale, 2 / ww, 2 / wh);
+    gl.uniform2f(origin, wx, wy);
+    gl.scissor(piece.bx, bufH - piece.by - piece.th, piece.tw, piece.th);
+  }
+
+  /**
+   * Cuts each rect into pieces that fit a `bufW` × `bufH` buffer with its
+   * gutter — a rect that fits is one piece, a larger one is tiled, tiles never
+   * crossing a `maxSize` window — and shelf-packs them, tallest first, into
+   * consecutive passes of that buffer. A tile starts on the `ALIGN` grid of
+   * its job, so its job's corner keeps the buffer phase every piece has.
+   * Returns the pieces in pass order, or null when a rect needs tiling and
+   * tiling is off (a test-only plant) or the buffer is too small to tile.
+   */
+  private plan(rects: ArrayLike<{ width: number; height: number }>, bufW: number, bufH: number): Piece[] | null {
+    const tileW = Math.floor((bufW - GUTTER * 2) / ALIGN) * ALIGN;
+    const tileH = Math.floor((bufH - GUTTER * 2) / ALIGN) * ALIGN;
+    const max = this.maxSize;
+    const pieces: Piece[] = [];
+    for (let i = 0; i < rects.length; i++) {
+      const { width, height } = rects[i];
+      if (width + GUTTER * 2 <= bufW && height + GUTTER * 2 <= bufH && width <= max && height <= max) {
+        pieces.push({ job: i, tx: 0, ty: 0, tw: width, th: height, bx: 0, by: 0, pass: 0 });
+        continue;
+      }
+      if (!this.tiling || tileW <= 0 || tileH <= 0) return null;
+      this.stats.tiledJobs++;
+      for (let wy = 0; wy < height; wy += max) {
+        const wh = Math.min(max, height - wy);
+        for (let wx = 0; wx < width; wx += max) {
+          const ww = Math.min(max, width - wx);
+          for (let ty = wy; ty < wy + wh; ty += tileH) {
+            for (let tx = wx; tx < wx + ww; tx += tileW) {
+              pieces.push({ job: i, tx, ty, tw: Math.min(tileW, wx + ww - tx), th: Math.min(tileH, wy + wh - ty), bx: 0, by: 0, pass: 0 });
+            }
+          }
+        }
+      }
+    }
+    shelfPack(pieces, bufW, bufH);
+    // Stable: a pass keeps the packing's tallest-first order.
+    return pieces.sort((a, b) => a.pass - b.pass);
+  }
+
+  /** The buffer sides this module will use: `maxSize`, or a test cap below it. */
+  private get limitW(): number {
+    return Math.floor(Math.min(this.maxSize, this.testWidth) / ALIGN) * ALIGN;
+  }
+
+  private get limitH(): number {
+    return Math.floor(Math.min(this.maxSize, this.testHeight) / ALIGN) * ALIGN;
   }
 
   /**
@@ -436,11 +647,18 @@ class MeshGlBlitter {
   private reserve(width: number, height: number): boolean {
     const canvas = this.canvas;
     const gl = this.gl;
-    if (width > this.maxSize || height > this.maxSize) return false;
+    const limitW = this.limitW;
+    const limitH = this.limitH;
+    if (width > limitW || height > limitH) return false;
     if (width > canvas.width || height > canvas.height) {
-      const w = Math.min(this.maxSize, Math.ceil(Math.max(width, canvas.width) / GROW_STEP) * GROW_STEP);
-      const h = Math.min(this.maxSize, Math.ceil(Math.max(height, canvas.height) / GROW_STEP) * GROW_STEP);
+      const w = Math.min(limitW, Math.ceil(Math.max(width, canvas.width) / GROW_STEP) * GROW_STEP);
+      const h = Math.min(limitH, Math.ceil(Math.max(height, canvas.height) / GROW_STEP) * GROW_STEP);
       if (w * h >= this.refusedArea) return false;
+      if (w * h > this.testArea) {
+        // The test cap stands for a browser that grants less than this.
+        this.refusedArea = w * h;
+        return false;
+      }
       const previousW = canvas.width;
       const previousH = canvas.height;
       canvas.width = w;
@@ -458,58 +676,136 @@ class MeshGlBlitter {
   }
 
   /**
-   * Draws one player's frame (the canvas render mode) into a rect of the
-   * offscreen buffer and blits it onto `job.canvas`, whose full backing is
-   * cleared first. Returns false when the context is lost or the rect cannot
-   * fit, so the caller can draw the frame on its canvas2d fallback instead.
+   * Grows the buffer toward `width` × `height` as far as the browser grants
+   * in full, for a batch that one buffer cannot hold. The request is shrunk a
+   * quantum at a time, larger side first, never below the buffer already
+   * held, past every area the browser has refused; each refusal lowers that
+   * area, so the search ends — at worst on the buffer already held. Returns
+   * false only when even that is not granted in full.
+   */
+  private acquire(width: number, height: number): boolean {
+    const canvas = this.canvas;
+    let w = Math.max(canvas.width, Math.min(this.limitW, Math.ceil(width / GROW_STEP) * GROW_STEP));
+    let h = Math.max(canvas.height, Math.min(this.limitH, Math.ceil(height / GROW_STEP) * GROW_STEP));
+    for (;;) {
+      const held = w <= canvas.width && h <= canvas.height;
+      if (held || w * h < this.refusedArea) {
+        if (this.reserve(w, h)) return true;
+        if (held) return false;
+      }
+      if (w >= h && w - GROW_STEP >= canvas.width) w -= GROW_STEP;
+      else if (h - GROW_STEP >= canvas.height) h -= GROW_STEP;
+      else if (w - GROW_STEP >= canvas.width) w -= GROW_STEP;
+      else {
+        w = canvas.width;
+        h = canvas.height;
+      }
+    }
+  }
+
+  /**
+   * Test-only limits: `area` caps the drawing-buffer area this module will
+   * take as granted (a browser that grants less), `width` and `height` cap
+   * its sides below `maxSize`, and `tiling: false` is the planted control that declines a job
+   * larger than the buffer instead of tiling it. Setting limits drops the
+   * buffer held so far, so they hold from the next flush; null lifts them.
+   * Viewport windows stay `maxSize`: the caps stand for a smaller grant, not
+   * a different GPU.
+   *
+   * @internal Read by the test harness; not part of the package API.
+   */
+  limitForTesting(limits: { area?: number; width?: number; height?: number; tiling?: boolean } | null): void {
+    this.testArea = limits?.area ?? Number.POSITIVE_INFINITY;
+    this.testWidth = limits?.width ?? Number.POSITIVE_INFINITY;
+    this.testHeight = limits?.height ?? Number.POSITIVE_INFINITY;
+    this.tiling = limits?.tiling ?? true;
+    this.refusedArea = Number.POSITIVE_INFINITY;
+    if (limits) {
+      this.canvas.width = 1;
+      this.canvas.height = 1;
+    }
+  }
+
+  /**
+   * Draws one player's frame (the canvas render mode) and blits it onto
+   * `job.canvas`, whose full backing is cleared first. Returns false only when
+   * the context is lost, so the caller draws the frame on its canvas2d
+   * fallback. The frame is one job: drawn into one rect when the buffer holds
+   * it, otherwise tiled through passes exactly as flush() tiles a mesh, every
+   * tile re-issuing the frame's runs under its own scissor.
    */
   flushFrame(job: FrameJob): boolean {
     const gl = this.gl;
+    this.stats = { jobs: 1, passes: 0, pieces: 0, tiledJobs: 0 };
     if (this.lost || gl.isContextLost()) return false;
-    if (!this.reserve(job.width + GUTTER * 2, job.height + GUTTER * 2)) return false;
-    const bufW = this.canvas.width;
+    let pieces: Piece[];
+    if (this.reserve(job.width + GUTTER * 2, job.height + GUTTER * 2)) {
+      pieces = [{ job: 0, tx: 0, ty: 0, tw: job.width, th: job.height, bx: GUTTER, by: GUTTER, pass: 0 }];
+    } else {
+      if (!this.acquire(job.width + GUTTER * 2, job.height + GUTTER * 2)) return false;
+      const planned = this.plan([job], this.canvas.width, this.canvas.height);
+      if (!planned) return false;
+      pieces = planned;
+    }
     const bufH = this.canvas.height;
-    gl.viewport(0, 0, bufW, bufH);
     this.bindFrame(job.stride);
-    gl.uniform2f(this.frameResolution, bufW, bufH);
-    gl.uniform2f(this.frameOrigin, GUTTER, GUTTER);
 
     let vertices = 0;
     for (const run of job.runs) vertices = Math.max(vertices, run.first + run.count);
     if (vertices > 0) gl.bufferData(gl.ARRAY_BUFFER, job.data.subarray(0, vertices * job.stride), gl.DYNAMIC_DRAW);
 
-    // Scissor is bottom-left origin; the rect sits at (GUTTER, GUTTER) top-left.
-    gl.scissor(GUTTER, bufH - GUTTER - job.height, job.width, job.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    const ctx = job.canvas.getContext('2d');
+    if (ctx) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    let cleared = false;
     let boundPage: HTMLImageElement | null = null;
     let boundBlend: BlendMode | null = null;
-    for (const run of job.runs) {
-      if (run.page !== boundPage) {
-        gl.bindTexture(gl.TEXTURE_2D, this.textureFor(run.page, run.pma));
-        boundPage = run.page;
+    let start = 0;
+    while (start < pieces.length) {
+      const pass = pieces[start].pass;
+      let end = start;
+      while (end < pieces.length && pieces[end].pass === pass) end++;
+      for (let k = start; k < end; k++) {
+        this.placePiece(pieces[k], job.width, job.height, bufH, this.frameScale, this.frameOrigin);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        for (const run of job.runs) {
+          if (run.page !== boundPage) {
+            gl.bindTexture(gl.TEXTURE_2D, this.textureFor(run.page, run.pma));
+            boundPage = run.page;
+          }
+          if (run.blend !== boundBlend) {
+            const [src, dst] = BLEND_FACTORS[run.blend];
+            gl.blendFuncSeparate(src, dst, gl.ONE, dst);
+            boundBlend = run.blend;
+          }
+          gl.drawArrays(gl.TRIANGLES, run.first, run.count);
+        }
       }
-      if (run.blend !== boundBlend) {
-        const [src, dst] = BLEND_FACTORS[run.blend];
-        gl.blendFuncSeparate(src, dst, gl.ONE, dst);
-        boundBlend = run.blend;
+      if (gl.isContextLost()) {
+        this.markLost();
+        return false;
       }
-      gl.drawArrays(gl.TRIANGLES, run.first, run.count);
+      // Same-task read, 1:1 device px.
+      if (ctx) {
+        if (!cleared) {
+          cleared = true;
+          ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
+        }
+        for (let k = start; k < end; k++) {
+          const piece = pieces[k];
+          if (piece.tw > 0 && piece.th > 0) {
+            ctx.drawImage(this.canvas, piece.bx, piece.by, piece.tw, piece.th, piece.tx, piece.ty, piece.tw, piece.th);
+          }
+        }
+      }
+      this.stats.passes++;
+      start = end;
     }
-    if (gl.isContextLost()) {
-      this.markLost();
-      return false;
-    }
-
-    // One blit: same-task read, 1:1 device px.
-    const ctx = job.canvas.getContext('2d');
-    if (!ctx) return true;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
-    if (job.width > 0 && job.height > 0) {
-      ctx.drawImage(this.canvas, GUTTER, GUTTER, job.width, job.height, 0, 0, job.width, job.height);
-    }
+    this.stats.pieces = pieces.length;
+    if (ctx && !cleared) ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
     return true;
   }
 
