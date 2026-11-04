@@ -7,6 +7,7 @@ import { liveCoreProbe } from './liveCoreProbe';
 import { capIdentityProbe, zoomBufferProbe } from './zoomBufferProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
 import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
+import { heldClockProbe, type HeldClockProbeResult } from './heldClockProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
 import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
@@ -304,6 +305,7 @@ export interface RigPlayHarness {
   drawnMatchProbe(rig: string, combos: Array<{ sets: string[]; still: string }>): Promise<DrawnMatchCombo[]>;
   drawnRulesProbe(): Promise<DrawnRulesProbeResult>;
   setPhysicsProbe(): Promise<SetPhysicsProbeResult>;
+  heldClockProbe(): Promise<HeldClockProbeResult>;
   setEaseProbe(): Promise<SetEaseProbeResult>;
   setEaseB5Probe(): Promise<B5Hashes>;
   seekSnapshotProbe(): Promise<SeekSnapshotProbeResult>;
@@ -10236,6 +10238,7 @@ window.rigPlayHarness = {
   drawnMatchProbe,
   drawnRulesProbe,
   setPhysicsProbe,
+  heldClockProbe,
   setEaseProbe,
   setEaseB5Probe,
   seekSnapshotProbe,
