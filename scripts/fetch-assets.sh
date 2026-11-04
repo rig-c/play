@@ -184,6 +184,7 @@ rm -f "$RIGS_DEST/turned/art/turned.atlas"
 test_rig duo duo
 test_rig named named --atlas-in art/named.atlas
 test_rig cloth cloth
+test_rig held held
 test_rig physics-scope physics-scope
 test_rig parameters parameters
 test_rig draw draw

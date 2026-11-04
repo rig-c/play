@@ -349,6 +349,16 @@ console.log('cloth:');
 write('cloth', 'link.png', 61, 169, paint(61, 169, roundedRect(61, 169, 6, 22), look([90, 160, 210], { period: 14 })));
 write('cloth', 'banner.png', 321, 81, paint(321, 81, roundedRect(321, 81, 6, 18), look([210, 120, 80], { period: 16 })));
 
+// --- held: the cloth chain under a turned anchor, beside every other timeline kind (#248) ---
+// The chain is cloth's; the card swaps between two regions and changes draw
+// order, the banner mesh is deformed and tinted — what a held step must not move.
+
+console.log('held:');
+write('held', 'link.png', 61, 169, paint(61, 169, roundedRect(61, 169, 6, 22), look([90, 160, 210], { period: 14 })));
+write('held', 'banner.png', 321, 81, paint(321, 81, roundedRect(321, 81, 6, 18), look([210, 120, 80], { period: 16 })));
+write('held', 'card_a.png', 91, 61, paint(91, 61, roundedRect(91, 61, 5, 14), look([70, 185, 95], { period: 10 })));
+write('held', 'card_b.png', 61, 91, paint(61, 91, roundedRect(61, 91, 5, 14), look([190, 80, 170], { period: 12 })));
+
 // --- draw: exact opaque interiors for blend, skin and draw-order contracts ------
 // Ink channels are 0 or 255, so Multiply/Screen over the base has no rounding
 // ambiguity: [128,0,192] and [255,64,255]. All squares are the same 64×64 box.

@@ -889,6 +889,14 @@ export class RigPlayer {
   /** Set once anything beyond a plain play on track 0 happened: a mix, another track, a queue, a clear. `seek` and `skin` then cannot replay and refuse. */
   private beyondBase = false;
   private paused = false;
+  /** `hold(true)`: `advance` moves the physics clock and re-poses at the same track time (#248). */
+  private holding = false;
+  /** Set only while a held step is in flight: the step the physics clock moves by in place of the track's zero step. */
+  private heldClockStep: number | null = null;
+  /** Test-only (#248's planted controls): the held step as a plain advance, as nothing, or a release that replays the time as `seek` does. Not API. */
+  private heldPlant: 'advance' | 'freeze' | 'reset' | null = null;
+  /** Handed to every track the player opens as its physics clock: rig-c's render clock of the step, or of the held step while one is in flight. */
+  private readonly clockHook = (dt: number): number => physicsClockStep(this.heldClockStep ?? dt);
   private pose: RawPose | null = null;
   /** The un-overridden pose from the track/tracks (or setup pose when `setSet` is called before `play`). */
   private rawPose: RawPose | null = null;
@@ -1036,6 +1044,7 @@ export class RigPlayer {
     const alpha = options.alpha ?? 1;
     const additive = options.additive ?? false;
     this.paused = false;
+    this.holding = false;
     this.clearSeekCache();
     const plain = track === 0 && mix === 0 && alpha === 1 && !additive;
     if (!plain) this.beyondBase = true;
@@ -1046,7 +1055,7 @@ export class RigPlayer {
       // animation's first pose with the physics reset there.
       this.animation = name;
       this.loop = loop;
-      this.track = openTrack(this.view, name, { loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      this.track = openTrack(this.view, name, { loop, reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
       this.setRawPose(this.initializeSingle(this.track));
       this.applyEnvironment(this.track);
       return;
@@ -1158,7 +1167,7 @@ export class RigPlayer {
     this.oracle('track composition');
     if (this.tracks !== null) return this.tracks;
     this.clearSeekCache();
-    const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+    const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
     const single = this.track;
     const time = single?.trackTime ?? 0;
     if (single !== null && this.animation !== null) {
@@ -1364,6 +1373,50 @@ export class RigPlayer {
   }
 
   /**
+   * Holds the track time while the physics keeps running (#248). While held,
+   * `advance(dt)` and `frame(dt)` move the physics clock by `dt × timeScale`
+   * (on rig-c's render clock, as a plain step does) and re-pose at the
+   * **same** track time: every animation timeline — bone keys, slot colour,
+   * attachments, deform, draw order — reads what it read, and only what the
+   * physics drives moves, so a rig settles and stays alive on a held frame.
+   * No event or complete fires, `time` stands, and an eased set switch holds
+   * where it is. `hold(false)` releases it: the next step continues from the
+   * physics state the held steps left, with no reset. A rig with no physics
+   * constraint ignores held steps outright — nothing is re-posed. `pause()`
+   * still stops everything, held or not; `play` releases the hold, as it
+   * releases a pause; `seek` keeps it, and replays the time as it always does.
+   */
+  hold(on = true): void {
+    if (on !== true && on !== false) throw new Error(`hold expects true or false, got ${JSON.stringify(on)}`);
+    const releasing = this.holding && !on;
+    this.holding = on;
+    // The planted control replays the time on release, the way a seek-based workaround would.
+    if (releasing && this.heldPlant === 'reset' && this.animation !== null && this.runtimeFrames === null && !this.beyondBase) this.seek(this.time);
+  }
+
+  /** Whether `hold(true)` is in force. */
+  get held(): boolean {
+    return this.holding;
+  }
+
+  /** One held step (`hold`): the open track or tracks stepped by 0 while their physics clock moves by `step`. */
+  private heldStep(step: number): void {
+    if (!Number.isFinite(step)) throw new Error(`advance step must be finite, got ${String(step)}`);
+    if (this.heldPlant === 'freeze') return;
+    if (!this.view.constraints.some((constraint) => constraint.kind === 'physics')) return;
+    const live = this.tracks ?? this.track;
+    if (live === null) return;
+    this.heldClockStep = step;
+    let raw: RawPose;
+    try {
+      raw = live.step(0);
+    } finally {
+      this.heldClockStep = null;
+    }
+    this.setRawPose(raw);
+  }
+
+  /**
    * Moves a single animation on track 0 to `time`: snapshot-backed deterministic
    * seek (#141) that produces the exact pose and physics state of reopening at 0
    * and stepping forward in `seekStep` increments (the last one shorter) until
@@ -1464,14 +1517,14 @@ export class RigPlayer {
     let frontier: LiveTrack | LiveTracks;
     let firstPose: RawPose;
     if (mode === 'tracks') {
-      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
       tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
       firstPose = tracks.start();
       this.applyPhysicsParameters(tracks);
       this.applyEnvironment(tracks);
       frontier = tracks;
     } else {
-      const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
       firstPose = this.initializeSingle(track);
       this.applyEnvironment(track);
       frontier = track;
@@ -1491,7 +1544,7 @@ export class RigPlayer {
   /** Whatever is open, opened again with track 0's animation as `play` last set it, at pose 0: the single track, or the tracks under `tracks: true`. */
   private reopen(): void {
     if (this.tracks !== null) {
-      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
       tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
       this.trackCount = 1;
       this.tracks = tracks;
@@ -1500,7 +1553,7 @@ export class RigPlayer {
       this.applyEnvironment(tracks);
       return;
     }
-    this.track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+    this.track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
     this.setRawPose(this.initializeSingle(this.track));
     this.applyEnvironment(this.track);
   }
@@ -1559,6 +1612,8 @@ export class RigPlayer {
       const step = dt * this.timeScale;
       if (this.paused || !(step > 0)) return;
       if (!Number.isFinite(step)) throw new Error(`advance step must be finite, got ${String(step)}`);
+      // The runtime poser carries no physics constraint, so a held step has nothing to move.
+      if (this.holding && this.heldPlant !== 'advance') return;
       const before = this.runtimeFrames.pose.trackTime;
       const duration = this.runtimeFrames.model.animations.get(this.animation as string)!.duration;
       this.runtimeFrames.pose.trackTime += step;
@@ -1589,6 +1644,10 @@ export class RigPlayer {
     if (this.pose === null) return;
     const step = dt * this.timeScale;
     if (this.paused || !(step > 0)) return;
+    if (this.holding && this.heldPlant !== 'advance') {
+      this.heldStep(step);
+      return;
+    }
     this.lastStep = step;
     if (this.easing !== null) this.advanceEase(this.easing, step);
     const tracks = this.tracks;
@@ -2351,7 +2410,7 @@ export class RigPlayer {
     this.runtimeFrames = null;
     this.runtimeReadback = null;
     if (this.poserLabel === 'runtime') this.poserLabel = `oracle: ${reason}`;
-    this.track = openTrack(this.view, this.animation, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: physicsClockStep });
+    this.track = openTrack(this.view, this.animation, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
     this.setRawPose(this.track.first);
     if (time > 0) this.setRawPose(this.track.step(time));
     this.poseGeneration = generation;

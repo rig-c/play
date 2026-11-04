@@ -485,7 +485,11 @@ do not recalculate it on each feature PR.
   chain hanging from an anchor, each link answering wind and gravity, with a
   still mesh on the anchor: `tests/environment.spec.ts` (the environment and
   the rig's motion the page sets, #121), the *cloth under a side gust* parity
-  cells and `docs/REFERENCE.md`'s wind example. `draw` — opaque colour squares with
+  cells and `docs/REFERENCE.md`'s wind example. `held` — cloth's chain hung
+  from an anchor its `sway` clip turns, beside a card whose position,
+  attachment and draw order are keyed and a banner mesh whose deform and colour
+  are keyed (`glide` is `sway` without the draw-order key, for `tracks: true`):
+  `tests/held-clock.spec.ts`, the held-clock step (#248). `draw` — opaque colour squares with
   Multiply/Screen slots, a keyed draw-order swap, named skins changing one
   region, a small window, a far inverse clip and an undrawn far attachment:
   `tests/draw-contract.spec.ts`, which pins the blend formula, visible DOM

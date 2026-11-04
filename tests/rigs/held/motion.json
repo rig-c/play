@@ -1,0 +1,45 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "held",
+  "cut": "test-held",
+  "easings": {},
+  "physics": {
+    "link_1_phys": { "bone": "link_1", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 12, "gravity": 12 },
+    "link_2_phys": { "bone": "link_2", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 12, "gravity": 12 },
+    "link_3_phys": { "bone": "link_3", "rotate": 1, "inertia": 0.5, "strength": 60, "damping": 0.8, "mass": 1, "wind": 12, "gravity": 12 }
+  },
+  "animations": {
+    "sway": {
+      "duration": 2,
+      "loop": true,
+      "note": "Every timeline kind a held step must leave alone, keyed between keys at the held times (0.7 s and 1.2 s): the anchor turns (and swings the physics chain hung from it), the card slides, shows b from 0.5 s to 1.5 s and is drawn over everything from 1 s, the banner mesh is pushed and tinted. Only link_1..3 and tip are physics-driven.",
+      "drawOrder": [
+        { "t": 0, "offsets": [] },
+        { "t": 1, "offsets": [{ "slot": "card", "offset": 4 }] }
+      ],
+      "tracks": [
+        { "bone": "anchor", "property": "rotate", "keys": [{ "t": 0, "v": [0] }, { "t": 0.6, "v": [25] }, { "t": 1.4, "v": [-25] }, { "t": 2, "v": [0] }] },
+        { "bone": "card", "property": "translate", "keys": [{ "t": 0, "v": [0, 0] }, { "t": 1, "v": [40, 0] }, { "t": 2, "v": [0, 0] }] },
+        { "slot": "banner", "property": "rgba", "keys": [{ "t": 0, "v": [1, 1, 1, 1] }, { "t": 1, "v": [1, 0.5, 0.5, 1] }, { "t": 2, "v": [1, 1, 1, 1] }] },
+        { "slot": "card", "property": "attachment", "keys": [{ "t": 0, "v": "a" }, { "t": 0.5, "v": "b" }, { "t": 1.5, "v": "a" }] }
+      ],
+      "deform": [
+        { "slot": "banner", "attachment": "banner", "keys": [{ "t": 0 }, { "t": 1, "fromVertex": 0, "vertices": [0, 20, 0, 20] }, { "t": 2 }] }
+      ]
+    },
+    "glide": {
+      "duration": 2,
+      "loop": true,
+      "note": "sway without its draw-order key, for the live tracks (tracks: true), which do not mix a draw-order timeline.",
+      "tracks": [
+        { "bone": "anchor", "property": "rotate", "keys": [{ "t": 0, "v": [0] }, { "t": 0.6, "v": [25] }, { "t": 1.4, "v": [-25] }, { "t": 2, "v": [0] }] },
+        { "bone": "card", "property": "translate", "keys": [{ "t": 0, "v": [0, 0] }, { "t": 1, "v": [40, 0] }, { "t": 2, "v": [0, 0] }] },
+        { "slot": "banner", "property": "rgba", "keys": [{ "t": 0, "v": [1, 1, 1, 1] }, { "t": 1, "v": [1, 0.5, 0.5, 1] }, { "t": 2, "v": [1, 1, 1, 1] }] },
+        { "slot": "card", "property": "attachment", "keys": [{ "t": 0, "v": "a" }, { "t": 0.5, "v": "b" }, { "t": 1.5, "v": "a" }] }
+      ],
+      "deform": [
+        { "slot": "banner", "attachment": "banner", "keys": [{ "t": 0 }, { "t": 1, "fromVertex": 0, "vertices": [0, 20, 0, 20] }, { "t": 2 }] }
+      ]
+    }
+  }
+}

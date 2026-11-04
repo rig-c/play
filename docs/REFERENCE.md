@@ -206,7 +206,7 @@ at a rotation pivot has zero displacement.
 
 Call immediately before `advance`/`frame`. Explicit `repose()`/`step(0)` may
 consume input; reset/first activation may overwrite it. Pause/zero advance does
-not evaluate. Seek, skin replay and promotion to composed tracks do not replay
+not evaluate; a held advance (`hold`) does. Seek, skin replay and promotion to composed tracks do not replay
 external motion history; use `tracks: true` from the start when composing.
 No unselected state is written by this input. Independent chains stay identical
 to a matched no-input baseline after stepping; normal descendant/constraint
@@ -241,6 +241,29 @@ without it the rig is posed the way a fresh Spine skeleton is, with no skin
 set. `player.color` multiplies a whole-rig colour into every slot's tint.
 `player.renderer` is the `DomRenderer` underneath, whose knobs and counters
 are below.
+
+**Physics on a held frame (`hold`)**. `pause()` stops the physics with the
+clip; `hold(true)` stops only the clip (#248). While held, `advance(dt)` and
+`frame(dt)` move the physics clock by `dt × timeScale` and re-pose at the same
+track time, so a paused or stopped rig settles and stays alive:
+
+```ts
+pauseButton.onclick = () => player.hold(!player.held); // the frame loop keeps calling player.frame(dt)
+```
+
+Every animation timeline reads what it read — bone keys, slot colour,
+attachments, deform, draw order — and only what physics drives moves. `time`
+stands, no event or complete fires, and an eased set switch holds where it is.
+`hold(false)` resumes from the physics state the held steps left, with no reset.
+A held step is the core's zero step on a clock that moves the held step, so it
+equals a `rig-c/core` track given those steps. A rig with no physics constraint
+ignores held steps: nothing is re-posed and the generation stands. `pause()`
+still stops everything, held or not. `play` releases the hold, as it releases a
+pause; `seek` keeps it and replays as it always does. `moved()` and
+`physicsMoved` given while held apply on the next held step. A mode rather than
+an `advance` option, so the caller's frame loop stays one `frame(dt)` call. The
+bars and their planted controls are in `tests/held-clock.spec.ts`, on the
+`held` test rig.
 
 **What it refuses, by name.** A Spine export (`.json`, `.skel`) is refused
 before anything is fetched: this package reads compiled models and nothing
