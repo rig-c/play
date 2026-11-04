@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/rig-c/play/compare/v1.22.3...v1.23.0) (2026-11-04)
+
+
+### Features
+
+* **player:** hold() steps physics at a held track time ([#248](https://github.com/rig-c/play/issues/248)) ([#249](https://github.com/rig-c/play/issues/249)) ([7049e53](https://github.com/rig-c/play/commit/7049e53bc625b2dcf1608b43b89c33b4ab2a78b7))
+
 ## [1.22.3](https://github.com/rig-c/play/compare/v1.22.2...v1.22.3) (2026-11-03)
 
 
