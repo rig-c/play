@@ -65,7 +65,7 @@ for (const { rig, file } of models) {
     } finally { candidate.dispose(); oracle.dispose(); }
   }
 }
-const result = { protocol: 'runtime-corpus-v1', rigc: JSON.parse(readFileSync(join(playerRoot, 'node_modules/rig-c/package.json'))).version, inputs, steps: [0, .125, .375, .75], trackTimes: [0, .125, .5, 1.25], tolerance: 'Object.is; zero', rows };
+const result = { protocol: 'runtime-corpus-v1', rigc: JSON.parse(readFileSync(join(playerRoot, 'node_modules/@rig-c/core/package.json'))).version, inputs, steps: [0, .125, .375, .75], trackTimes: [0, .125, .5, 1.25], tolerance: 'Object.is; zero', rows };
 writeFileSync(out, JSON.stringify(result, null, 2) + '\n');
 console.log('RUNTIME_CORPUS', JSON.stringify({ models: inputs.length, rows: rows.length, runtime: rows.filter(r => r.poser === 'runtime').length, fallback: rows.filter(r => r.poser?.startsWith('oracle:')).length, numericDifferences: rows.reduce((n, r) => n + (r.numeric?.length ?? 0), 0), dryRun: process.argv.includes('--dry-run') }));
 if (rows.some(r => r.numeric?.length)) process.exit(1);

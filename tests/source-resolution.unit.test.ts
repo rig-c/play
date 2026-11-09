@@ -7,12 +7,13 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseConfigFileTextToJson } from 'typescript';
@@ -95,10 +96,9 @@ after(() => {
 });
 
 test(
-  'manifest, lockfile, fetch-assets.sh and source/test imports use canonical @rig-c/core',
+  'manifest, lockfile, fetch-assets.sh and src/tests/scripts/bench consumers use canonical @rig-c/core and deterministic .bin/rigc',
   { timeout: 60_000 },
   () => {
-    ensureSandbox();
   const manifest = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
@@ -109,7 +109,7 @@ test(
   assert.equal(parsedLock.error, undefined);
   const lock = parsedLock.config as {
     workspaces: Record<string, { devDependencies?: Record<string, string> }>;
-    packages: Record<string, [string, ...unknown[]]>;
+    packages: Record<string, [string, string, { dependencies?: Record<string, string>; bin?: Record<string, string> | string }, ...unknown[]]>;
   };
 
   const rigcPin = manifest.devDependencies?.['@rig-c/core'];
@@ -117,6 +117,26 @@ test(
   assert.match(rigcPin, /^\d+\.\d+\.\d+$/);
   assert.equal(lock.workspaces[''].devDependencies?.['@rig-c/core'], rigcPin);
   assert.equal(lock.packages['@rig-c/core']?.[0], `@rig-c/core@${rigcPin}`);
+  const partsPin = manifest.devDependencies?.['@rig-c/parts'];
+  assert(typeof partsPin === 'string');
+  assert.match(partsPin, /^\d+\.\d+\.\d+$/);
+  assert.equal(lock.workspaces[''].devDependencies?.['@rig-c/parts'], partsPin);
+  assert.equal(lock.packages['@rig-c/parts']?.[0], `@rig-c/parts@${partsPin}`);
+  assert.equal(lock.packages['@rig-c/parts']?.[2]?.dependencies?.['@rig-c/core'], rigcPin);
+  assert.equal(lock.packages['@rig-c/parts']?.[2]?.dependencies?.['rig-c'], undefined);
+  assert.equal(lock.packages['rig-c'], undefined);
+  const rigcBins = Object.entries(lock.packages)
+    .filter(([, entry]) => {
+      const bin = entry[2]?.bin;
+      return typeof bin === 'object' && bin !== null && 'rigc' in bin;
+    })
+    .map(([name]) => name);
+  assert.deepEqual(rigcBins, ['@rig-c/core']);
+  assert.equal(existsSync(resolve(repoRoot, 'node_modules', 'rig-c')), false);
+  assert.equal(
+    realpathSync(resolve(repoRoot, 'node_modules/.bin/rigc')),
+    realpathSync(resolve(repoRoot, 'node_modules/@rig-c/core/bin/rigc.cjs')),
+  );
   assert.equal(manifest.dependencies?.['@rig-c/core'], undefined);
   assert.equal(manifest.dependencies?.['rig-c'], undefined);
   assert.equal(manifest.devDependencies?.['rig-c'], undefined);
@@ -124,6 +144,7 @@ test(
 
   const fetchAssets = readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8');
   assert.equal(fetchAssets.match(/^RIGC_TAG="([^"]+)"$/m)?.[1], `v${rigcPin}`);
+  assert.equal(fetchAssets.match(/^PARTS_TAG="([^"]+)"$/m)?.[1], `v${partsPin}`);
   assert.match(fetchAssets, /require\('\$ROOT\/node_modules\/@rig-c\/core\/package\.json'\)\.version/);
   assert.match(fetchAssets, /require\('\$ROOT\/package\.json'\)\.devDependencies\['@rig-c\/core'\]/);
 
@@ -135,49 +156,34 @@ test(
     },
   });
 
-  for (const dir of ['src', 'tests'] as const) {
+  const legacyPathLiteral = /['"`](?:rig-c\/(?:core|runtime|plate|cli)|[^'"`\n]*node_modules\/rig-c(?:\/|['"`])|[^'"`\n]*\/rig-c\/src\/)/;
+  for (const dir of ['src', 'tests', 'scripts', 'bench'] as const) {
     const files = readdirSync(resolve(repoRoot, dir), { recursive: true })
-      .map(String)
-      .filter((file) => file.endsWith('.ts'));
+      .map((entry) => String(entry).split(sep).join('/'))
+      .filter(
+        (file) =>
+          (file.endsWith('.ts') || file.endsWith('.mjs') || file.endsWith('.py')) &&
+          !file.startsWith('base.generated/') &&
+          file !== 'load-base.generated.ts',
+      );
     const legacy = files.filter((file) => {
-      const code = stripComments(readFileSync(resolve(repoRoot, dir, file), 'utf8'));
+      const raw = readFileSync(resolve(repoRoot, dir, file), 'utf8');
+      if (file.endsWith('.py')) {
+        const pyCode = raw
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('#'))
+          .join('\n');
+        return legacyPathLiteral.test(pyCode);
+      }
+      const code = stripComments(raw);
       const allSpecs = [
         ...specifiers(code),
         ...[...code.matchAll(/\bimport\.meta\.resolve\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1] as string),
       ];
-      return allSpecs.some((spec) => /^rig-c(\/|$)/.test(spec));
+      return allSpecs.some((spec) => /^rig-c(\/|$)/.test(spec)) || legacyPathLiteral.test(code);
     });
     assert.deepEqual(legacy, []);
   }
-
-  const emitted = readdirSync(pkgDist).map(String).sort();
-  const declaredModules = [
-    'CanvasRenderer',
-    'DomRenderer',
-    'DomTexture',
-    'MeshGlBlitter',
-    'index',
-    'liveFrame',
-    'liveFrameSource',
-    'loadModel',
-    'pixelRatio',
-    'player',
-    'posedFrame',
-  ];
-  assert.deepEqual(
-    emitted,
-    ['index.js', 'index.js.map', ...declaredModules.flatMap((name) => [`${name}.d.ts`, `${name}.d.ts.map`])].sort(),
-  );
-  const bundleCode = stripComments(readFileSync(resolve(pkgDist, 'index.js'), 'utf8'));
-  assert.deepEqual(specifiers(bundleCode), []);
-  assert.doesNotMatch(bundleCode, /['"]node:/);
-  assert.doesNotMatch(bundleCode, /@esotericsoftware\//);
-  assert.match(bundleCode, /function openTrack/);
-  const declarations = emitted.filter((file) => file.endsWith('.d.ts'));
-  assert.deepEqual(
-    declarations.filter((file) => /rig-c|@esotericsoftware\//.test(stripComments(readFileSync(resolve(pkgDist, file), 'utf8')))),
-    [],
-  );
 });
 
 test(

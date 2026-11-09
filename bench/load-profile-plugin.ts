@@ -13,7 +13,7 @@ export function loadProfilePlugin(): Plugin {
         ${boundary}
         globalThis.__loadTrace?.push({ name: 'rigid-region-raster', start: __rigidStart, end: performance.now() });`);
       }
-      const coreReader = id.split('?')[0].endsWith('/rig-c/src/core/index.ts');
+      const coreReader = id.split('?')[0].endsWith('/@rig-c/core/src/core/index.ts');
       const textureReader = id.split('?')[0].endsWith('/src/DomTexture.ts');
       if (!coreReader && !textureReader && !id.split('?')[0].endsWith('/src/loadModel.ts')) return;
       const replacements: [string, string][] = coreReader ? [

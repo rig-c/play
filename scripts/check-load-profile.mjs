@@ -16,8 +16,8 @@ const textureProfile = transform(texture, '/src/DomTexture.ts');
 for (const phase of ['page-unpremultiply', 'page-readback', 'page-unpremultiply-loop', 'page-writeback', 'region-draw-submit', 'region-png-encode-wait']) assert.ok(textureProfile.includes(`'${phase}'`));
 assert.throws(() => transform(texture.replace('unpremultiply(page, width, height);', 'changedBoundary();'), '/src/DomTexture.ts'), /LOAD_PROFILE_BOUNDARY/);
 assert.throws(() => transform(texture + '\nunpremultiply(page, width, height);', '/src/DomTexture.ts'), /LOAD_PROFILE_BOUNDARY/);
-const core = readFileSync('node_modules/rig-c/src/core/index.ts', 'utf8');
-assert.match(transform(core, '/node_modules/rig-c/src/core/index.ts'), /__sync\('core-json-parse'/);
+const core = readFileSync('node_modules/@rig-c/core/src/core/index.ts', 'utf8');
+assert.match(transform(core, '/node_modules/@rig-c/core/src/core/index.ts'), /__sync\('core-json-parse'/);
 console.log('load profile: real loader/core boundaries instrumented; missing/duplicate boundary plants refused; unrelated modules untouched');
 const previous = process.env.LOAD_PROFILE;
 try {
@@ -28,7 +28,7 @@ try {
     assert.equal(loaded.config.optimizeDeps.entries.length, 1);
     assert.ok(loaded.config.optimizeDeps.entries[0].endsWith(`/${entry}`));
     assert.equal(loaded.config.plugins.length, flag === '1' ? 1 : 0);
-    assert.deepEqual(loaded.config.optimizeDeps.exclude, flag === '1' ? ['rig-c/core', '@esotericsoftware/spine-webgl'] : []);
+    assert.deepEqual(loaded.config.optimizeDeps.exclude, flag === '1' ? ['@rig-c/core/core', '@esotericsoftware/spine-webgl'] : []);
   }
 } finally {
   if (previous === undefined) delete process.env.LOAD_PROFILE;

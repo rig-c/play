@@ -211,7 +211,7 @@ done
 # compiled here like every other rig. The build's rig.json, motion.json and
 # sets.json must be byte-identical to the tag's expected-wave/, or nothing is
 # written. It takes minutes, so it is stamped like the test rigs.
-PARTS_TAG="v1.60.0"
+PARTS_TAG="v2.36.0"
 PARTS_EXAMPLES_COMMIT="ba99e403d4058fc1cfe40699bdcde8aaf00a90c0"
 WAVE_OUT="$RIGS_DEST/wind-wave"
 WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG examples $PARTS_EXAMPLES_COMMIT"
