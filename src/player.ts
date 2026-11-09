@@ -1,5 +1,5 @@
-import { type CompiledDocument, type CoreSlotRow, eventsFired, type LiveTrack, type LiveTracks, type LocalAdjust as CoreLocalAdjust, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawClip, type RawDrawn, type RawPose, type TrackEntryView, underNoSkin, underSkin } from 'rig-c/core';
-import { compileRuntime, RuntimeRefusal, type RuntimeModel } from 'rig-c/runtime';
+import { type CompiledDocument, type CoreSlotRow, eventsFired, type LiveTrack, type LiveTracks, type LocalAdjust as CoreLocalAdjust, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawClip, type RawDrawn, type RawPose, type TrackEntryView, underNoSkin, underSkin } from '@rig-c/core/core';
+import { compileRuntime, RuntimeRefusal, type RuntimeModel } from '@rig-c/core/runtime';
 import { checkedLiveFrame, oracleLiveFrame, RuntimeFrames, type LiveFrame } from './liveFrame.js';
 import { CanvasRenderer } from './CanvasRenderer.js';
 import { DomRenderer, type MeshBackend } from './DomRenderer.js';

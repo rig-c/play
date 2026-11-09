@@ -1,4 +1,4 @@
-import { openTrack, physicsClockStep, underNoSkin } from 'rig-c/core';
+import { openTrack, physicsClockStep, underNoSkin } from '@rig-c/core/core';
 import type { RigPlayer as RigPlayerType } from '../src/index';
 import { RigPlayer } from '../src/index';
 import type { ReadDocument } from '../src/loadModel';

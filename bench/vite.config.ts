@@ -21,7 +21,7 @@ export default defineConfig({
     // A missing optional sets.json falls back to index.html in Vite. Its
     // normal-bench module can be transformed speculatively, but must not
     // rebuild the load page's optimized reference chunks during a sample.
-    exclude: process.env.LOAD_PROFILE === '1' ? ['rig-c/core', '@esotericsoftware/spine-webgl'] : [],
+    exclude: process.env.LOAD_PROFILE === '1' ? ['@rig-c/core/core', '@esotericsoftware/spine-webgl'] : [],
   },
   root: here,
   // The rigc builds live in the repository's own public/rigs/ (built by

@@ -70,12 +70,12 @@ if '--precheck' in sys.argv:
     run('browser-install-webkit', ['bunx', '--no-install', 'playwright', 'install', 'webkit'])
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)
-    run('build-turned', ['bun', 'node_modules/rig-c/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
+    run('build-turned', ['bun', 'node_modules/@rig-c/core/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
     run('browser-precheck', ['bunx', '--no-install', 'playwright', 'test', '--config', 'playwright.live-frame.config.ts', '--grep', 'turned|composition|null attachment key|runtime stage1'])
 elif '--allocation' in sys.argv:
     fixture = root / 'public/rigs/turned'
     shutil.copytree(root / 'tests/rigs/turned', fixture, dirs_exist_ok=True)
-    run('build-turned', ['bun', 'node_modules/rig-c/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
+    run('build-turned', ['bun', 'node_modules/@rig-c/core/bin/rigc.cjs', 'build', '--rig', str(fixture / 'rig.json'), '--motion', str(fixture / 'motion.json'), '--atlas-in', str(fixture / 'art/turned.atlas'), '--out', str(fixture)])
     run('allocation-turned', ['bun', 'scripts/live-frame-allocation.mjs', 'public/rigs/turned/skeleton.model.json', 'hold'])
 elif '--bench' in sys.argv or '--final-controls' in sys.argv:
     run('bench-host', ['bun', 'scripts/prepare-runtime-bench.mjs'])

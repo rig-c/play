@@ -49,7 +49,9 @@ jobs:
           node --test scripts/check-readme.test.mjs
       - name: Check release workflow decisions (offline)
         timeout-minutes: 2
-        run: bun test scripts/release-workflow.test.ts
+        run: |
+          bun test scripts/release-workflow.test.ts
+          bun test tests/source-resolution.unit.test.ts
       - name: Identify Playwright browser cache
         id: playwright
         run: |

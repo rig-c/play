@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadavg } from 'node:os';
-import { openTrack, readModel, underSkin } from 'rig-c/core';
+import { openTrack, readModel, underSkin } from '@rig-c/core/core';
 import { mismatch } from '../tests/liveFrameProbe.ts';
 
 if (process.argv.includes('--help')) {
@@ -22,10 +22,10 @@ const original = await response.text();
 if (createHash('sha256').update(original).digest('hex') !== sourceHash) throw Error('CLIP_BENCH_SOURCE_HASH');
 const replacements = {
   '@esotericsoftware/spine-core': Bun.resolveSync('@esotericsoftware/spine-core', process.cwd()),
-  '../src/core/entry.ts': resolve('node_modules/rig-c/src/core/entry.ts'),
-  '../src/core/index.ts': resolve('node_modules/rig-c/src/core/index.ts'),
-  '../src/core/world.ts': resolve('node_modules/rig-c/src/core/world.ts'),
-  '../src/model.ts': resolve('node_modules/rig-c/src/model.ts'),
+  '../src/core/entry.ts': resolve('node_modules/@rig-c/core/src/core/entry.ts'),
+  '../src/core/index.ts': resolve('node_modules/@rig-c/core/src/core/index.ts'),
+  '../src/core/world.ts': resolve('node_modules/@rig-c/core/src/core/world.ts'),
+  '../src/model.ts': resolve('node_modules/@rig-c/core/src/model.ts'),
 };
 let source = original;
 for (const [from, to] of Object.entries(replacements)) source = source.replace(`'${from}'`, JSON.stringify(pathToFileURL(to).href));

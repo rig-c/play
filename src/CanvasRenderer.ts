@@ -1,7 +1,7 @@
 import { renderFrameOf } from './liveFrameSource.js';
 import type { LiveFrame } from './liveFrame.js';
 import { syncedPixelRatio } from './pixelRatio.js';
-import { clipThrough, REGION_TRIANGLES } from 'rig-c/core';
+import { clipThrough, REGION_TRIANGLES } from '@rig-c/core/core';
 import { defaultMeshSourceRect, drawTexturedTriangle, type MeshSourceRect } from './DomRenderer.js';
 import { type PageSource, straightAlphaSource } from './DomTexture.js';
 import { type FrameRun, getMeshGlBlitter, triangleReadSource } from './MeshGlBlitter.js';

@@ -1,4 +1,4 @@
-import { type CompiledDocument, CORE_DOCUMENT_SPECS, CoreInputError, readModel, readSetupMesh as coreReadSetupMesh, underNoSkin } from 'rig-c/core';
+import { type CompiledDocument, CORE_DOCUMENT_SPECS, CoreInputError, readModel, readSetupMesh as coreReadSetupMesh, underNoSkin } from '@rig-c/core/core';
 import { type AtlasRegion, createAtlasRegions, type RegionImage, revokeRegions, unpackRegions } from './DomTexture.js';
 
 /**

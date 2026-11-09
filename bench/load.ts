@@ -1,7 +1,7 @@
 import { loadModel } from '../src/loadModel';
 import { drawAtlasRegion } from '../src/DomTexture';
 import type { ModelAssets, ReadDocument } from '../src/loadModel';
-import { openTrack, underNoSkin } from 'rig-c/core';
+import { openTrack, underNoSkin } from '@rig-c/core/core';
 import { loadModel as loadBase, RigPlayer as BasePlayer } from './load-base.generated';
 import { RigPlayer } from '../src/player';
 import { Container, ImageSource, WebGLRenderer, AtlasAttachmentLoader, Physics, SkeletonJson, Spine, SpineTexture, TextureAtlas } from './oracle/bridge';

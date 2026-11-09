@@ -1,4 +1,4 @@
-import { openTrack, openTracks, physicsClockStep, underNoSkin, underSkin, type RawPose, type LiveTrack, type LiveTracks } from 'rig-c/core';
+import { openTrack, openTracks, physicsClockStep, underNoSkin, underSkin, type RawPose, type LiveTrack, type LiveTracks } from '@rig-c/core/core';
 import { RigPlayer, type BoneAdjust, type BoneAdjustContext, type ModelAssets, type PhysicsParameterPatch, type PhysicsParameters } from '../src/index';
 import type { ReadDocument } from '../src/loadModel';
 import { loadRig } from './rigFrames';

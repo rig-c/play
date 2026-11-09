@@ -6,9 +6,9 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -322,24 +322,101 @@ function packageInputs(): { manifest: DependencyManifest; lock: OracleLock } {
   return { manifest: JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as DependencyManifest, lock: parsed.config as OracleLock };
 }
 
-test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and the oracle exactly', () => {
+test('the manifest keeps Spine dev-only, declares no peer, and pins @rig-c/core, @rig-c/parts and the oracle exactly', () => {
   const { manifest, lock } = packageInputs();
   // No peer at all: the package needs nothing installed beside it (the
   // sandbox above installs it alone), so a consumer is told to install nothing.
   expect(manifest.peerDependencies).toBeUndefined();
   expect(oracleBoundaryErrors(manifest, lock)).toEqual([]);
-  // The poser is rig-c, bundled into `index.js` at the version this names — a
-  // bare version, never a range, so a build is a function of one rig-c and a
+  // The poser is @rig-c/core, bundled into `index.js` at the version this names — a
+  // bare version, never a range, so a build is a function of one @rig-c/core and a
   // pose doubt is a rigc issue against that version.
-  const rigcPin = manifest.devDependencies?.['rig-c'];
+  const rigcPin = manifest.devDependencies?.['@rig-c/core'];
   expect(typeof rigcPin).toBe('string');
   expect(rigcPin).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe(rigcPin);
-  expect(lock.packages['rig-c'][0]).toBe(`rig-c@${rigcPin}`);
+  expect(lock.workspaces[''].devDependencies?.['@rig-c/core']).toBe(rigcPin);
+  expect(lock.packages['@rig-c/core'][0]).toBe(`@rig-c/core@${rigcPin}`);
+  const partsPin = manifest.devDependencies?.['@rig-c/parts'];
+  expect(typeof partsPin).toBe('string');
+  expect(partsPin).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(lock.workspaces[''].devDependencies?.['@rig-c/parts']).toBe(partsPin);
+  expect(lock.packages['@rig-c/parts'][0]).toBe(`@rig-c/parts@${partsPin}`);
+  expect(lock.packages['@rig-c/parts'][2].dependencies?.['@rig-c/core']).toBe(rigcPin);
+  expect(lock.packages['@rig-c/parts'][2].dependencies?.['rig-c']).toBeUndefined();
+  expect(lock.packages['rig-c']).toBeUndefined();
+  const rigcBins = Object.entries(lock.packages)
+    .filter(([, entry]) => {
+      const bin = (entry[2] as { bin?: Record<string, string> | string } | undefined)?.bin;
+      return typeof bin === 'object' && bin !== null && 'rigc' in bin;
+    })
+    .map(([name]) => name);
+  expect(rigcBins).toEqual(['@rig-c/core']);
+  expect(existsSync(resolve(repoRoot, 'node_modules', 'rig-c'))).toBe(false);
+  expect(realpathSync(resolve(repoRoot, 'node_modules/.bin/rigc'))).toBe(
+    realpathSync(resolve(repoRoot, 'node_modules/@rig-c/core/bin/rigc.cjs')),
+  );
   const fetchAssets = readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8');
   const rigcTag = fetchAssets.match(/^RIGC_TAG="([^"]+)"$/m)?.[1];
-  expect(rigcTag, 'scripts/fetch-assets.sh RIGC_TAG must match the manifest rig-c pin').toBe(`v${rigcPin}`);
+  expect(rigcTag, 'scripts/fetch-assets.sh RIGC_TAG must match the manifest @rig-c/core pin').toBe(`v${rigcPin}`);
+  const partsTag = fetchAssets.match(/^PARTS_TAG="([^"]+)"$/m)?.[1];
+  expect(partsTag, 'scripts/fetch-assets.sh PARTS_TAG must match the manifest @rig-c/parts pin').toBe(`v${partsPin}`);
+  expect(fetchAssets).toContain("require('$ROOT/node_modules/@rig-c/core/package.json').version");
+  expect(fetchAssets).toContain("require('$ROOT/package.json').devDependencies['@rig-c/core']");
+  expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@rig-c/core');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
+  expect(Object.keys(manifest.devDependencies ?? {})).not.toContain('rig-c');
+  const rawManifest = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as {
+    exports?: Record<string, Record<string, string>>;
+  };
+  expect(rawManifest.exports).toEqual({
+    '.': {
+      '@rig-c/source': './src/index.ts',
+      types: './dist/index.d.ts',
+      import: './dist/index.js',
+    },
+  });
+});
+
+test('source, test, script and bench files use @rig-c/core and never legacy rig-c paths', () => {
+  const legacyPathLiteral = /['"`](?:rig-c\/(?:core|runtime|plate|cli)|[^'"`\n]*node_modules\/rig-c(?:\/|['"`])|[^'"`\n]*\/rig-c\/src\/)/;
+  for (const dir of ['src', 'tests', 'scripts', 'bench'] as const) {
+    const files = readdirSync(resolve(repoRoot, dir), { recursive: true })
+      .map((entry) => String(entry).split(sep).join('/'))
+      .filter(
+        (file) =>
+          (file.endsWith('.ts') || file.endsWith('.mjs') || file.endsWith('.py')) &&
+          !file.startsWith('base.generated/') &&
+          file !== 'load-base.generated.ts',
+      );
+    const legacy = files.filter((file) => {
+      const raw = readFileSync(resolve(repoRoot, dir, file), 'utf8');
+      if (file.endsWith('.py')) {
+        const pyCode = raw
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('#'))
+          .join('\n');
+        return legacyPathLiteral.test(pyCode);
+      }
+      const code = stripComments(raw);
+      const allSpecs = [
+        ...specifiers(code),
+        ...[...code.matchAll(/\bimport\.meta\.resolve\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1] as string),
+      ];
+      return allSpecs.some((spec) => /^rig-c(\/|$)/.test(spec)) || legacyPathLiteral.test(code);
+    });
+    expect(legacy, `legacy rig-c references in ${dir}`).toEqual([]);
+  }
+  const srcFiles = readdirSync(resolve(repoRoot, 'src'), { recursive: true })
+    .map(String)
+    .filter((file) => file.endsWith('.ts'));
+  const coreSpecs = new Set(
+    srcFiles.flatMap((file) =>
+      specifiers(stripComments(readFileSync(resolve(repoRoot, 'src', file), 'utf8'))).filter((spec) =>
+        !spec.startsWith('.'),
+      ),
+    ),
+  );
+  expect([...coreSpecs].sort()).toEqual(['@rig-c/core/core', '@rig-c/core/runtime']);
 });
 
 test('the oracle exception refuses runtime promotion, extra runtimes and mismatched pins', () => {

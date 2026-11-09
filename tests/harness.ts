@@ -10,7 +10,7 @@ import { setPhysicsProbe, type SetPhysicsProbeResult } from './setPhysicsProbe';
 import { heldClockProbe, type HeldClockProbeResult } from './heldClockProbe';
 import { setupMeshLiteralProbe } from './setupMeshLiteral';
 import { setupMeshGalleryProbe, setupMeshPlayerProbe, setupMeshLookDiagnosisProbe } from './setupMeshBrowser';
-import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from 'rig-c/core';
+import { drawnRegions, type LiveTrack, meshPageUvs, openTrack, openTracks, physicsClockStep, poseRawSetup, type RawPose, regionPageUvs, underNoSkin, underSkin } from '@rig-c/core/core';
 
 import {
   type AdjustableBones,

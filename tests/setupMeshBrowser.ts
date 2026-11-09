@@ -1,4 +1,4 @@
-import { poseRawSetup, underNoSkin, underSkin } from 'rig-c/core';
+import { poseRawSetup, underNoSkin, underSkin } from '@rig-c/core/core';
 import { loadModel, readSetupMesh, RigPlayer, type BoneWorld, type ModelAssets, type SetupMeshTarget } from '../src/index';
 import type { ReadDocument } from '../src/loadModel';
 import { readSetupMesh as reviewRead, placeSetupMesh, type SetupMeshRead } from './setupMeshReviewReference';
