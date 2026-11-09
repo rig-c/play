@@ -31,7 +31,7 @@ set -euo pipefail
 # Pinned twice, on purpose: the sources come from the rigc tag below and the
 # build is run by the rig-c devDependency of the same version, so a fixture is
 # a function of one version and is rebuilt when it moves.
-RIGC_TAG="v3.6.0"
+RIGC_TAG="v3.7.0"
 RIGS="walk flex squash portrait nod look ride"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RIGS_DEST="$ROOT/public/rigs"
@@ -215,7 +215,7 @@ done
 # motion.json and sets.json must be byte-identical to the tag's expected-wave/,
 # or nothing is written. Stamped with the stage list `assemble+rig` so an older
 # cached producer is never reused.
-PARTS_TAG="v2.36.0"
+PARTS_TAG="v3.7.0"
 PARTS_EXAMPLES_COMMIT="ba99e403d4058fc1cfe40699bdcde8aaf00a90c0"
 WAVE_OUT="$RIGS_DEST/wind-wave"
 WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG assemble+rig examples $PARTS_EXAMPLES_COMMIT"
