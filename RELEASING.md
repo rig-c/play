@@ -1,32 +1,29 @@
 # Releasing
 
-The cut is one click: merge the release pull request. Everything either side of
-that click is `.github/workflows/release.yml`, and no npm credential exists on
-any machine — the publish authenticates to the registry over OIDC (npm trusted
-publishing), so there is no token to leak and no 2FA prompt to answer.
+The cut is a deliberate version tag (`vX.Y.Z`) pushed on a `main` commit whose
+`package.json` carries `X.Y.Z`. Everything after that tag push is
+`.github/workflows/release.yml`, and no npm credential exists on any machine —
+the publish authenticates to the registry over OIDC (npm trusted publishing),
+so there is no token to leak and no 2FA prompt to answer.
 
 ## The loop
 
-Every push to `main` runs `release.yml`, which hands the new commits to
-[release-please](https://github.com/googleapis/release-please-action):
+Pushing a version tag matching `v*` triggers `release.yml`:
 
-- **Nothing releasable since the last tag** → the run does nothing. Commit
-  types release-please hides from the changelog (`docs`, `test`, `ci`, `build`,
-  `chore`, `refactor`, `style`) do not open a release pull request on their own.
-- **Something releasable** → it opens, or updates, a pull request titled
-  `release: vX.Y.Z` containing exactly three generated changes: the
-  `package.json` version, `CHANGELOG.md`, and `.release-please-manifest.json`.
-  `feat` bumps the minor, `fix` and `perf` bump the patch. A `!` or a
-  `BREAKING CHANGE:` footer bumps the **minor** while the package is pre-1.0
-  (`bump-minor-pre-major`) — 1.0.0 is a deliberate act, not the side effect of
-  one commit. To force a version, put `Release-As: 1.0.0` in a commit footer.
-- **That pull request is merged** → the merge is a push to `main`, so
-  `release.yml` runs again; this time release-please tags `vX.Y.Z`, creates the
-  GitHub release, and the same run publishes the package — under both of its
-  names (*Two names, one tarball*, below).
-
-Squash-merge the release pull request, so the commit on `main` keeps the
-`release: vX.Y.Z` subject this repository has used since v0.2.0.
+- **Release preparation on `main`** → land the `package.json` version bump and
+  `CHANGELOG.md` entry on `main` through a normal pull request with green CI.
+  Pushes to `main` do not run `release.yml` or open automated release pull
+  requests.
+- **Version tag pushed (`vX.Y.Z`)** → `release.yml` validates the tag (strict
+  `vX.Y.Z` semver without prerelease suffixes or leading zeroes), confirms that
+  `@rig-c/play@X.Y.Z` is not yet served on npm, resolves `refs/tags/vX.Y.Z` to a
+  full 40-character commit SHA matching `GITHUB_SHA`, checks out that immutable
+  commit, verifies that it is an ancestor of `origin/main` and matches the
+  post-checkout `HEAD` and `package.json` version, and publishes the package
+  under all three of its names (*Three names, one tarball*, below).
+- **No pre-existing GitHub Release dependency** → publication does not require
+  a GitHub Release to exist first, so a failed publish can be retried via
+  `workflow_dispatch` before release notes are created.
 
 ## Three names, one tarball
 
@@ -94,10 +91,9 @@ URLs (`firejune/spine-html`, `firejune/rig-play`); nothing redirects an npm page
 
 ## Retrying an already-cut release
 
-If release-please created the tag and GitHub release but the first
-`@rig-c/play` publish failed (for example, a signing-service outage), rerunning
-the push job cannot recover it: release-please no longer reports a new release.
-With the owner's release approval, use **Actions → release → Run workflow**
+If the version tag was pushed on `main` and the first `@rig-c/play` publish
+failed before reaching npm (for example, a signing-service or registry outage),
+with the owner's release approval, use **Actions → release → Run workflow**
 on the existing **vX.Y.Z tag**, set **tag** to that tag, and leave **alias_version**
 empty. The default **alias_names** belongs to alias repair and is ignored here.
 Do not create another tag or publish locally.
@@ -108,24 +104,27 @@ way. A tag cut before the fix carries its older workflow: dispatching on it does
 not run the current main workflow and cannot retroactively gain this safeguard.
 Do not use this recovery procedure for those old tags.
 
-The workflow requires exactly one of **tag** and **alias_version**. Tag retry
-refuses an invalid tag (`RELEASE_TAG_FORM`), a missing or draft GitHub release
-(`RELEASE_TAG_UNRELEASED`), and a canonical version already served by npm
-(`RELEASE_ALREADY_PUBLISHED`). Only an explicit registry `E404` permits the
-retry; network, permission and unknown errors stop it. It resolves the explicit
-tag through `commits/refs%2Ftags%2FvX.Y.Z` to a full commit SHA, checks out that
-immutable SHA, fetches main's full history (unshallowing when needed),
-and requires that checked-out tag commit to be an ancestor of `origin/main`
+On `workflow_dispatch`, the workflow requires exactly one of **tag** and
+**alias_version**. Both tag push and tag retry share the same unified
+validation: they refuse an invalid or prerelease tag (`RELEASE_TAG_FORM`) and a
+canonical version already served by npm (`RELEASE_ALREADY_PUBLISHED`). Only an
+explicit registry `E404` permits publication; network, permission and unknown
+errors fail closed (`RELEASE_REGISTRY_LOOKUP`). Neither path requires a
+pre-existing GitHub Release, so failed publication can recover before release
+notes are created. Both resolve the explicit
+tag through `commits/refs%2Ftags%2FvX.Y.Z` to a full commit SHA, check out that
+immutable SHA, fetch main's full history (unshallowing when needed),
+and require that checked-out tag commit to be an ancestor of `origin/main`
 (`RELEASE_TAG_NOT_ON_MAIN` otherwise). History queries and fetch errors stop the
-retry; an unknown result never counts as ancestry. These checks run before
+run; an unknown result never counts as ancestry. These checks run before
 installing dependencies or publishing, then that tree's package name and version
-must match the tag.
+must match the tag (`RELEASE_TAG_VERSION`).
 The existing `prepublishOnly` library build gates the canonical publish; the
 same steps then publish both aliases with provenance and confirm all three
 names from registry tarballs. There is no separate typecheck/smoke gate in this
 workflow beyond the build that `prepublishOnly` runs.
 
-Checkout source and workflow execution context are distinct. For **push, tag
+Checkout source and workflow execution context are distinct. For **tag push, tag
 retry and alias-only repair**, before checkout or enabling publication, the
 workflow compares the run's `github.sha` context (the source `GITHUB_SHA` npm
 provenance records) with the resolved tag commit. Use the full
@@ -143,22 +142,26 @@ lowercase hexadecimal SHA is accepted. A missing or unequal run SHA refuses
 with `PROVENANCE_SHA_MISMATCH`, naming both SHAs and a repository-scoped recovery
 command. Successful paths check out the validated SHA, even if the tag moves
 after resolution; alias repair receives that SHA through the release job output.
-Tag retry and alias repair also retain the post-checkout `HEAD` comparison before
-installing anything or publishing (`PROVENANCE_SHA_LOOKUP` for a failed HEAD
-lookup). Alias repair gains no main-ancestry requirement.
+Tag push, tag retry and alias repair also retain the post-checkout `HEAD`
+comparison before installing anything or publishing (`PROVENANCE_SHA_LOOKUP` for
+a failed HEAD lookup). Alias repair gains no main-ancestry requirement.
 
-On push this check follows release-please, only when it reports a new release.
-A rerun of an older push may cut a tag at a newer commit while the run still
-names its original SHA. The guard refuses before any of the three publishes;
-the tag and GitHub release remain cut. With release approval, recover using the
-printed command: `gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z -f tag=vX.Y.Z`.
-A push without a new release performs no tag lookup. These checks apply only to
-workflow versions containing them: they do not repair already-published
-provenance, an old run's stored workflow copy, or tags carrying an older workflow.
-The old-tag limitation above still applies.
+On tag push (`on.push.tags: ['v*']`), `release.yml` reads the tag from
+`github.ref` (`refs/tags/vX.Y.Z`), ignoring `workflow_dispatch` inputs, and runs
+the same pre-checkout and post-checkout SHA, `origin/main` ancestry, and
+manifest version checks as `workflow_dispatch` tag retry. If a tag moves after
+the push event was created so `GITHUB_SHA` no longer matches the tag commit, the
+guard refuses before any of the three publishes; with release approval, recover
+using the printed command:
+`gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z -f tag=vX.Y.Z`.
+These checks apply only to workflow versions containing them: they do not repair
+already-published provenance, an old run's stored workflow copy, or tags
+carrying an older workflow. The old-tag limitation above still applies.
 
-Checking out a tag from a main-ref dispatch does not change `GITHUB_SHA`, so
-that dispatch fails when main and the tag name different commits. No GitHub
+On `workflow_dispatch`, the workflow requires `github.ref` to be
+`refs/tags/<tag>` (`RELEASE_REF_NOT_TAG` otherwise, even when `main` and the tag
+point at the same commit), and checking out a tag from a branch-ref dispatch
+also does not change `GITHUB_SHA`. No GitHub
 metadata is overridden. Live OIDC issuance and the registry's resulting
 attestation still require separately authorized verification.
 See GitHub's [`workflow_dispatch` context table](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
@@ -186,17 +189,10 @@ production OIDC, provenance issuance or registry propagation.
 
 ## One-time setup (owner, GitHub)
 
-**Settings → Actions → General → Workflow permissions → tick "Allow GitHub
-Actions to create and approve pull requests."** It is off by default, and while
-it is off release-please cannot open the release pull request at all — the run
-fails with *GitHub Actions is not permitted to create or approve pull
-requests*. Nothing in a workflow file can grant this; it is a repository
-setting.
-
-The neighbouring "Workflow permissions" radio can stay on the read-only
-default: `release.yml` declares the write scopes it needs per job, and that
-elevation is granted (verified in run 32583344688 — the job received Contents,
-Issues and PullRequests write under a read-only repository default).
+**Settings → Actions → General → Workflow permissions** can stay on the
+read-only default: both jobs in `release.yml` declare only `contents: read` and
+`id-token: write`, and the workflow opens no pull requests and writes no
+repository refs.
 
 ## One-time setup (owner, npmjs.com)
 
@@ -235,11 +231,6 @@ tarball with the `name` line changed and nothing else, published with
 `--access public`. `node scripts/alias-tarball.mjs compare` reads such a pair the
 same way.
 
-The repository setting above (*Allow GitHub Actions to create and approve pull
-requests*) is per repository and does not travel with a transfer: after the move
-to `rig-c/play` it has to be ticked again, or release-please cannot open its pull
-request.
-
 Two properties of that configuration are load-bearing in the workflow:
 
 - Every publish step must live in **`release.yml`**. Renaming the file, or
@@ -255,63 +246,18 @@ Two properties of that configuration are load-bearing in the workflow:
    publisher form per name.
 1. Land the work on `main` as usual, with conventional-commit subjects. CI runs
    on every push.
-2. Wait for the `release` run to open or update the `release: vX.Y.Z` pull
-   request.
-3. Read the diff — the version and the generated changelog are the whole review.
-   Run the suite against the release branch — read the branch name off the
-   pull request, it carries the package name
-   (`release-please--branches--main--components--play` since 1.8.1 — the scope
-   is dropped from the component; it was `…--components--rig-play` up to 1.8.0):
-   **Actions → ci →
-   Run workflow**, or `gh workflow run ci.yml --ref <that branch>` (see below
-   for why it is not automatic). The release needs it green. A skip in its log
-   is not expected and should be read.
-4. **Merge it.** That is the cut.
-5. Watch the second `release` run: it tags, releases, publishes `@rig-c/play`,
+2. Prepare the release on `main` (`package.json` version `X.Y.Z` and
+   `CHANGELOG.md` updated) and wait for `ci` on that `main` commit to pass.
+3. With release approval, push the `vX.Y.Z` tag on that verified `main` commit.
+   That tag push is the cut.
+4. Watch the `release` run triggered by `vX.Y.Z`: it validates the tag, SHA,
+   `origin/main` ancestry and `package.json` version, publishes `@rig-c/play`,
    publishes the two aliases, and confirms every name serves the same files —
    its last step prints one comparison line per alias.
-6. Confirm: `npm view @rig-c/play version`, `npm view rig-play version` and
+5. Confirm: `npm view @rig-c/play version`, `npm view rig-play version` and
    `npm view spine-html version` print the same version, and each npm page shows
-   a provenance attestation of the same workflow run.
-
-## Why the release pull request shows no CI check
-
-A pull request opened with the default `GITHUB_TOKEN` does not get an ordinary
-workflow run. What actually happens — observed on the first release pull
-request this automation opened (#17) — is that `ci` **is created** on every
-update of the release branch and then held at once with the conclusion
-`action_required`, waiting for a maintainer to approve it. Nothing runs, `gh pr
-checks` reports "no checks", and the pull request reads as `UNSTABLE` rather
-than clean. "Absent" and "held" call for different actions, so it is worth being
-exact: there are two ways to get a green on the release commit itself —
-
-- dispatch `ci` on the release branch (**Actions → ci → Run workflow**, or
-  `gh workflow run ci.yml --ref <release branch>`), which is what v0.5.0 did
-  (84 passed on the release commit before the merge); or
-- approve the held run (`gh api -X POST
-  repos/rig-c/play/actions/runs/<id>/approve`).
-
-The usual way to make the check automatic is a personal access token or a
-GitHub App, and this repository deliberately does not use one:
-
-- The base of the release pull request is a commit on `main` that `ci.yml`
-  already tested on push.
-- The pull request adds only generated version and changelog text. There is no
-  source change for a test run to have an opinion about.
-- A personal access token with `contents: write` and `pull-requests: write`
-  would be the only long-lived credential in the repository — reintroducing the
-  class of secret trusted publishing was adopted to remove.
-- The publish is not unguarded regardless: `prepublishOnly` runs
-  `tsc -p tsconfig.build.json` against the tagged tree, so a type error fails
-  the publish rather than shipping.
-
-If a rendered check on the pull request is ever wanted anyway, it takes no edit
-to `release.yml`: create a fine-grained personal access token scoped to the
-`rig-c/play` repository with **Contents: read and write** and **Pull
-requests: read and write**, store it as the repository secret
-`RELEASE_PLEASE_TOKEN`, and the workflow picks it up
-(`secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN`). The cost is a
-credential to rotate.
+   a provenance attestation of the same workflow run. Create the GitHub Release
+   notes for `vX.Y.Z` after publication succeeds.
 
 ## What was pre-flighted, and what the first cut proved
 

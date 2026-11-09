@@ -1,14 +1,14 @@
-# Release: the cut is one click, and no secret leaves this repository.
+# Release: deliberate version-tag publication, and no secret leaves this repository.
 #
-# Every push to main hands the commits to release-please, which keeps a
-# "release: vX.Y.Z" pull request open — next version derived from the
-# conventional-commit subjects, CHANGELOG.md generated, package.json bumped.
-# Merging that PR is the release: the resulting push runs this workflow again,
-# release-please tags vX.Y.Z and cuts the GitHub release, and the same run
-# publishes to npm over OIDC (trusted publishing) — no npm token, no OTP. It
+# Pushing a version tag `vX.Y.Z` on `main` (or dispatching `release.yml` on an
+# existing tag to recover a failed canonical publish) validates the tag, commit
+# SHA, `origin/main` ancestry and `package.json` version, then publishes to npm
+# over OIDC (trusted publishing) — no npm token, no OTP. It
 # publishes the package three times (#65, #98): `@rig-c/play`, the name in
 # package.json, then `rig-play` (1.0–1.8) and `spine-html` (0.x), the names it
 # shipped under before, kept as aliases carrying the same files at every version.
+# No pre-existing GitHub Release is required, so a failed publish can recover
+# before release notes are created.
 #
 # Two constraints are load-bearing, do not "simplify" them away:
 #   - Every publish must stay in THIS file. npm's trusted publisher for each
@@ -21,7 +21,8 @@ name: release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   # The aliases on their own (#65): when the cut published `@rig-c/play` and an
   # alias publish failed after it — the first rig-play cut did, on a
   # trusted-publisher form that still named the repository's old path — the
@@ -59,36 +60,20 @@ jobs:
     # more for the registry to serve each name, so the ceiling sits above both.
     timeout-minutes: 40
     permissions:
-      contents: write # release commit, tag, GitHub release
-      pull-requests: write # open and update the release PR
-      issues: write # release-please labels
+      contents: read
       id-token: write # OIDC token for npm trusted publishing
     outputs:
       mode: ${{ steps.target.outputs.mode }}
       checkout_ref: ${{ steps.target.outputs.checkout_ref }}
     steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
-        if: ${{ github.event_name == 'push' }}
-        with:
-          # GITHUB_TOKEN is the intended default here. Its one limitation is
-          # that a PR it opens does not start other workflows, so the release
-          # PR carries no CI checks of its own — see RELEASING.md for why that
-          # is acceptable and how to opt into RELEASE_PLEASE_TOKEN if it ever
-          # is not. The fallback below needs no edit to this file.
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
       # Bind every publish path to an immutable commit before checkout.
       # A partial alias failure still uses the registry tarball in the alias job;
-      # tag retry never republishes or selectively skips an existing canonical.
+      # tag publication/retry never republishes or selectively skips an existing canonical.
       - name: Resolve the release target
         id: target
         env:
           EVENT: ${{ github.event_name }}
-          CREATED: ${{ steps.release.outputs.release_created }}
-          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          REF: ${{ github.ref }}
           INPUT_TAG: ${{ inputs.tag }}
           ALIAS_VERSION: ${{ inputs.alias_version }}
           ALIAS_NAMES: ${{ inputs.alias_names }}
@@ -119,63 +104,43 @@ jobs:
             fi
           }
           if [ "$EVENT" = push ]; then
-            if [ "$CREATED" = true ]; then
-              if ! [[ "$CUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-                echo "::error::RELEASE_TAG_FORM: tag must be vX.Y.Z"
-                exit 1
-              fi
-              release_tag="$CUT_TAG"
-              target_mode=push
-              resolve_commit
-              echo "publish=true" >> "$GITHUB_OUTPUT"
-              echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"
-              echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
-            else
-              echo "publish=false" >> "$GITHUB_OUTPUT"
-            fi
-            echo "mode=push" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -n "$INPUT_TAG" ] && [ -n "$ALIAS_VERSION" ]; then
-            echo "::error::RELEASE_MODE: supply tag or alias_version, never both"
-            exit 1
-          fi
-          if [ -z "$INPUT_TAG" ]; then
-            if ! [[ "$ALIAS_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-              echo "::error::RELEASE_MODE: supply tag or a numeric alias_version (X.Y.Z)"
+            if [[ "${REF:-}" != refs/tags/* ]]; then
+              echo "::error::RELEASE_TAG_FORM: push ref must be refs/tags/vX.Y.Z"
               exit 1
             fi
-            release_tag="v$ALIAS_VERSION"
-            target_mode=alias
-            resolve_commit
-            echo "mode=alias" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
-            exit 0
+            release_tag="${REF#refs/tags/}"
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            if [ -n "$INPUT_TAG" ] && [ -n "$ALIAS_VERSION" ]; then
+              echo "::error::RELEASE_MODE: supply tag or alias_version, never both"
+              exit 1
+            fi
+            if [ -z "$INPUT_TAG" ]; then
+              if ! [[ "$ALIAS_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                echo "::error::RELEASE_MODE: supply tag or a numeric alias_version (X.Y.Z)"
+                exit 1
+              fi
+              release_tag="v$ALIAS_VERSION"
+              target_mode=alias
+              resolve_commit
+              echo "mode=alias" >> "$GITHUB_OUTPUT"
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            release_tag="$INPUT_TAG"
+          else
+            echo "::error::RELEASE_MODE: unsupported event ${EVENT:-<missing>}"
+            exit 1
           fi
-          if ! [[ "$INPUT_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+          if ! [[ "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::RELEASE_TAG_FORM: tag must be vX.Y.Z"
             exit 1
           fi
-          release_result="$RUNNER_TEMP/release-response.txt"
-          release_ok=false
-          if gh api --include "repos/$REPO/releases/tags/$INPUT_TAG" > "$release_result"; then
-            release_ok=true
+          if [ "${REF:-}" != "refs/tags/$release_tag" ]; then
+            echo "::error::RELEASE_REF_NOT_TAG: workflow ref ${REF:-<missing>} must be refs/tags/$release_tag"
+            exit 1
           fi
-          node - "$release_result" "$release_ok" <<'NODE'
-          const fs = require('node:fs');
-          const refuse = (code, message) => { console.error(`::error::${code}: ${message}`); process.exit(1); };
-          const text = fs.readFileSync(process.argv[2], 'utf8');
-          const status = /^HTTP\/[\d.]+ (\d{3})\b/m.exec(text)?.[1];
-          if (status === '404') refuse('RELEASE_TAG_UNRELEASED', 'tag has no GitHub release');
-          if (process.argv[3] !== 'true' || status !== '200') refuse('RELEASE_TAG_LOOKUP', 'GitHub release lookup failed');
-          let release;
-          try { release = JSON.parse(text.split(/\r?\n\r?\n/).slice(1).join('\n\n')); }
-          catch { refuse('RELEASE_TAG_LOOKUP', 'invalid GitHub release response'); }
-          if (release.tag_name !== process.env.INPUT_TAG || release.draft !== false || !release.published_at)
-            refuse('RELEASE_TAG_UNRELEASED', 'tag has no published GitHub release (drafts are refused)');
-          NODE
-          version="${INPUT_TAG#v}"
+          version="${release_tag#v}"
           registry_result="$RUNNER_TEMP/release-registry.json"
           if npm view "@rig-c/play@$version" version --json --registry=https://registry.npmjs.org > "$registry_result"; then
             echo "::error::RELEASE_ALREADY_PUBLISHED: canonical version is served; use alias_version for missing aliases"
@@ -187,12 +152,11 @@ jobs:
             echo "::error::RELEASE_REGISTRY_LOOKUP: canonical absence could not be verified"
             exit 1
           fi
-          release_tag="$INPUT_TAG"
           target_mode=tag
           resolve_commit
           echo "mode=tag" >> "$GITHUB_OUTPUT"
           echo "publish=true" >> "$GITHUB_OUTPUT"
-          echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "checkout_ref=$tag_sha" >> "$GITHUB_OUTPUT"
 
       # The original gate, publish and confirmation steps serve both paths.
