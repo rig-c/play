@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.7.0
+
+**Explicit `@rig-c/source` export condition** (#254). `package.json` `exports["."]` now declares `"@rig-c/source": "./src/index.ts"` ahead of `"types": "./dist/index.d.ts"` and `"import": "./dist/index.js"`, letting workspace consumers that opt into the `@rig-c/source` condition resolve the live TypeScript entrypoint directly while standard package imports continue to resolve `./dist/index.js`.
+
+**Validated manual version-tag publication** (#255). `.github/workflows/release.yml` now cuts releases from deliberate `vX.Y.Z` version tags pushed on `main` (and `workflow_dispatch` retries on `refs/tags/vX.Y.Z`) without automated release pull requests or a pre-existing GitHub Release dependency. Both tag push and tag retry enforce strict `vX.Y.Z` semver (`RELEASE_TAG_FORM`) and `refs/tags/vX.Y.Z` workflow refs (`RELEASE_REF_NOT_TAG`), require an explicit npm `E404` before publishing `@rig-c/play` (`RELEASE_ALREADY_PUBLISHED`, `RELEASE_REGISTRY_LOOKUP`), resolve `commits/refs%2Ftags%2FvX.Y.Z` to a 40-character commit SHA (`RELEASE_TAG_UNRESOLVED`), require `GITHUB_SHA` and post-checkout `HEAD` to match that commit (`PROVENANCE_SHA_MISMATCH`, `PROVENANCE_SHA_LOOKUP`), and verify `origin/main` ancestry (`RELEASE_TAG_NOT_ON_MAIN`) and `@rig-c/play@X.Y.Z` in `package.json` (`RELEASE_TAG_VERSION`) before publishing `@rig-c/play`, `rig-play`, and `spine-html` with provenance and registry tarball confirmation.
+
+### Bug Fixes
+
+* **workspace:** resolve live play source explicitly (#254) (d707d2e)
+* **release:** validate explicit version-tag publication (#255) (cdc090d)
+
 ## [1.23.0](https://github.com/rig-c/play/compare/v1.22.3...v1.23.0) (2026-11-04)
 
 
