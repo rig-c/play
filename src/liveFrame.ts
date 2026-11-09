@@ -1,6 +1,6 @@
 import { liveDrawings as drawings } from './liveFrameSource.js';
-import { poseRawSetup } from 'rig-c/core';
-import { compileRuntime, RuntimePose, type RuntimeAttachment, type RuntimeModel } from 'rig-c/runtime';
+import { poseRawSetup } from '@rig-c/core/core';
+import { compileRuntime, RuntimePose, type RuntimeAttachment, type RuntimeModel } from '@rig-c/core/runtime';
 import { frameOf, type BlendMode, type FrameSource, type PosedClip, type PosedFrame, type PosedSlot } from './posedFrame.js';
 
 /** An indexed, read-only buffer. Buffer mutation methods are deliberately absent. */

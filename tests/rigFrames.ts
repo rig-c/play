@@ -1,4 +1,4 @@
-import { openTrack, type RawPose, underNoSkin } from 'rig-c/core';
+import { openTrack, type RawPose, underNoSkin } from '@rig-c/core/core';
 
 import { loadModel, type LoadModelOptions, type ModelAssets } from '../src/loadModel';
 import type { ReadDocument } from '../src/loadModel';

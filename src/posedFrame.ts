@@ -13,7 +13,7 @@ import {
   readUvSequences,
   regionPageUvs,
   type UvSource,
-} from 'rig-c/core';
+} from '@rig-c/core/core';
 
 /**
  * The record the DOM tier draws: one posed moment of a rig, every slot the

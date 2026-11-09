@@ -16,6 +16,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { parseConfigFileTextToJson } from 'typescript';
+import { build as viteBuild, defaultClientConditions } from 'vite';
 
 /**
  * What npm ships, checked the way a consumer meets it — node-side, no browser.
@@ -322,24 +323,66 @@ function packageInputs(): { manifest: DependencyManifest; lock: OracleLock } {
   return { manifest: JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as DependencyManifest, lock: parsed.config as OracleLock };
 }
 
-test('the manifest keeps Spine dev-only, declares no peer, and pins rig-c and the oracle exactly', () => {
+test('the manifest keeps Spine dev-only, declares no peer, and pins @rig-c/core and the oracle exactly', () => {
   const { manifest, lock } = packageInputs();
   // No peer at all: the package needs nothing installed beside it (the
   // sandbox above installs it alone), so a consumer is told to install nothing.
   expect(manifest.peerDependencies).toBeUndefined();
   expect(oracleBoundaryErrors(manifest, lock)).toEqual([]);
-  // The poser is rig-c, bundled into `index.js` at the version this names — a
-  // bare version, never a range, so a build is a function of one rig-c and a
+  // The poser is @rig-c/core, bundled into `index.js` at the version this names — a
+  // bare version, never a range, so a build is a function of one @rig-c/core and a
   // pose doubt is a rigc issue against that version.
-  const rigcPin = manifest.devDependencies?.['rig-c'];
+  const rigcPin = manifest.devDependencies?.['@rig-c/core'];
   expect(typeof rigcPin).toBe('string');
   expect(rigcPin).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(lock.workspaces[''].devDependencies?.['rig-c']).toBe(rigcPin);
-  expect(lock.packages['rig-c'][0]).toBe(`rig-c@${rigcPin}`);
+  expect(lock.workspaces[''].devDependencies?.['@rig-c/core']).toBe(rigcPin);
+  expect(lock.packages['@rig-c/core'][0]).toBe(`@rig-c/core@${rigcPin}`);
   const fetchAssets = readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8');
   const rigcTag = fetchAssets.match(/^RIGC_TAG="([^"]+)"$/m)?.[1];
-  expect(rigcTag, 'scripts/fetch-assets.sh RIGC_TAG must match the manifest rig-c pin').toBe(`v${rigcPin}`);
+  expect(rigcTag, 'scripts/fetch-assets.sh RIGC_TAG must match the manifest @rig-c/core pin').toBe(`v${rigcPin}`);
+  expect(fetchAssets).toContain("require('$ROOT/node_modules/@rig-c/core/package.json').version");
+  expect(fetchAssets).toContain("require('$ROOT/package.json').devDependencies['@rig-c/core']");
+  expect(Object.keys(manifest.dependencies ?? {})).not.toContain('@rig-c/core');
   expect(Object.keys(manifest.dependencies ?? {})).not.toContain('rig-c');
+  expect(Object.keys(manifest.devDependencies ?? {})).not.toContain('rig-c');
+  const rawManifest = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as {
+    exports?: Record<string, Record<string, string>>;
+  };
+  expect(rawManifest.exports).toEqual({
+    '.': {
+      '@rig-c/source': './src/index.ts',
+      types: './dist/index.d.ts',
+      import: './dist/index.js',
+    },
+  });
+});
+
+test('source and test files import @rig-c/core subpaths and never legacy rig-c/*', () => {
+  for (const dir of ['src', 'tests'] as const) {
+    const files = readdirSync(resolve(repoRoot, dir), { recursive: true })
+      .map(String)
+      .filter((file) => file.endsWith('.ts'));
+    const legacy = files.filter((file) => {
+      const code = stripComments(readFileSync(resolve(repoRoot, dir, file), 'utf8'));
+      const allSpecs = [
+        ...specifiers(code),
+        ...[...code.matchAll(/\bimport\.meta\.resolve\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1] as string),
+      ];
+      return allSpecs.some((spec) => /^rig-c(\/|$)/.test(spec));
+    });
+    expect(legacy, `legacy rig-c imports in ${dir}`).toEqual([]);
+  }
+  const srcFiles = readdirSync(resolve(repoRoot, 'src'), { recursive: true })
+    .map(String)
+    .filter((file) => file.endsWith('.ts'));
+  const coreSpecs = new Set(
+    srcFiles.flatMap((file) =>
+      specifiers(stripComments(readFileSync(resolve(repoRoot, 'src', file), 'utf8'))).filter((spec) =>
+        !spec.startsWith('.'),
+      ),
+    ),
+  );
+  expect([...coreSpecs].sort()).toEqual(['@rig-c/core/core', '@rig-c/core/runtime']);
 });
 
 test('the oracle exception refuses runtime promotion, extra runtimes and mismatched pins', () => {
@@ -641,4 +684,221 @@ test('the emitted types resolve under nodenext', async () => {
     sandbox,
   );
   expect(result.status, `tsc under moduleResolution=nodenext failed:\n${result.output}`).toBe(0);
+});
+
+test('default resolution selects dist and refuses @rig-c/source when src is absent', async () => {
+  const bunDefault = spawnSync(
+    'bun',
+    ['-e', "console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play') }))"],
+    { cwd: sandbox, encoding: 'utf8' },
+  );
+  expect(bunDefault.status, bunDefault.stderr).toBe(0);
+  expect(JSON.parse(bunDefault.stdout).resolved.replaceAll('\\', '/')).toMatch(
+    /\/node_modules\/@rig-c\/play\/dist\/index\.js$/,
+  );
+
+  // Installed package has dist/ only (src/ is not in files): requesting @rig-c/source must fail, not fall back to dist/.
+  const nodeMissingSrc = node(
+    ['--conditions=@rig-c/source', '-e', "await import('@rig-c/play')"],
+    sandbox,
+  );
+  expect(nodeMissingSrc.status).not.toBe(0);
+  expect(nodeMissingSrc.stderr).toContain('src/index.ts');
+
+  const bunMissingSrc = spawnSync(
+    'bun',
+    ['--conditions=@rig-c/source', '-e', "await import('@rig-c/play')"],
+    { cwd: sandbox, encoding: 'utf8' },
+  );
+  expect(bunMissingSrc.status).not.toBe(0);
+
+  const tscMissingSrcConfig = resolve(sandbox, 'tsconfig.missing-src.json');
+  writeFileSync(
+    tscMissingSrcConfig,
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'ESNext',
+        moduleResolution: 'bundler',
+        customConditions: ['@rig-c/source'],
+        allowImportingTsExtensions: true,
+        lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+        strict: true,
+        noEmit: true,
+      },
+      files: ['consumer.ts'],
+    }),
+  );
+  const tscMissingSrc = node([tscBin, '--noEmit', '--traceResolution', '-p', tscMissingSrcConfig], sandbox);
+  expect(tscMissingSrc.stdout + tscMissingSrc.stderr).toContain(
+    "Failed to resolve under condition '@rig-c/source'",
+  );
+
+  writeFileSync(resolve(sandbox, 'vite-entry.ts'), "export { RigPlayer } from '@rig-c/play';\n");
+  await expect(
+    viteBuild({
+      root: sandbox,
+      configFile: false,
+      logLevel: 'silent',
+      resolve: { conditions: ['@rig-c/source', ...defaultClientConditions] },
+      build: {
+        outDir: resolve(sandbox, 'vite-missing-out'),
+        write: false,
+        lib: { entry: resolve(sandbox, 'vite-entry.ts'), formats: ['es'], fileName: () => 'out.js' },
+      },
+    }),
+  ).rejects.toThrow();
+});
+
+test('explicit @rig-c/source mode resolves src/index.ts without dist and observes live source edits in a temp copy', async () => {
+  const linkedRoot = mkdtempSync(resolve(tmpdir(), 'play-linked-'));
+  try {
+    const linkedPlay = resolve(linkedRoot, 'play-checkout');
+    const consumerDir = resolve(linkedRoot, 'consumer');
+    mkdirSync(resolve(consumerDir, 'node_modules', '@rig-c'), { recursive: true });
+    mkdirSync(linkedPlay, { recursive: true });
+
+    cpSync(resolve(repoRoot, 'package.json'), resolve(linkedPlay, 'package.json'));
+    cpSync(resolve(repoRoot, 'src'), resolve(linkedPlay, 'src'), { recursive: true });
+    symlinkSync(resolve(repoRoot, 'node_modules'), resolve(linkedPlay, 'node_modules'), 'dir');
+    symlinkSync(resolve(repoRoot, 'node_modules', '@types'), resolve(consumerDir, 'node_modules', '@types'), 'dir');
+    symlinkSync(linkedPlay, resolve(consumerDir, 'node_modules', '@rig-c', 'play'), 'dir');
+    writeFileSync(
+      resolve(consumerDir, 'package.json'),
+      `${JSON.stringify({ name: 'linked-consumer', private: true, type: 'module' }, null, 2)}\n`,
+    );
+    expect(existsSync(resolve(linkedPlay, 'dist'))).toBe(false);
+
+    // Without @rig-c/source, default mode refuses a checkout that has no dist/ (never falls back to src/).
+    const defaultWithoutDist = spawnSync('bun', ['-e', "await import('@rig-c/play')"], {
+      cwd: consumerDir,
+      encoding: 'utf8',
+    });
+    expect(defaultWithoutDist.status).not.toBe(0);
+
+    // With @rig-c/source, Bun resolves src/index.ts and exposes the full public API with no dist/.
+    const bunLinked = spawnSync(
+      'bun',
+      [
+        '--conditions=@rig-c/source',
+        '-e',
+        "const m = await import('@rig-c/play'); console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play'), keys: Object.keys(m).sort() }));",
+      ],
+      { cwd: consumerDir, encoding: 'utf8' },
+    );
+    expect(bunLinked.status, bunLinked.stderr).toBe(0);
+    const bunData = JSON.parse(bunLinked.stdout) as { resolved: string; keys: string[] };
+    expect(bunData.resolved.replaceAll('\\', '/')).toMatch(/\/src\/index\.ts$/);
+    expect(bunData.keys).toEqual([
+      'CanvasRenderer',
+      'DomRenderer',
+      'RigPlayer',
+      'createAtlasRegions',
+      'loadModel',
+      'readSetupMesh',
+      'revokeRegions',
+      'unpackRegions',
+    ]);
+
+    // TypeScript with customConditions=['@rig-c/source'] resolves src/index.ts with no dist/.
+    writeFileSync(resolve(consumerDir, 'linked-consumer.ts'), CONSUMER_SOURCE);
+    const linkedTsconfig = resolve(consumerDir, 'tsconfig.linked.json');
+    writeFileSync(
+      linkedTsconfig,
+      JSON.stringify({
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          customConditions: ['@rig-c/source'],
+          allowImportingTsExtensions: true,
+          lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+        },
+        files: ['linked-consumer.ts'],
+      }),
+    );
+    const tscLinked = node([tscBin, '--noEmit', '--listFiles', '-p', linkedTsconfig], consumerDir);
+    expect(tscLinked.status, tscLinked.stdout + tscLinked.stderr).toBe(0);
+    expect(tscLinked.stdout.replaceAll('\\', '/')).toContain('/play-checkout/src/index.ts');
+    expect(tscLinked.stdout.replaceAll('\\', '/')).not.toContain('/play-checkout/dist/');
+
+    // Synthetic source-observation control on the temp copy (never mutating repoRoot/src).
+    const tempIndex = resolve(linkedPlay, 'src', 'index.ts');
+    const originalIndex = readFileSync(tempIndex, 'utf8');
+    writeFileSync(
+      tempIndex,
+      `${originalIndex}\nexport const __LINKED_SOURCE_OBSERVED__ = 'synthetic-live-edit-v2' as const;\n`,
+    );
+    expect(existsSync(resolve(linkedPlay, 'dist'))).toBe(false);
+
+    const bunEdited = spawnSync(
+      'bun',
+      [
+        '--conditions=@rig-c/source',
+        '-e',
+        "const { __LINKED_SOURCE_OBSERVED__ } = await import('@rig-c/play'); console.log(__LINKED_SOURCE_OBSERVED__);",
+      ],
+      { cwd: consumerDir, encoding: 'utf8' },
+    );
+    expect(bunEdited.status, bunEdited.stderr).toBe(0);
+    expect(bunEdited.stdout.trim()).toBe('synthetic-live-edit-v2');
+
+    writeFileSync(
+      resolve(consumerDir, 'linked-edit-probe.ts'),
+      "import { __LINKED_SOURCE_OBSERVED__, RigPlayer } from '@rig-c/play';\nexport const check: 'synthetic-live-edit-v2' = __LINKED_SOURCE_OBSERVED__;\nexport const player = RigPlayer;\n",
+    );
+    const editTsconfig = resolve(consumerDir, 'tsconfig.edit.json');
+    writeFileSync(
+      editTsconfig,
+      JSON.stringify({
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          customConditions: ['@rig-c/source'],
+          allowImportingTsExtensions: true,
+          lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+        },
+        files: ['linked-edit-probe.ts'],
+      }),
+    );
+    const tscEdited = node([tscBin, '--noEmit', '-p', editTsconfig], consumerDir);
+    expect(tscEdited.status, tscEdited.stdout + tscEdited.stderr).toBe(0);
+
+    const viteOut = await viteBuild({
+      root: consumerDir,
+      configFile: false,
+      logLevel: 'silent',
+      resolve: { conditions: ['@rig-c/source', ...defaultClientConditions] },
+      build: {
+        write: false,
+        minify: false,
+        lib: {
+          entry: resolve(consumerDir, 'linked-edit-probe.ts'),
+          formats: ['es'],
+          fileName: () => 'bundle.js',
+        },
+      },
+    });
+    const chunks = Array.isArray(viteOut) ? viteOut : [viteOut];
+    const bundleCode = chunks
+      .flatMap((r) => ('output' in r ? r.output : []))
+      .map((o) => ('code' in o ? o.code : ''))
+      .join('\n');
+    expect(bundleCode).toContain('synthetic-live-edit-v2');
+    expect(bundleCode).toContain('class RigPlayer');
+
+    rmSync(tempIndex);
+    const tscLinkedMissing = node([tscBin, '--noEmit', '-p', editTsconfig], consumerDir);
+    expect(tscLinkedMissing.status).not.toBe(0);
+    expect(tscLinkedMissing.stdout + tscLinkedMissing.stderr).toContain("Cannot find module '@rig-c/play'");
+  } finally {
+    rmSync(linkedRoot, { recursive: true, force: true });
+  }
 });

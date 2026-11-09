@@ -1,4 +1,4 @@
-import { openTrack, openTracks, physicsClockStep, underNoSkin, type LiveTrack, type LiveTracks } from 'rig-c/core';
+import { openTrack, openTracks, physicsClockStep, underNoSkin, type LiveTrack, type LiveTracks } from '@rig-c/core/core';
 import { loadModel, RigPlayer, type ModelAssets, type PhysicsMotion, type PhysicsMotionScope, type RenderMode } from '../src/index';
 import type { ReadDocument } from '../src/loadModel';
 import { PHYSICS_SCOPE_PROTOCOL as protocol, empiricalPeakCheck, nativePeakUlp, physicsScopeSample, rotationalSubsteps, type PhysicsScheduleState } from './physicsScopeProtocol';

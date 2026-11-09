@@ -1,7 +1,7 @@
 /** Original packed artwork, encoded as PMA before either reader sees it. */
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { readPlate } from 'rig-c/plate';
+import { readPlate } from '@rig-c/core/plate';
 
 const [sourceRig, packedBuild, output] = process.argv.slice(2);
 if (!sourceRig || !packedBuild || !output) throw new Error('usage: make_oracle_pma.ts <figure source> <packed build> <input dir>');

@@ -31,7 +31,7 @@ set -euo pipefail
 # Pinned twice, on purpose: the sources come from the rigc tag below and the
 # build is run by the rig-c devDependency of the same version, so a fixture is
 # a function of one version and is rebuilt when it moves.
-RIGC_TAG="v2.79.0"
+RIGC_TAG="v3.6.0"
 RIGS="walk flex squash portrait nod look ride"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RIGS_DEST="$ROOT/public/rigs"
@@ -45,12 +45,12 @@ fi
 
 require_rigc() {
   if [ ! -x "$RIGC" ]; then
-    echo "rig-c is not installed (node_modules/.bin/rigc) — run bun install first" >&2
+    echo "@rig-c/core is not installed (node_modules/.bin/rigc) — run bun install first" >&2
     exit 1
   fi
   local installed expected
-  installed="$(node -p "require('$ROOT/node_modules/rig-c/package.json').version")"
-  expected="$(node -p "require('$ROOT/package.json').devDependencies['rig-c']")"
+  installed="$(node -p "require('$ROOT/node_modules/@rig-c/core/package.json').version")"
+  expected="$(node -p "require('$ROOT/package.json').devDependencies['@rig-c/core']")"
   if [ "$installed" != "${RIGC_TAG#v}" ] || [ "$expected" != "${RIGC_TAG#v}" ]; then
     echo "fixture pin mismatch: tag $RIGC_TAG, manifest $expected, installed $installed" >&2
     exit 1

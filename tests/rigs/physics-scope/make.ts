@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodePng } from 'rig-c/plate';
+import { encodePng } from '@rig-c/core/plate';
 import { PHYSICS_SCOPE_PROTOCOL as protocol, physicsScopeSample } from '../../physicsScopeProtocol';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const dir = join(here, 'parts'); mkdirSync(dir, { recursive: true });

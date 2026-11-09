@@ -1,4 +1,4 @@
-import { CoreInputError, poseRawSetup, underNoSkin } from 'rig-c/core';
+import { CoreInputError, poseRawSetup, underNoSkin } from '@rig-c/core/core';
 import { MeshAttachment, Physics, Skeleton, SkeletonJson, TextureRegion, type AttachmentLoader } from '@esotericsoftware/spine-webgl';
 import { loadModel, readSetupMesh, type ModelAssets, type SetupMeshTarget } from '../src/index';
 import type { ReadDocument } from '../src/loadModel';

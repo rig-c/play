@@ -4,7 +4,7 @@ import {
   ManagedWebGLRenderingContext, Physics, SceneRenderer, Skeleton, SkeletonJson,
   TextureAtlas, type SkeletonData,
 } from '@esotericsoftware/spine-webgl';
-import { physicsClockStep } from 'rig-c/core';
+import { physicsClockStep } from '@rig-c/core/core';
 
 export interface OracleViewport {
   width: number;

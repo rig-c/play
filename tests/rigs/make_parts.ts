@@ -46,7 +46,7 @@ import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { encodePng } from 'rig-c/plate';
+import { encodePng } from '@rig-c/core/plate';
 
 type RGB = [number, number, number];
 
