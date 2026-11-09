@@ -145,6 +145,15 @@ test(
   const fetchAssets = readFileSync(resolve(repoRoot, 'scripts/fetch-assets.sh'), 'utf8');
   assert.equal(fetchAssets.match(/^RIGC_TAG="([^"]+)"$/m)?.[1], `v${rigcPin}`);
   assert.equal(fetchAssets.match(/^PARTS_TAG="([^"]+)"$/m)?.[1], `v${partsPin}`);
+  assert.match(
+    fetchAssets,
+    /^WAVE_STAMP="\$RIGC_TAG parts \$PARTS_TAG assemble\+rig examples \$PARTS_EXAMPLES_COMMIT"$/m,
+  );
+  assert.match(fetchAssets, /"\$RIG_PARTS"\s+assemble\s+--config\s+examples\/wind\/config\.wave\.json/);
+  assert.match(fetchAssets, /"\$RIG_PARTS"\s+rig\s+--config\s+examples\/wind\/config\.wave\.json/);
+  assert.doesNotMatch(fetchAssets, /"\$RIG_PARTS"\s+build\b/);
+  assert.match(fetchAssets, /for f in rig\.json motion\.json sets\.json; do/);
+  assert.match(fetchAssets, /cmp -s "\$WAVE_WORK\/out\/rig\/\$f" "\$WAVE_EX\/expected-wave\/\$f"/);
   assert.match(fetchAssets, /require\('\$ROOT\/node_modules\/@rig-c\/core\/package\.json'\)\.version/);
   assert.match(fetchAssets, /require\('\$ROOT\/package\.json'\)\.devDependencies\['@rig-c\/core'\]/);
 

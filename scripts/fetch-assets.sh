@@ -206,15 +206,19 @@ done
 # (examples/wind/config.wave.json, parts #670/#672): its light half (config,
 # pose, proposal, expected-wave/) from the parts tag, its heavy half (painting,
 # See-through layers) from rig-c/examples (formerly parts-examples) at the commit parts' own
-# scripts/fetch-examples.sh pins, built by the `@rig-c/parts` devDependency of
-# the same version (`rig-parts build`, the call parts' chain suite makes), then
-# compiled here like every other rig. The build's rig.json, motion.json and
-# sets.json must be byte-identical to the tag's expected-wave/, or nothing is
-# written. It takes minutes, so it is stamped like the test rigs.
+# scripts/fetch-examples.sh pins, produced by the `@rig-c/parts` devDependency
+# of the same version (`rig-parts assemble` then `rig-parts rig`, which gates
+# the authored rig through `rigc build --profile rig-play --pack`), then
+# compiled here like every other rig. `rig-parts check` is omitted because its
+# diagnostic output (`out/check/`) is unconsumed by this fixture build and the
+# parts quality bars belong to `@rig-c/parts`' own CI. The produced rig.json,
+# motion.json and sets.json must be byte-identical to the tag's expected-wave/,
+# or nothing is written. Stamped with the stage list `assemble+rig` so an older
+# cached producer is never reused.
 PARTS_TAG="v2.36.0"
 PARTS_EXAMPLES_COMMIT="ba99e403d4058fc1cfe40699bdcde8aaf00a90c0"
 WAVE_OUT="$RIGS_DEST/wind-wave"
-WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG examples $PARTS_EXAMPLES_COMMIT"
+WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG assemble+rig examples $PARTS_EXAMPLES_COMMIT"
 RIG_PARTS="$ROOT/node_modules/.bin/rig-parts"
 if have "$WAVE_OUT" && [ "$(cat "$WAVE_OUT/.source" 2>/dev/null || true)" = "$WAVE_STAMP" ]; then
   echo "have test rig wind-wave"
@@ -246,10 +250,13 @@ else
   mkdir -p "$WAVE_EX/inputs"
   cp "$WAVE_WORK/heavy/wind/painting.png" "$WAVE_WORK/heavy/wind/inputs/"*.png "$WAVE_EX/inputs/"
   cp -R "$WAVE_WORK/heavy/wind/layers" "$WAVE_EX/inputs/layers"
-  echo "building test rig wind-wave (rig-parts build, a few minutes)"
-  if ! (cd "$WAVE_WORK/parts" && "$RIG_PARTS" build --config examples/wind/config.wave.json \
-    --source examples/wind/inputs/painting.png --full examples/wind/inputs/layers/full \
-    --head examples/wind/inputs/layers/head --out "$WAVE_WORK/out" > "$WAVE_WORK/parts.log" 2>&1); then
+  echo "building test rig wind-wave (rig-parts assemble + rig)"
+  if ! (cd "$WAVE_WORK/parts" && \
+    "$RIG_PARTS" assemble --config examples/wind/config.wave.json \
+      --source examples/wind/inputs/painting.png --full examples/wind/inputs/layers/full \
+      --head examples/wind/inputs/layers/head --out "$WAVE_WORK/assembled" > "$WAVE_WORK/parts.log" 2>&1 && \
+    "$RIG_PARTS" rig --config examples/wind/config.wave.json \
+      --parts "$WAVE_WORK/assembled/rig" --out "$WAVE_WORK/out/rig" >> "$WAVE_WORK/parts.log" 2>&1); then
     tail -n 20 "$WAVE_WORK/parts.log" >&2
     exit 1
   fi
