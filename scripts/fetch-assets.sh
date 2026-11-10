@@ -215,7 +215,7 @@ done
 # motion.json and sets.json must be byte-identical to the tag's expected-wave/,
 # or nothing is written. Stamped with the stage list `assemble+rig` so an older
 # cached producer is never reused.
-PARTS_TAG="v3.7.0"
+PARTS_TAG="v2.37.0"
 PARTS_EXAMPLES_COMMIT="ba99e403d4058fc1cfe40699bdcde8aaf00a90c0"
 WAVE_OUT="$RIGS_DEST/wind-wave"
 WAVE_STAMP="$RIGC_TAG parts $PARTS_TAG assemble+rig examples $PARTS_EXAMPLES_COMMIT"

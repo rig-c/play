@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.24.0
+
+### Features
+
+* **workspace:** opt into the live TypeScript entry with `@rig-c/source`; default package imports and types keep their `dist/` entries.
+
+### Release preparation
+
+* **release:** use validated version-tag publication for the canonical package and both aliases.
+* **dependencies:** version `@rig-c/play` independently, with exact `@rig-c/core` 3.7.0 and `@rig-c/parts` 2.37.0 development pins and matching fixture tags ([rig-hq#22](https://github.com/rig-c/hq/issues/22)).
+
 ## 3.7.0
 
 **Explicit `@rig-c/source` export condition** (#254). `package.json` `exports["."]` now declares `"@rig-c/source": "./src/index.ts"` ahead of `"types": "./dist/index.d.ts"` and `"import": "./dist/index.js"`, letting workspace consumers that opt into the `@rig-c/source` condition resolve the live TypeScript entrypoint directly while standard package imports continue to resolve `./dist/index.js`.

@@ -2,7 +2,7 @@
 # Public, checksum-pinned Spine examples, matching the adapters benchmark.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RIGC_TAG="v2.67.0"
+RIGC_TAG="v3.7.0"
 RIGC="$ROOT/node_modules/.bin/rigc"
 require_rigc() { test -x "$RIGC"; }
 SPINE_RUNTIMES_REF="38ddb1a0652c2e3473e8487ebd88b4b291ad9a7e"

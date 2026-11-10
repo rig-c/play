@@ -8,7 +8,7 @@
         "@esotericsoftware/spine-webgl": "4.3.13",
         "@playwright/test": "1.62.1",
         "@rig-c/core": "3.7.0",
-        "@rig-c/parts": "3.7.0",
+        "@rig-c/parts": "2.37.0",
         "@types/node": "^22",
         "typescript": "^5.6.0",
         "vite": "^6.0.0",
@@ -78,7 +78,7 @@
 
     "@rig-c/core": ["@rig-c/core@3.7.0", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-YTKUs1QUEv6c/sxqrsZLyJLkgVcOcUTGE687rV9PHfzx0dMlNIBfARQC9Xgx4Uf6SxPofXm2n3wtNwjQd2ddTQ=="],
 
-    "@rig-c/parts": ["@rig-c/parts@3.7.0", "", { "dependencies": { "@rig-c/core": "3.7.0", "ag-psd": "^31.0.2" }, "bin": { "rig-parts": "bin/rig-parts.cjs", "spine-parts": "bin/rig-parts.cjs" } }, "sha512-aykW1MTBoNAC9Ar875NUXZ8BNRTseukL+GfaAmy20iaRzgYYA4MahP4PkTxvfl3cbjSWRbtnHC8zzeZrw0yhpg=="],
+    "@rig-c/parts": ["@rig-c/parts@2.37.0", "", { "dependencies": { "@rig-c/core": "3.7.0", "ag-psd": "^31.0.2" }, "bin": { "rig-parts": "bin/rig-parts.cjs", "spine-parts": "bin/rig-parts.cjs" } }, "sha512-ZO8vHKMxJlHKAyjISW7xwGliv8j6wkZjCLPwUbx8yFXlaTxZPc/oeGV0dJqggJZ9R5yuj3wxHnOaSf6+7ZM4pg=="],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.62.4", "", { "os": "android", "cpu": "arm" }, "sha512-RrPokAb7dmbxFoeO3TloqHyOjgye8RkBhSqmp4aJMIex4c9r46ZstPnleDQOq1t46VOVjwIuwNogIqbodV1Vvg=="],
 
