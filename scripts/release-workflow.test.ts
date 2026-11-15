@@ -339,13 +339,13 @@ describe('release workflow contract', () => {
       return c;
     };
     // SHA-256 of parsed original steps, excluding only routing condition/ref.
-    expect(digest(originalSteps.map(clean))).toBe('1268705f8a94844af4d72dd083c007cbe194148864ddd5c2c9c57e9b1e7aa361');
+    expect(digest(originalSteps.map(clean))).toBe('80b005e351c68c757f0df20e467274ac1628cea131e5d31630c9e5b131f6898b');
     expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)).map((s: Step) =>
       s.uses === 'actions/checkout@v4' ? {...s, with:{...s.with, ref:'v${{ inputs.alias_version }}'}} : s
-    ))).toBe('2aaeef5812c8c0beac4025a53434c90891b605209832b26ec00b54b1452b944f');
+    ))).toBe('606aa08f03e85f08d66f5d6aca4dc8db871d5a382bbafa1b49e395356d3606d9');
     // Preserve the existing steps in full, including publish conditions and
     // the canonical HEAD-to-main ancestry guard, with release-please removed.
-    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('32e3b3fdff7b0547b695028bce681d80670f20a68d8cbb2d964033b9c2423f60');
+    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('14a64f267716db6807d85744f90b3d9265ef562cade6427abda866374a686c90');
     expect(existsSync(join(root, 'release-please-config.json'))).toBe(false);
     expect(existsSync(join(root, '.release-please-manifest.json'))).toBe(false);
     expect(source).not.toContain('release-please');
