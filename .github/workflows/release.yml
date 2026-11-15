@@ -325,6 +325,18 @@ jobs:
             node scripts/alias-tarball.mjs compare "$dest"/canonical/*.tgz "$dest/$alias"/*.tgz
           done
 
+      - name: Render the published installation in Chromium
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        timeout-minutes: 10
+        env:
+          TAG_NAME: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          bun run fetch-assets
+          bunx playwright install --with-deps chromium
+          version="${TAG_NAME#v}"
+          node scripts/install-smoke.mjs --spec "@rig-c/play@$version"
+
   # Alias repair only: a tag retry cannot enter this job.
   alias:
     needs: release

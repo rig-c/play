@@ -253,7 +253,7 @@ Two properties of that configuration are load-bearing in the workflow:
 4. Watch the `release` run triggered by `vX.Y.Z`: it validates the tag, SHA,
    `origin/main` ancestry and `package.json` version, publishes `@rig-c/play`,
    publishes the two aliases, and confirms every name serves the same files —
-   its last step prints one comparison line per alias.
+   its comparison step prints one line per alias; the final install smoke renders the registry package in Chromium and requires drawn pixels.
 5. Confirm: `npm view @rig-c/play version`, `npm view rig-play version` and
    `npm view spine-html version` print the same version, and each npm page shows
    a provenance attestation of the same workflow run. Create the GitHub Release

@@ -125,7 +125,13 @@ if (command === 'npm') {
     writeFileSync(join(dest, file), JSON.stringify({name, version})); console.log(file); process.exit(0);
   }
 }
+if (command === 'bunx' && args.join(' ') === 'playwright install --with-deps chromium') process.exit(0);
 if (command === 'node') {
+  if (args[0] === 'scripts/install-smoke.mjs') {
+    if (JSON.stringify(args) !== JSON.stringify(['scripts/install-smoke.mjs','--spec','@rig-c/play@' + releaseTag.slice(1)])) fail('wrong installed smoke spec');
+    if (!state.served.includes('@rig-c/play')) fail('smoke before canonical publish');
+    process.exit(0);
+  }
   if (args[0] === '-' || args[0] === '-e') {
     const result = spawnSync(process.env.MOCK_REAL_NODE, args, {stdio:'inherit', env:process.env});
     process.exit(result.status ?? 1);
@@ -147,7 +153,7 @@ if (command === 'node') {
     }
   }
 }
-if (command === 'bun' && args.join(' ') === 'install --frozen-lockfile') process.exit(0);
+if (command === 'bun' && ['install --frozen-lockfile', 'run fetch-assets'].includes(args.join(' '))) process.exit(0);
 fail('unmocked command: ' + command + ' ' + args.join(' '));
 `;
 
@@ -165,7 +171,7 @@ const sharedEnvDir = mkdtempSync(join(tmpdir(), 'play-release-env-'));
 const bashEnvFile = join(sharedEnvDir, 'mock-env.sh');
 writeFileSync(
   bashEnvFile,
-  ['npm','gh','node','bun','git'].map(cli => `${cli}() { "${process.execPath}" -e "$MOCK_SOURCE" ${cli} "$@"; }`).join('\n') + '\nexport -f npm gh node bun git\n',
+  ['npm','gh','node','bun','bunx','git'].map(cli => `${cli}() { "${process.execPath}" -e "$MOCK_SOURCE" ${cli} "$@"; }`).join('\n') + '\nexport -f npm gh node bun bunx git\n',
 );
 const recoveryEnvFile = join(sharedEnvDir, 'recovery-env.sh');
 writeFileSync(
@@ -339,13 +345,13 @@ describe('release workflow contract', () => {
       return c;
     };
     // SHA-256 of parsed original steps, excluding only routing condition/ref.
-    expect(digest(originalSteps.map(clean))).toBe('80b005e351c68c757f0df20e467274ac1628cea131e5d31630c9e5b131f6898b');
+    expect(digest(originalSteps.map(clean))).toBe('c7f2006c122bfbe3ea3dac280cb673e2857a9592278f0abb427f8fb45afb5e0a');
     expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)).map((s: Step) =>
       s.uses === 'actions/checkout@v4' ? {...s, with:{...s.with, ref:'v${{ inputs.alias_version }}'}} : s
     ))).toBe('606aa08f03e85f08d66f5d6aca4dc8db871d5a382bbafa1b49e395356d3606d9');
     // Preserve the existing steps in full, including publish conditions and
     // the canonical HEAD-to-main ancestry guard, with release-please removed.
-    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('14a64f267716db6807d85744f90b3d9265ef562cade6427abda866374a686c90');
+    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('5f72bf7f34375c78028dcd6d32a02fae6e9cd84bdec4c1e0e9d35897503e362b');
     expect(existsSync(join(root, 'release-please-config.json'))).toBe(false);
     expect(existsSync(join(root, '.release-please-manifest.json'))).toBe(false);
     expect(source).not.toContain('release-please');
