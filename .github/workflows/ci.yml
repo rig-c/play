@@ -85,6 +85,15 @@ jobs:
           # Empty on push / pull_request — the spec only dumps on the exact
           # string "1", so those runs are the unchanged default path.
           PARITY_DUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.parity_dump && '1' || '' }}
+      - name: Render the installed release tarball in Chromium
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          npm run build:lib
+          dest="$(mktemp -d)"
+          trap 'rm -rf "$dest"' EXIT
+          npm pack --pack-destination "$dest"
+          node scripts/install-smoke.mjs --tarball "$dest"/*.tgz
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
