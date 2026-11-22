@@ -103,11 +103,11 @@ test('parallax clamps the viewport, applies directional gains and pans at equal 
   }
 
   await point(page, 2, 2);
-  await check({ camera: [64, 40], background: [-28.8, 18], figure: [-64, 40], foreground: [-99.2, 62] });
+  await check({ camera: [64, 40], background: [35.2, -22], figure: [0, 0], foreground: [-35.2, 22] });
   await point(page, -2, -2);
-  await check({ camera: [-64, -40], background: [28.8, -18], figure: [64, -40], foreground: [99.2, -62] });
+  await check({ camera: [-64, -40], background: [-35.2, 22], figure: [0, 0], foreground: [35.2, -22] });
   await point(page, 0.5, -0.5);
-  await check({ camera: [32, -20], background: [-14.4, -9], figure: [-32, -20], foreground: [-49.6, -31] });
+  await check({ camera: [32, -20], background: [17.6, 11], figure: [0, 0], foreground: [-17.6, -11] });
   await page.locator('#camera-mode').selectOption('pan');
   await check({ camera: [32, -20], background: [-32, -20], figure: [-32, -20], foreground: [-32, -20] });
 });
@@ -160,6 +160,54 @@ test('parallax matches the fixed take pixel for pixel at time zero', async ({ pa
   expect(measures.disabledMoving).toBe(0);
   expect(measures.enabledMoving).toBeGreaterThan(0);
   expect(measures.enabledNeutral).toBe(0);
+});
+
+test('parallax keeps isolated figure pixels fixed at both horizontal extremes', async ({ page }) => {
+  await installFrameClock(page);
+  await open(page);
+
+  const measures = await page.locator('#stage').evaluate((stage: HTMLCanvasElement) => {
+    const ctx = stage.getContext('2d')!;
+    const select = document.querySelector<HTMLSelectElement>('#camera-mode')!;
+    const box = stage.getBoundingClientRect();
+    const draw = ctx.drawImage;
+    const planeCounts: number[] = [];
+    let planes = 0;
+    // The figure is composited between the background and foreground. Keep its
+    // real draw on the stage and suppress the other draws to expose alpha.
+    ctx.drawImage = function (source, ...args: number[]) {
+      if (++planes === 2) Reflect.apply(draw, this, [source, ...args]);
+    };
+    const sample = (mode: string, x: number) => {
+      select.value = mode;
+      stage.dispatchEvent(new PointerEvent('pointermove', {
+        isPrimary: true, clientX: x, clientY: box.top + box.height / 2,
+      }));
+      planes = 0;
+      (window as SampleWindow).stepSample(4000);
+      planeCounts.push(planes);
+      return new Uint32Array(ctx.getImageData(0, 0, stage.width, stage.height).data.buffer);
+    };
+    try {
+      const fixed = sample('fixed', box.left + box.width / 2);
+      const changed = (pixels: Uint32Array) => pixels.reduce((count, rgba, i) => count + Number(rgba !== fixed[i]), 0);
+      const left = changed(sample('parallax', box.left));
+      const right = changed(sample('parallax', box.right));
+      const panRight = changed(sample('pan', box.right));
+      const alpha = new Uint8Array(fixed.buffer);
+      let figurePixels = 0;
+      for (let i = 3; i < alpha.length; i += 4) if (alpha[i] !== 0) figurePixels++;
+      return { planeCounts, figurePixels, transparentPixels: fixed.length - figurePixels, left, right, panRight };
+    } finally {
+      ctx.drawImage = draw;
+    }
+  });
+  console.log('[parallax] isolated figure pixel comparison', JSON.stringify(measures));
+  expect(measures.planeCounts).toEqual([3, 3, 3, 3]);
+  expect(measures.figurePixels).toBeGreaterThan(0);
+  expect(measures.transparentPixels).toBeGreaterThan(0);
+  expect(measures.panRight).toBeGreaterThan(0);
+  expect({ left: measures.left, right: measures.right }, 'figure pixels at both extremes match Fixed').toEqual({ left: 0, right: 0 });
 });
 
 test('parallax keeps the backdrop opaque across the full camera envelope', async ({ page }) => {

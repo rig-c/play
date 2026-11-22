@@ -7,7 +7,7 @@ type Offsets = { background: Point; figure: Point; foreground: Point };
 export type CameraMode = 'parallax' | 'pan' | 'fixed';
 
 const ORIGIN = { x: 0, y: 0 };
-const GAINS = { background: 0.45, figure: 1, foreground: 1.55 };
+const GAINS = { background: -0.55, figure: 0, foreground: 0.55 };
 const TIME_CONSTANT = 0.12; // seconds
 const NEUTRAL_THRESHOLD = 0.00001; // normalized, under 0.001 CSS px at the camera limit
 
@@ -33,7 +33,7 @@ export function cameraLimits(width: number, height: number): Point {
 }
 
 function planeShift(camera: Point, gain: number): Point {
-  // The camera is Y-up. Screen translations are Y-down and opposite in world space.
+  // Positive gain opposes camera motion. The camera is Y-up and the screen is Y-down.
   return { x: -gain * camera.x, y: gain * camera.y };
 }
 
@@ -56,7 +56,7 @@ function artwork(box: PlaneBox, ratio: number, paint: (ctx: CanvasRenderingConte
 
 function backgroundPlane(width: number, height: number, ratio: number): Plane {
   const limit = cameraLimits(width, height);
-  // Pan can move the background with unit gain. Cover that envelope too.
+  // Pan's unit gain gives the background its largest absolute shift.
   const padX = Math.ceil(limit.x) + 2;
   const padY = Math.ceil(limit.y) + 2;
   const box = { x: -padX, y: -padY, width: width + 2 * padX, height: height + 2 * padY };
@@ -137,7 +137,7 @@ export function createCompositor(canvas: HTMLCanvasElement, figureSource: HTMLCa
         ? { background: ORIGIN, figure: ORIGIN, foreground: ORIGIN }
         : {
           background: planeShift(camera, mode === 'pan' ? 1 : GAINS.background),
-          figure: planeShift(camera, GAINS.figure),
+          figure: planeShift(camera, mode === 'pan' ? 1 : GAINS.figure),
           foreground: planeShift(camera, mode === 'pan' ? 1 : GAINS.foreground),
         };
       ctx.clearRect(0, 0, width, height);
