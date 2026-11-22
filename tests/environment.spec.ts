@@ -87,3 +87,71 @@ test('environment() reports what stands: before play, after a half, after null',
   expect(r.afterHalf).toEqual([0.5, 0, 0, 2]);
   expect(r.afterNull).toEqual([1, 0, 0, 1]);
 });
+
+for (const rig of ['cloth', 'held'] as const) {
+  for (const tracks of [false, true]) {
+    test(`scheduled seek on ${rig} (tracks: ${tracks})`, async ({ page }) => {
+      const r = await page.evaluate(({ rig, tracks }) => window.rigPlayHarness.scheduledSeekProbe(rig, tracks), { rig, tracks });
+      expect.soft(r.poser, 'auto poser falls back for the physics chain').toMatch(/^oracle: physics constraint/);
+      expect(r.setup.slots).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'banner', kind: 'mesh' }),
+        expect.objectContaining({ name: 'link_3', kind: 'region' }),
+      ]));
+
+      await test.step('zero seek resets to setup without sampling the schedule', () => {
+        expect.soft(r.zero.calls).toEqual([]);
+        expect.soft(r.zero.pose).toEqual(r.setup);
+      });
+
+      await test.step('callbacks sample the accumulated pre-step clock through the fractional tail', () => {
+        const starts = r.lateForward.starts;
+        expect(starts).toHaveLength(69);
+        expect(starts[0]).toBe(0);
+        expect(starts[68]).toBeGreaterThan(2); // The animation loops at 2 s.
+        expect.soft(r.late.calls).toEqual(starts);
+      });
+
+      await test.step('every corner and mesh vertex matches forward integration', () => {
+        expect.soft(r.late.pose).toEqual(r.lateForward.pose);
+        expect.soft(r.lateForward.pose.slots, 'one-step-ahead weather changes geometry').not.toEqual(r.shiftedForward.slots);
+      });
+
+      await test.step('constant schedule and standing legacy seek agree with forward integration', () => {
+        expect.soft(r.constantSeek.pose).toEqual(r.constantLegacy);
+        expect.soft(r.constantLegacy).toEqual(r.constantForward);
+        expect.soft(r.legacyBefore).toEqual(r.standingForward);
+        expect.soft(r.constantForward.slots, 'the two standing environments produce different geometry').not.toEqual(r.standingForward.slots);
+      });
+
+      await test.step('same-time seeks resample a new callback and a changed closure', () => {
+        expect.soft(r.other.calls).toEqual(r.lateForward.starts);
+        expect.soft(r.other.pose).toEqual(r.otherForward);
+        expect.soft(r.other.pose.slots).not.toEqual(r.late.pose.slots);
+        expect.soft(r.changed.calls).toEqual(r.lateForward.starts);
+        expect.soft(r.changed.pose).toEqual(r.changedForward);
+        expect.soft(r.changed.pose.slots).not.toEqual(r.other.pose.slots);
+      });
+
+      await test.step('the standing environment drives the first advance after a seek', () => {
+        expect.soft(r.restored).toEqual(r.standing);
+        expect.soft(r.continued).toEqual(r.lateForward.continued);
+      });
+
+      await test.step('scheduled replay is repeatable backward and leaves legacy replay isolated', () => {
+        expect.soft(r.rerun.calls).toEqual(r.earlyForward.starts);
+        expect.soft(r.rerun.pose).toEqual(r.earlyForward.pose);
+        expect.soft(r.rerun).toEqual(r.early);
+        expect.soft(r.legacyAfter).toEqual(r.legacyBefore);
+        expect.soft(r.uncachedLegacy).toEqual(r.uncachedLegacyForward);
+      });
+    });
+  }
+}
+
+test('scheduled seek on the runtime poser skips the callback and seeks normally', async ({ page }) => {
+  const r = await page.evaluate(() => window.rigPlayHarness.runtimeScheduledSeekProbe());
+  expect(r.poser).toBe('runtime');
+  expect(r.calls).toEqual([]);
+  expect(r.scheduled).toEqual(r.legacy);
+  expect(r.before.slots).not.toEqual(r.legacy.slots);
+});

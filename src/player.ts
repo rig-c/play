@@ -73,6 +73,9 @@ export interface RigEnvironment {
   readonly gravity: readonly [number, number];
 }
 
+/** Wind and gravity for a seek step, sampled at its starting track time in seconds. */
+export type RigEnvironmentSchedule = (replayTime: number) => RigEnvironment;
+
 /** Select constraint owners by exact bone, inclusive subtree, or exact physics names. */
 export type PhysicsMotionScope = { bone: string } | { subtree: string } | { constraints: readonly string[] };
 /** Additional apparent movement in skeleton world units (Y up), or XY roll in degrees CCW. */
@@ -937,12 +940,15 @@ export class RigPlayer {
   private slotFilter: SlotFilter | null = null;
   /** `slotFilter` as a predicate; every slot when null. */
   private draws: (slot: string) => boolean = () => true;
-  /** Handed to every track the player opens; reads the current `adjust` so setting it later needs no reopen. */
-  private readonly adjustHook: CoreLocalAdjust = (locals, ctx) => {
-    if (this.easing !== null) this.applyEase(this.easing, locals);
+  /** Reads the current `adjust` and set ease during live evaluation. */
+  private readonly adjustHook: CoreLocalAdjust = (locals, ctx) => this.adjustLocals(locals, ctx, this.easing);
+
+  private adjustLocals(locals: Parameters<CoreLocalAdjust>[0], ctx: Parameters<CoreLocalAdjust>[1], easing: SetEase | null): void {
+    if (easing !== null) this.applyEase(easing, locals);
     else if (this.drawnPose !== null) for (const [bone, rotation] of this.drawnPose) locals.bone(bone).rotation = rotation;
     if (this.adjustFn !== null) this.adjustFn(locals, ctx);
-  };
+  }
+
   private readonly listeners = {
     event: new Set<Listener<RigEvent>>(),
     complete: new Set<Listener<RigComplete>>(),
@@ -1184,11 +1190,11 @@ export class RigPlayer {
   }
 
   /** Stores `raw` and applies the shown set (`activeSet`, or before an ease's swap the composition it eases from). Zero work when none. */
-  private setRawPose(raw: RawPose): void {
+  private setRawPose(raw: RawPose, set = this.shownSet()): void {
+    const pose = set === null ? raw : applySetToPose(this.view, raw, set);
     this.rawPose = raw;
     this.heldParameters = null;
-    const set = this.shownSet();
-    this.pose = set === null ? raw : applySetToPose(this.view, raw, set);
+    this.pose = pose;
     this.poseGeneration++;
     this.cachedIdentity = null;
   }
@@ -1254,9 +1260,9 @@ export class RigPlayer {
    * standing value, `null` returns both to the start values, and the call
    * applies from the next step on, at any time, with no ramp of the player's
    * own — the springs are the smoothing. It is the player's, not a track's:
-   * every track and layer answers the same world, and a `seek` or a replay
-   * poses under the environment as it stands (no history is kept). Returns the
-   * environment now standing.
+   * every track and layer answers the same world, and ordinary replays use the
+   * environment as it stands (no history is kept). `seek` accepts a schedule
+   * for that replay alone. Returns the environment now standing.
    */
   environment(environment?: Partial<RigEnvironment> | null): RigEnvironment {
     if (environment === null) {
@@ -1417,15 +1423,20 @@ export class RigPlayer {
   }
 
   /**
-   * Moves a single animation on track 0 to `time`: snapshot-backed deterministic
-   * seek (#141) that produces the exact pose and physics state of reopening at 0
-   * and stepping forward in `seekStep` increments (the last one shorter) until
-   * `time` is reached. Events and completes crossed on the way are not fired.
+   * Moves a single animation on track 0 to `time` with the pose and physics
+   * state of reopening at 0 and stepping in `seekStep` increments (the last
+   * one can be shorter). Ordinary seeks reuse snapshots (#141). Events and
+   * completes crossed on the way are not fired.
    * It has a meaning for one animation on one track only — the player cannot
    * replay when a mix, a second track or a queue was asked for — so after any
    * of those it refuses by name; step the player forward instead.
+   * On the oracle, `environmentAt` runs an uncached replay and supplies wind
+   * and gravity at the start of each positive step, including a shorter last
+   * step. On success the resulting physics state continues under the standing
+   * environment. A failed replay leaves the held state in place. The runtime
+   * poser seeks as usual and does not call `environmentAt`.
    */
-  seek(time: number): void {
+  seek(time: number, environmentAt?: RigEnvironmentSchedule): void {
     if (this.animation === null) throw new Error('seek before play: no animation is open');
     if (!(time >= 0) || !Number.isFinite(time)) throw new Error(`seek time must be a finite time at or above 0, got ${String(time)}`);
     if (this.beyondBase) throw new Error('seek is defined for a single animation on track 0; after a mix, another track, a queue or a clear the player cannot replay to a time — step it forward with frame/advance instead');
@@ -1439,6 +1450,10 @@ export class RigPlayer {
       if (rest > 0) replayTime += rest;
       this.runtimeFrames.pose.trackTime = replayTime;
       this.applyRuntimeTime();
+      return;
+    }
+    if (environmentAt !== undefined) {
+      this.seekWithEnvironment(time, environmentAt);
       return;
     }
     // A replay has no history to ease through: an eased switch in flight lands at once.
@@ -1502,6 +1517,27 @@ export class RigPlayer {
     }
   }
 
+  private seekWithEnvironment(time: number, environmentAt: RigEnvironmentSchedule): void {
+    // Replay with the active set's final locals. Once published, the same track
+    // must also support new eases during live playback.
+    let replaying = true;
+    const { stepper, firstPose } = this.openReplay((locals, ctx) => this.adjustLocals(locals, ctx, replaying ? null : this.easing));
+    const standing = stepper.environment;
+    let rawPose = firstPose;
+    this.replaySteps(stepper, time, (dt) => {
+      stepper.setEnvironment(environmentAt(stepper.trackTime));
+      rawPose = stepper.step(dt);
+    });
+    // A refused stepper cannot accept setEnvironment. Restore only after a
+    // successful replay, then publish the pose and the integrated state.
+    stepper.setEnvironment(standing);
+    this.setRawPose(rawPose, this.activeSet);
+    this.easing = null;
+    replaying = false;
+    if ('first' in stepper) this.track = stepper;
+    else this.tracks = stepper;
+  }
+
   private clearSeekCache(): void {
     this.seekCache = null;
   }
@@ -1514,21 +1550,7 @@ export class RigPlayer {
     if (this.tracks === null && this.track === null) {
       this.reopen();
     }
-    let frontier: LiveTrack | LiveTracks;
-    let firstPose: RawPose;
-    if (mode === 'tracks') {
-      const tracks = openTracks(this.view, { reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
-      tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
-      firstPose = tracks.start();
-      this.applyPhysicsParameters(tracks);
-      this.applyEnvironment(tracks);
-      frontier = tracks;
-    } else {
-      const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust: this.adjustHook, clock: this.clockHook });
-      firstPose = this.initializeSingle(track);
-      this.applyEnvironment(track);
-      frontier = track;
-    }
+    const { stepper: frontier, firstPose } = this.openReplay();
     const grid = new Map<number, SeekGridEntry>();
     grid.set(0, { state: captureStepperState(frontier), rawPose: firstPose, parameters: this.readParameters(frontier) });
     this.seekCache = {
@@ -1539,6 +1561,22 @@ export class RigPlayer {
       exact: new Map<number, SeekExactEntry>(),
     };
     return this.seekCache;
+  }
+
+  /** Opens a separate stepper at pose 0 for a seek, without publishing it. */
+  private openReplay(adjust = this.adjustHook): { stepper: LiveTrack | LiveTracks; firstPose: RawPose } {
+    if (this.tracks !== null) {
+      const tracks = openTracks(this.view, { reset: 'animation', adjust, clock: this.clockHook });
+      tracks.setAnimation(0, this.animation as string, { loop: this.loop, mixDuration: 0 });
+      const firstPose = tracks.start();
+      this.applyPhysicsParameters(tracks);
+      this.applyEnvironment(tracks);
+      return { stepper: tracks, firstPose };
+    }
+    const track = openTrack(this.view, this.animation as string, { loop: this.loop, reset: 'animation', adjust, clock: this.clockHook });
+    const firstPose = this.initializeSingle(track);
+    this.applyEnvironment(track);
+    return { stepper: track, firstPose };
   }
 
   /** Whatever is open, opened again with track 0's animation as `play` last set it, at pose 0: the single track, or the tracks under `tracks: true`. */
@@ -1572,11 +1610,15 @@ export class RigPlayer {
   /** Steps whatever is open forward to `time` in `seekStep` increments, the last one shorter. */
   private stepTo(time: number): void {
     const stepper = this.tracks ?? (this.track as LiveTrack);
-    const steps = Math.floor(time / this.seekStep);
-    for (let i = 0; i < steps; i++) this.rawPose = stepper.step(this.seekStep);
-    const rest = time - stepper.trackTime;
-    if (rest > 0) this.rawPose = stepper.step(rest);
+    this.replaySteps(stepper, time, (dt) => { this.rawPose = stepper.step(dt); });
     if (this.rawPose !== null) this.setRawPose(this.rawPose);
+  }
+
+  private replaySteps(stepper: LiveTrack | LiveTracks, time: number, step: (dt: number) => void): void {
+    const steps = Math.floor(time / this.seekStep);
+    for (let i = 0; i < steps; i++) step(this.seekStep);
+    const rest = time - stepper.trackTime;
+    if (rest > 0) step(rest);
   }
 
   /** Adds a listener; returns a function that removes it. */

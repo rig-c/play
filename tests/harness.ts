@@ -21,6 +21,8 @@ import {
   type RegionImage,
   revokeRegions,
   RigPlayer,
+  type RigEnvironment,
+  type RigEnvironmentSchedule,
   type SlotIdentity,
   type SlotIdentityReason,
   type SlotIdentitySnapshot,
@@ -298,6 +300,8 @@ export interface RigPlayHarness {
   playerBasicsProbe(): Promise<PlayerBasicsProbeResult>;
   physicsClockProbe(): Promise<PhysicsClockProbeResult>;
   environmentProbe(): Promise<EnvironmentProbeResult>;
+  scheduledSeekProbe(rig: 'cloth' | 'held', tracks: boolean): ReturnType<typeof scheduledSeekProbe>;
+  runtimeScheduledSeekProbe(): ReturnType<typeof runtimeScheduledSeekProbe>;
   darkTintProbe(): Promise<DarkTintProbeResult>;
   darkDomPose(time: number): Promise<number>;
   setsProbe(): Promise<SetsProbeResult>;
@@ -7113,6 +7117,152 @@ async function environmentProbe(): Promise<EnvironmentProbeResult> {
   return { untouched, tips, throughCore, noPhysicsMaxDiff, beforePlay, afterHalf, afterNull };
 }
 
+function seekGeometry(player: RigPlayer) {
+  return {
+    time: player.time,
+    slots: player.posedFrame().order.map((slot) => ({
+      name: slot.slot,
+      kind: slot.kind,
+      xy: (slot.kind === 'region' ? slot.corners : slot.vertices).slice(),
+    })),
+  };
+}
+
+/** #265: compare scheduled seeks with ordinary advances on the same fixture. */
+async function scheduledSeekProbe(rig: 'cloth' | 'held', tracks: boolean) {
+  const assets = await loadRig(rig);
+  const animation = rig === 'cloth' ? 'hang' : tracks ? 'glide' : 'sway';
+  // The 3/4-step tail still spans at least one 60 Hz physics update.
+  const step = 1 / 30;
+  const earlyTime = (26 + 0.75) * step;
+  const lateTime = (68 + 0.75) * step;
+  const uncachedLegacyTime = lateTime + step / 5;
+  const standing: RigEnvironment = { wind: [-0.35, 0.2], gravity: [0.1, 1.6] };
+  const constant: RigEnvironment = { wind: [0.8, -0.25], gravity: [0.2, 2.1] };
+  const weather = (time: number, strength: number): RigEnvironment => ({
+    wind: [strength * (0.35 + 0.4 * time + (time > 0.5 && time < 1.5 ? 0.8 : 0)), 0.15 * time],
+    gravity: [0.1 * time, time > 1 ? 1.8 : 1.2],
+  });
+
+  function withPlayer<T>(run: (player: RigPlayer) => T, environment = standing): T {
+    const root = makeGlRoot();
+    const player = new RigPlayer(root, assets, { tracks, seekStep: step });
+    try {
+      player.environment(environment);
+      player.play(animation);
+      return run(player);
+    } finally {
+      player.dispose();
+      root.remove();
+    }
+  }
+
+  function forward(time: number, environmentAt?: RigEnvironmentSchedule, oneStepAhead = false) {
+    return withPlayer((player) => {
+      const starts: number[] = [];
+      const advance = (dt: number) => {
+        const start = player.time;
+        starts.push(start);
+        if (environmentAt) player.environment(environmentAt(oneStepAhead ? start + dt : start));
+        player.advance(dt);
+      };
+      const steps = Math.floor(time / step);
+      for (let i = 0; i < steps; i++) advance(step);
+      const rest = time - player.time;
+      if (rest > 0) advance(rest);
+      const pose = seekGeometry(player);
+      player.environment(standing);
+      player.advance(step);
+      return { starts, pose, continued: seekGeometry(player) };
+    });
+  }
+
+  try {
+    const earlyForward = forward(earlyTime, (time) => weather(time, 1));
+    const lateForward = forward(lateTime, (time) => weather(time, 1));
+    const shiftedForward = forward(lateTime, (time) => weather(time, 1), true);
+    const otherForward = forward(lateTime, (time) => weather(time, -1));
+    const changedForward = forward(lateTime, (time) => weather(time, 0.15));
+    const standingForward = forward(lateTime).pose;
+    const uncachedLegacyForward = forward(uncachedLegacyTime).pose;
+    const constantForward = forward(lateTime, () => constant).pose;
+    const constantLegacy = withPlayer((player) => {
+      player.seek(lateTime);
+      return seekGeometry(player);
+    }, constant);
+
+    return withPlayer((player) => {
+      const poser = player.poser;
+      const setup = seekGeometry(player);
+      const calls: number[] = [];
+      const record = (schedule: RigEnvironmentSchedule): RigEnvironmentSchedule => (time) => {
+        calls.push(time);
+        return schedule(time);
+      };
+      let strength = -1;
+      const gust = record((time) => weather(time, 1));
+      const otherGust = record((time) => weather(time, strength));
+      const seek = (time: number, environmentAt: RigEnvironmentSchedule) => {
+        player.seek(time, environmentAt);
+        return { calls: calls.splice(0), pose: seekGeometry(player) };
+      };
+      const legacy = (time: number) => {
+        player.seek(time);
+        return seekGeometry(player);
+      };
+
+      const legacyBefore = legacy(lateTime);
+      const zero = seek(0, gust);
+      const early = seek(earlyTime, gust);
+      const late = seek(lateTime, gust);
+      const restored = player.environment();
+      player.advance(step);
+      const continued = seekGeometry(player);
+      const other = seek(lateTime, otherGust);
+      strength = 0.15;
+      const changed = seek(lateTime, otherGust);
+      const legacyAfter = legacy(lateTime);
+      const uncachedLegacy = legacy(uncachedLegacyTime);
+      const rerun = seek(earlyTime, gust);
+      const constantSeek = seek(lateTime, record(() => constant));
+
+      return {
+        poser, setup, zero, early, late, earlyForward, lateForward, shiftedForward: shiftedForward.pose,
+        restored, standing, continued, other, otherForward: otherForward.pose, changed, changedForward: changedForward.pose, rerun,
+        standingForward, legacyBefore, legacyAfter, uncachedLegacyForward, uncachedLegacy,
+        constantSeek, constantLegacy, constantForward,
+      };
+    });
+  } finally {
+    assets.dispose();
+  }
+}
+
+/** A schedule must neither run on a runtime pose nor force it onto the oracle. */
+async function runtimeScheduledSeekProbe() {
+  const assets = await loadRig('walk');
+  const root = makeGlRoot();
+  const player = new RigPlayer(root, assets);
+  try {
+    player.play('walk');
+    const target = 0.9375;
+    player.seek(target);
+    const legacy = seekGeometry(player);
+    player.seek(0.3125);
+    const before = seekGeometry(player);
+    const calls: number[] = [];
+    player.seek(target, (time) => {
+      calls.push(time);
+      return { wind: [-2, 1], gravity: [1, 3] };
+    });
+    return { poser: player.poser, legacy, before, scheduled: seekGeometry(player), calls };
+  } finally {
+    player.dispose();
+    root.remove();
+    assets.dispose();
+  }
+}
+
 let drawContractLive: {
   assets: ModelAssets;
   player: RigPlayer;
@@ -10187,6 +10337,8 @@ window.rigPlayHarness = {
   canvasContractProbe,
   physicsScopeNativeAA, physicsScopeAB, physicsScopeContracts, physicsScopeShow,
   environmentProbe,
+  scheduledSeekProbe,
+  runtimeScheduledSeekProbe,
   physicsClockProbe,
   playerBasicsProbe,
   darkTintProbe,
