@@ -1124,6 +1124,17 @@ onto shared pages instead. Both play here, unchanged:
   `webglcontextrestored`, so the very next frame draws on `canvas2d`
   (`meshBackendActive` in `dom` mode, `backendActive` in `canvas` mode) and
   stays there.
+- `renderer.meshBackendFallbackReason` (DOM) and `renderer.backendFallbackReason`
+  (canvas) describe the last render's backend selection, including renders that
+  reuse a raster. Both are `WebGLFallbackReason | null`. The value is `null`
+  before the first render and whenever WebGL is selected successfully.
+
+  - `'not-requested'` means the caller chose `canvas2d`.
+  - `'creation-failed'` means shared WebGL initialization failed. That failure
+    is cached for this instance of the loaded module.
+  - `'context-lost'` means the shared WebGL context was lost.
+  - `'over-grant'` means WebGL could not draw this render within the usable
+    drawing buffer. Successful tiling stays on WebGL.
 - `renderer.triangleExpand` — how far (canvas px) each triangle edge's clip is
   moved outward to close antialiased mesh seams (default 0.5). Also re-rasters every mesh once when changed.
 - `renderer.meshSourceRect` — what a canvas2d mesh triangle is drawn from:

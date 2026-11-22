@@ -4,7 +4,7 @@ import { syncedPixelRatio } from './pixelRatio.js';
 import { clipThrough, REGION_TRIANGLES } from '@rig-c/core/core';
 import { defaultMeshSourceRect, drawTexturedTriangle, type MeshSourceRect } from './DomRenderer.js';
 import { type PageSource, straightAlphaSource } from './DomTexture.js';
-import { type FrameRun, getMeshGlBlitter, triangleReadSource } from './MeshGlBlitter.js';
+import { type FrameRun, getMeshGlBlitter, meshGlUnavailableReason, triangleReadSource, type WebGLFallbackReason } from './MeshGlBlitter.js';
 import type { BlendMode, PosedClip, PosedFrame, PosedSlot } from './posedFrame.js';
 
 /** What actually drew the last frame of a `CanvasRenderer`. */
@@ -91,6 +91,8 @@ export class CanvasRenderer {
   meshSourceRect: MeshSourceRect = defaultMeshSourceRect();
   /** What drew the last frame (or would have, had it not been reused). */
   backendActive: CanvasBackend = 'webgl';
+  /** Why the last render selected canvas2d. Null before rendering or when WebGL was selected. */
+  backendFallbackReason: WebGLFallbackReason | null = null;
   /** The visible canvas — the renderer's one element in the root. */
   readonly canvas: HTMLCanvasElement;
 
@@ -189,6 +191,8 @@ export class CanvasRenderer {
     this.clipSkipCount = 0;
     const blitter = this.backend === 'webgl' ? getMeshGlBlitter() : null;
     this.backendActive = blitter ? 'webgl' : 'canvas2d';
+    this.backendFallbackReason = blitter ? null
+      : this.backend === 'webgl' ? meshGlUnavailableReason() : 'not-requested';
     const order = frame.order;
 
     // The rect: the caller's, or the grow-only cover of what this frame draws.
@@ -222,12 +226,14 @@ export class CanvasRenderer {
 
     if (blitter) {
       this.buildVertices(order);
-      if (blitter.flushFrame({ canvas: this.canvas, width: this.backingW, height: this.backingH, data: this.data, stride: this.stride, runs: this.runs })) {
+      const reason = blitter.flushFrame({ canvas: this.canvas, width: this.backingW, height: this.backingH, data: this.data, stride: this.stride, runs: this.runs });
+      if (reason === null) {
         this.blits = 1;
         return;
       }
-      // Lost mid-frame: draw this frame on the fallback; the next render() re-selects.
+      // Draw this frame on the fallback; the next render() re-selects.
       this.backendActive = 'canvas2d';
+      this.backendFallbackReason = reason;
       this.sigLength = -1;
     }
     this.draw2d(order);

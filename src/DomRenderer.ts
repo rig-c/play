@@ -2,7 +2,7 @@ import { renderFrameOf } from './liveFrameSource.js';
 import type { LiveFrame } from './liveFrame.js';
 import { syncedPixelRatio } from './pixelRatio.js';
 import { type AtlasRegion, drawAtlasRegion, type PageSource, type RegionImage, straightAlphaSource } from './DomTexture.js';
-import { getMeshGlBlitter, triangleReadSource, type MeshBlitJob } from './MeshGlBlitter.js';
+import { getMeshGlBlitter, meshGlUnavailableReason, triangleReadSource, type MeshBlitJob, type WebGLFallbackReason } from './MeshGlBlitter.js';
 import type { BlendMode, PosedClip, PosedFrame, PosedMesh, PosedRegion, PosedSlot } from './posedFrame.js';
 
 /** Rasterizer used for the mesh (deform) tier. */
@@ -331,6 +331,8 @@ export class DomRenderer {
   meshBackend: MeshBackend = 'webgl';
   /** Backend that actually rasterized the mesh tier during the last render(). */
   meshBackendActive: MeshBackend = 'webgl';
+  /** Why the last render selected canvas2d for meshes. Null before rendering or when WebGL was selected. */
+  meshBackendFallbackReason: WebGLFallbackReason | null = null;
 
   private readonly views = new Map<string, SlotView>();
   /** Counts render() calls: the stamp a view drawn this frame carries (`SlotView.drawnIn`). */
@@ -473,6 +475,8 @@ export class DomRenderer {
     const stamp = ++this.frameNumber;
     const blitter = this.meshBackend === 'webgl' ? getMeshGlBlitter() : null;
     this.meshBackendActive = blitter ? 'webgl' : 'canvas2d';
+    this.meshBackendFallbackReason = blitter ? null
+      : this.meshBackend === 'webgl' ? meshGlUnavailableReason() : 'not-requested';
     const order = frame.order;
 
     // Whole-skeleton fast path: one clip covers every slot of the frame, so
@@ -504,10 +508,12 @@ export class DomRenderer {
     if (!this.clipOnRoot) this.releaseRootClip();
 
     if (this.pendingJobs.length) {
-      if (!blitter || !blitter.flush(this.pendingJobs)) {
-        // Context lost mid-frame: rasterize this batch on the 2d path so the
-        // frame stays complete; the next render() re-selects the backend.
+      const reason = blitter ? blitter.flush(this.pendingJobs) : this.meshBackendFallbackReason;
+      if (reason !== null) {
+        // Rasterize this batch on the 2d path so the frame stays complete;
+        // the next render() re-selects the backend.
         this.meshBackendActive = 'canvas2d';
+        this.meshBackendFallbackReason = reason;
         for (let i = 0; i < this.pendingJobs.length; i++) {
           const job = this.pendingJobs[i];
           this.pendingViews[i].meshBackendDrawn = 'canvas2d';

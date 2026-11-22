@@ -1,78 +1,54 @@
 import { expect, test } from '@playwright/test';
-
-/**
- * The element mode draws meshes through the shared WebGL context by default
- * (#109), and canvas2d is its fallback: with WebGL unavailable, and with the
- * context lost mid-play. `meshBackendActive` says which drew, and the meshes
- * still draw either way. The oracle for "still draws" is the mesh canvases'
- * non-transparent pixels, which have no counter.
- */
+import type { GlFallbackSample } from './harness';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/tests/harness.html');
   await page.waitForFunction(() => Boolean(window.rigPlayHarness));
 });
 
-test('a player draws its meshes through webgl by default', async ({ page }) => {
-  const r = await page.evaluate(() => window.rigPlayHarness.glFallbackProbe(false));
-  expect(r.meshBackend).toBe('webgl');
-  expect(r.firstActive).toBe('webgl');
-  expect(r.firstPixels).toBeGreaterThan(1000);
-  expect(r.afterActive).toBe('webgl');
-});
+function expectDraw(sample: GlFallbackSample, active: GlFallbackSample['active'], reason: GlFallbackSample['reason'], label: string) {
+  expect(sample.reason, `${label} reason`).toBe(reason);
+  expect(sample.active, `${label} backend`).toBe(active);
+  expect(sample.draws, `${label} draw count`).toBeGreaterThan(0);
+  expect(sample.pixels, `${label} non-transparent pixels`).toBeGreaterThan(1000);
+}
 
-test('WebGL unavailable: the default falls back to canvas2d and still draws', async ({ browser }) => {
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  await page.addInitScript(() => {
-    const original = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, ...rest: unknown[]) {
-      if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') return null;
-      return (original as (...a: unknown[]) => unknown).call(this, type, ...rest);
-    } as typeof original;
+for (const mode of ['dom', 'canvas'] as const) {
+  test(`${mode}: explicit 2D makes no WebGL request and a creation refusal is cached`, async ({ page }) => {
+    const r = await page.evaluate((mode) => window.rigPlayHarness.glCreationFallbackProbe(mode), mode);
+    expect(r.requested).toBe('webgl');
+    expect(r.initialReason).toBeNull();
+    expectDraw(r.explicit, 'canvas2d', 'not-requested', 'explicit Canvas2D');
+    expect(r.explicitAttempts).toBe(0);
+    expectDraw(r.blocked, 'canvas2d', 'creation-failed', 'initial creation refusal');
+    expect(r.blockedAttempts).toBe(1);
+    expectDraw(r.cached, 'canvas2d', 'creation-failed', 'same renderer after lifting refusal');
+    expectDraw(r.freshCached, 'canvas2d', 'creation-failed', 'fresh renderer after lifting refusal');
+    expect(r.attempts).toBe(1);
   });
-  await page.goto('/tests/harness.html');
-  await page.waitForFunction(() => Boolean(window.rigPlayHarness));
-  const r = await page.evaluate(() => window.rigPlayHarness.glFallbackProbe(false));
-  await context.close();
-  expect(r.meshBackend).toBe('webgl');
-  expect(r.firstActive).toBe('canvas2d');
-  expect(r.firstPixels).toBeGreaterThan(1000);
-  expect(r.afterActive).toBe('canvas2d');
-});
 
-test('context lost mid-play: the next frame draws on canvas2d, every mesh re-rastered', async ({ page }) => {
-  const r = await page.evaluate(() => window.rigPlayHarness.glFallbackProbe(true));
-  test.skip(r.firstActive !== 'webgl', 'no WebGL to lose');
-  expect(r.lost).toBe(true);
-  expect(r.lossDefaultPrevented).toBe(false);
-  expect(r.afterActive).toBe('canvas2d');
-  expect(r.afterMeshesDrawn).toBeGreaterThan(0);
-  expect(r.afterPixels).toBeGreaterThan(1000);
-  expect(r.restoredEventFired).toBe(true);
-  expect(r.restored).toBe(false);
-  expect(r.afterRestoreActive).toBe('canvas2d');
-  expect(r.afterRestoreMeshesDrawn).toBeGreaterThan(0);
-  expect(r.afterRestorePixels).toBeGreaterThan(1000);
-});
+  test(`${mode}: context loss is reported in the interrupted flush and stays diagnosed`, async ({ page }) => {
+    const r = await page.evaluate((mode) => window.rigPlayHarness.glLossFallbackProbe(mode), mode);
+    if (!r) throw new Error('No shared WebGL context to lose');
+    expectDraw(r.healthy, 'webgl', null, 'healthy WebGL');
+    expect(r.lostDuringDraw).toBe(true);
+    expect(r.beforeLossEvent).toBe(true);
+    expectDraw(r.immediate, 'canvas2d', 'context-lost', 'interrupted flush before the loss event');
+    expect(r.lossDefaultPrevented).toBe(false);
+    expectDraw(r.afterLoss, 'canvas2d', 'context-lost', 'after the loss event');
+    expect(r.retired).toBe(true);
+    expectDraw(r.afterRestore, 'canvas2d', 'context-lost', 'after a restore event');
+  });
 
-test('flush fallback (flush → false): meshBackendActive reports canvas2d for that frame and webgl after recovery (#138)', async ({ page }) => {
-  const r = await page.evaluate(() => window.rigPlayHarness.glFlushFallbackProbe());
-  test.skip(!r.webglAvailable, 'no WebGL available');
-  expect(r.initialActive).toBe('webgl');
-  expect(r.fallbackActive).toBe('canvas2d');
-  expect(r.fallbackMeshesDrawn).toBeGreaterThan(0);
-  expect(r.fallbackPixels).toBeGreaterThan(1000);
-  expect(r.recoveredActive).toBe('webgl');
-  expect(r.recoveredMeshesDrawn).toBeGreaterThan(0);
-  expect(r.recoveredPixels).toBeGreaterThan(1000);
-});
-
-test('negative control: with the fallback never taken, meshBackendActive stays webgl across 120 frames (#138)', async ({ page }) => {
-  const r = await page.evaluate(() => window.rigPlayHarness.glFlushFallbackProbe());
-  test.skip(!r.webglAvailable, 'no WebGL available');
-  expect(r.steadyFrames).toBe(120);
-  expect(r.steadyAllWebgl).toBe(true);
-  expect(r.steadyUniqueBackends).toEqual(['webgl']);
-});
-
+  test(`${mode}: tiling stays on WebGL and an unusable grant clears after recovery`, async ({ page }) => {
+    const { healthy, grant } = await page.evaluate((mode) => window.rigPlayHarness.glGrantFallbackProbe(mode), mode);
+    expectDraw(healthy, 'webgl', null, 'healthy WebGL');
+    if (!grant) throw new Error('No shared WebGL context for the grant probe');
+    expect(grant.steadyWebgl, 'WebGL active through 120 steady frames').toBe(true);
+    expect(grant.steadyNoReason, 'no diagnosis through 120 steady frames').toBe(true);
+    expect(grant.tiledJobs).toBeGreaterThan(0);
+    expectDraw(grant.tiled, 'webgl', null, 'successfully tiled WebGL');
+    expectDraw(grant.denied, 'canvas2d', 'over-grant', 'unusable grant');
+    expectDraw(grant.recovered, 'webgl', null, 'recovery at the same pose');
+  });
+}

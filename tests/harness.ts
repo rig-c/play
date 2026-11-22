@@ -25,6 +25,7 @@ import {
   type SlotIdentityReason,
   type SlotIdentitySnapshot,
   unpackRegions,
+  type WebGLFallbackReason,
 } from '../src/index';
 import { CanvasRenderer } from '../src/CanvasRenderer';
 import { DomRenderer } from '../src/DomRenderer';
@@ -293,8 +294,9 @@ export interface RigPlayHarness {
   slotFilterProbe(): Promise<SlotFilterProbeResult>;
   trackModeProbe(): Promise<TrackModeProbeResult>;
   alphaAdditiveProbe(): Promise<AlphaAdditiveProbeResult>;
-  glFallbackProbe(loseContext: boolean): Promise<GlFallbackProbeResult>;
-  glFlushFallbackProbe(): Promise<GlFlushFallbackProbeResult>;
+  glCreationFallbackProbe: typeof glCreationFallbackProbe;
+  glLossFallbackProbe: typeof glLossFallbackProbe;
+  glGrantFallbackProbe: typeof glGrantFallbackProbe;
   playerBasicsProbe(): Promise<PlayerBasicsProbeResult>;
   physicsClockProbe(): Promise<PhysicsClockProbeResult>;
   environmentProbe(): Promise<EnvironmentProbeResult>;
@@ -749,39 +751,13 @@ export interface PlayerBasicsProbeResult {
   queueClearDelayed: Array<{ at: number; animation: string | null }>;
 }
 
-export interface GlFallbackProbeResult {
-  /** The renderer's backend as a player made it, with no option set. */
-  meshBackend: string;
-  /** What drew the first frame, and how much of the mesh canvases it covered. */
-  firstActive: string;
-  firstPixels: number;
-  /** After the shared context is lost (when asked) and the rig steps on. */
-  lost: boolean;
-  lossDefaultPrevented: boolean;
-  afterActive: string;
-  afterPixels: number;
-  /** Meshes the frame after the loss re-rastered (the backend signature re-dirties them). */
-  afterMeshesDrawn: number;
-  /** After a webglcontextrestored event fires and the rig steps on again (#193). */
-  restoredEventFired: boolean;
-  restored: boolean;
-  afterRestoreActive: string;
-  afterRestorePixels: number;
-  afterRestoreMeshesDrawn: number;
-}
+type GlProbeMode = 'dom' | 'canvas';
 
-export interface GlFlushFallbackProbeResult {
-  webglAvailable: boolean;
-  initialActive: string;
-  fallbackActive: string;
-  fallbackPixels: number;
-  fallbackMeshesDrawn: number;
-  recoveredActive: string;
-  recoveredPixels: number;
-  recoveredMeshesDrawn: number;
-  steadyFrames: number;
-  steadyAllWebgl: boolean;
-  steadyUniqueBackends: string[];
+export interface GlFallbackSample {
+  active: 'webgl' | 'canvas2d';
+  reason: WebGLFallbackReason | null;
+  draws: number;
+  pixels: number;
 }
 
 export interface DarkTintProbeResult {
@@ -6447,156 +6423,188 @@ async function alphaAdditiveProbe(): Promise<AlphaAdditiveProbeResult> {
   };
 }
 
-/**
- * The element mode's default mesh backend is webgl (#109), and canvas2d its
- * fallback: with WebGL unavailable (the spec blocks the context before the page
- * loads) the first frame draws on canvas2d, and with the shared context lost
- * mid-play the next frame does. Either way the meshes still draw.
- */
-async function glFallbackProbe(loseContext: boolean): Promise<GlFallbackProbeResult> {
-  const assets = await loadRig('glow');
+function glFallbackPlayer(mode: GlProbeMode, assets: ModelAssets) {
   const root = makeGlRoot();
-  const player = new RigPlayer(root, assets);
-  const renderer = player.renderer as DomRenderer;
+  const player = new RigPlayer(root, assets, { mode });
+  const renderer = player.renderer;
   renderer.pixelRatio = 0.5;
-  const meshBackend = renderer.meshBackend;
   player.play('burn');
   player.seek(0.2);
-  player.draw();
-  const firstActive = renderer.meshBackendActive;
-  const firstPixels = meshPixels(root);
-  let lost = false;
-  let lossDefaultPrevented = false;
-  const blitter = loseContext
-    ? (getMeshGlBlitter() as unknown as { gl: WebGLRenderingContext; canvas: HTMLCanvasElement } | null)
-    : null;
-  if (blitter) {
-    const event = new Promise<Event>((resolve) =>
-      blitter.canvas.addEventListener('webglcontextlost', (e) => resolve(e), { once: true }),
-    );
-    blitter.gl.getExtension('WEBGL_lose_context')?.loseContext();
-    const lossEvent = await event;
-    lossDefaultPrevented = lossEvent.defaultPrevented;
-    lost = getMeshGlBlitter() === null;
-  }
-  player.frame(0.1);
-  const afterActive = renderer.meshBackendActive;
-  const afterPixels = meshPixels(root);
-  const afterMeshesDrawn = renderer.meshCount;
-  let restoredEventFired = false;
-  let restored = false;
-  let afterRestoreActive = afterActive;
-  let afterRestorePixels = afterPixels;
-  let afterRestoreMeshesDrawn = afterMeshesDrawn;
-  if (blitter) {
-    const restoreEvent = new Promise<void>((resolve) =>
-      blitter.canvas.addEventListener('webglcontextrestored', () => resolve(), { once: true }),
-    );
-    blitter.canvas.dispatchEvent(new Event('webglcontextrestored'));
-    await restoreEvent;
-    restoredEventFired = true;
-    restored = getMeshGlBlitter() !== null;
-    player.frame(0.1);
-    afterRestoreActive = renderer.meshBackendActive;
-    afterRestorePixels = meshPixels(root);
-    afterRestoreMeshesDrawn = renderer.meshCount;
-  }
-  player.dispose();
-  root.remove();
-  assets.dispose();
+  const active = () => renderer instanceof DomRenderer ? renderer.meshBackendActive : renderer.backendActive;
+  const reason = () => renderer instanceof DomRenderer ? renderer.meshBackendFallbackReason : renderer.backendFallbackReason;
   return {
-    meshBackend,
-    firstActive,
-    firstPixels,
-    lost,
-    lossDefaultPrevented,
-    afterActive,
-    afterPixels,
-    afterMeshesDrawn,
-    restoredEventFired,
-    restored,
-    afterRestoreActive,
-    afterRestorePixels,
-    afterRestoreMeshesDrawn,
+    player,
+    requested: renderer instanceof DomRenderer ? renderer.meshBackend : renderer.backend,
+    active,
+    reason,
+    backend(value: 'webgl' | 'canvas2d') {
+      if (renderer instanceof DomRenderer) renderer.meshBackend = value;
+      else renderer.backend = value;
+    },
+    draw(delta = 0, clear = false): GlFallbackSample {
+      // Clear the previous picture when a checkpoint must prove a new raster.
+      // Keep the backing and the renderer's dirty signature intact.
+      if (clear) {
+        for (const canvas of root.querySelectorAll('canvas')) {
+          canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+        }
+      }
+      player.frame(delta);
+      const draws = renderer instanceof DomRenderer
+        ? renderer.meshCount
+        : active() === 'webgl' ? renderer.blits : renderer.drawCalls;
+      return { active: active(), reason: reason(), draws, pixels: meshPixels(root) };
+    },
+    dispose() {
+      player.dispose();
+      root.remove();
+    },
   };
 }
 
-/**
- * When `MeshGlBlitter.flush` returns `false` mid-frame (#138), `DomRenderer`
- * rasterizes the queued meshes through Canvas2D and sets `meshBackendActive`
- * to `'canvas2d'` for that frame; once `flush` succeeds again on a later frame,
- * the backend signature re-dirties the meshes and `meshBackendActive` returns
- * to `'webgl'`. With the fallback never taken, `meshBackendActive` stays
- * `'webgl'` across 120 frames.
- */
-async function glFlushFallbackProbe(): Promise<GlFlushFallbackProbeResult> {
+async function glCreationFallbackProbe(mode: GlProbeMode) {
   const assets = await loadRig('glow');
-  const root = makeGlRoot();
-  const player = new RigPlayer(root, assets);
-  const renderer = player.renderer as DomRenderer;
-  renderer.pixelRatio = 0.5;
-  player.play('burn');
-  player.seek(0.2);
-  player.draw();
-  const initialActive = renderer.meshBackendActive;
-  const blitter = getMeshGlBlitter();
-  const webglAvailable = blitter !== null && initialActive === 'webgl';
-  let fallbackActive = initialActive;
-  let fallbackPixels = 0;
-  let fallbackMeshesDrawn = 0;
-  let recoveredActive = initialActive;
-  let recoveredPixels = 0;
-  let recoveredMeshesDrawn = 0;
-  if (blitter) {
-    const origFlush = blitter.flush.bind(blitter);
-    blitter.flush = () => false;
-    try {
-      player.frame(0.1);
-      fallbackActive = renderer.meshBackendActive;
-      fallbackPixels = meshPixels(root);
-      fallbackMeshesDrawn = renderer.meshCount;
-    } finally {
-      blitter.flush = origFlush;
+  const players: ReturnType<typeof glFallbackPlayer>[] = [];
+  const original = HTMLCanvasElement.prototype.getContext;
+  let attempts = 0;
+  let blockWebgl = true;
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, type: string, ...rest: unknown[]) {
+    if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+      attempts++;
+      if (blockWebgl) return null;
     }
-    // Even with dt = 0, the `'canvas2d'` drawn signature re-dirties the meshes
-    // when `meshBackendActive` returns to `'webgl'`.
-    player.frame(0);
-    recoveredActive = renderer.meshBackendActive;
-    recoveredPixels = meshPixels(root);
-    recoveredMeshesDrawn = renderer.meshCount;
-  }
-  player.dispose();
-  root.remove();
+    return (original as (...args: unknown[]) => unknown).call(this, type, ...rest);
+  } as typeof original;
+  try {
+    const subject = glFallbackPlayer(mode, assets);
+    players.push(subject);
+    const initialReason = subject.reason();
+    subject.backend('canvas2d');
+    const explicit = subject.draw();
+    const explicitAttempts = attempts;
+    subject.backend('webgl');
+    const blocked = subject.draw(0.1, true);
+    const blockedAttempts = attempts;
+    blockWebgl = false;
 
-  // Negative control: 120 frames with the fallback never taken.
-  const steadyRoot = makeGlRoot();
-  const steadyPlayer = new RigPlayer(steadyRoot, assets);
-  const steadyRenderer = steadyPlayer.renderer as DomRenderer;
-  steadyRenderer.pixelRatio = 0.5;
-  steadyPlayer.play('burn');
-  const steadyBackends: string[] = [];
-  for (let i = 0; i < 120; i++) {
-    steadyPlayer.frame(1 / 60);
-    steadyBackends.push(steadyRenderer.meshBackendActive);
+    // The browser is reachable again, but both callers share the cached refusal.
+    const cached = subject.draw(0.1, true);
+    const fresh = glFallbackPlayer(mode, assets);
+    players.push(fresh);
+    const freshCached = fresh.draw();
+    return {
+      requested: subject.requested, initialReason, explicit, explicitAttempts,
+      blocked, blockedAttempts, cached, freshCached, attempts,
+    };
+  } finally {
+    HTMLCanvasElement.prototype.getContext = original;
+    for (const player of players) player.dispose();
+    assets.dispose();
   }
-  steadyPlayer.dispose();
-  steadyRoot.remove();
-  assets.dispose();
+}
 
-  const steadyUniqueBackends = Array.from(new Set(steadyBackends));
-  return {
-    webglAvailable,
-    initialActive,
-    fallbackActive,
-    fallbackPixels,
-    fallbackMeshesDrawn,
-    recoveredActive,
-    recoveredPixels,
-    recoveredMeshesDrawn,
-    steadyFrames: steadyBackends.length,
-    steadyAllWebgl: steadyBackends.every((b) => b === 'webgl'),
-    steadyUniqueBackends,
-  };
+/** Restore an instance override without shadowing an inherited WebGL member. */
+function restoreGlProperty(gl: WebGLRenderingContext, key: string, own: PropertyDescriptor | undefined): void {
+  if (own) Object.defineProperty(gl, key, own);
+  else Reflect.deleteProperty(gl, key);
+}
+
+async function glLossFallbackProbe(mode: GlProbeMode) {
+  const assets = await loadRig('glow');
+  const subject = glFallbackPlayer(mode, assets);
+  try {
+    const healthy = subject.draw();
+    const blitter = getMeshGlBlitter() as unknown as { gl: WebGLRenderingContext; canvas: HTMLCanvasElement } | null;
+    if (!blitter) return null;
+    const { gl, canvas } = blitter;
+    const extension = gl.getExtension('WEBGL_lose_context');
+    if (!extension) throw new Error('WEBGL_lose_context is unavailable');
+
+    let lossEventSeen = false;
+    const lossEvent = new Promise<Event>((resolve) => {
+      canvas.addEventListener('webglcontextlost', (event) => {
+        lossEventSeen = true;
+        resolve(event);
+      }, { once: true });
+    });
+    const own = Object.getOwnPropertyDescriptor(gl, 'drawArrays');
+    const drawArrays = gl.drawArrays;
+    let requestedLoss = false;
+    let lostDuringDraw = false;
+    Object.defineProperty(gl, 'drawArrays', {
+      configurable: true,
+      value(drawMode: GLenum, first: GLint, count: GLsizei) {
+        drawArrays.call(gl, drawMode, first, count);
+        if (requestedLoss) return;
+        requestedLoss = true;
+        extension.loseContext();
+        lostDuringDraw = gl.isContextLost();
+      },
+    });
+    let immediate: GlFallbackSample;
+    try {
+      immediate = subject.draw(0.1, true);
+    } finally {
+      restoreGlProperty(gl, 'drawArrays', own);
+    }
+    if (!requestedLoss) throw new Error('The changed glow pose issued no WebGL draw');
+    const beforeLossEvent = !lossEventSeen;
+    const lossDefaultPrevented = (await lossEvent).defaultPrevented;
+    const afterLoss = subject.draw(0.1, true);
+    // A restore event does not revive the retired shared blitter (#193).
+    canvas.dispatchEvent(new Event('webglcontextrestored'));
+    const retired = getMeshGlBlitter() === null;
+    const afterRestore = subject.draw(0.1, true);
+    return { healthy, immediate, lostDuringDraw, beforeLossEvent, lossDefaultPrevented, afterLoss, retired, afterRestore };
+  } finally {
+    subject.dispose();
+    assets.dispose();
+  }
+}
+
+async function glGrantFallbackProbe(mode: GlProbeMode) {
+  const assets = await loadRig('glow');
+  const subject = glFallbackPlayer(mode, assets);
+  try {
+    const healthy = subject.draw();
+    const blitter = getMeshGlBlitter();
+    if (!blitter) return { healthy, grant: null };
+    let steadyWebgl = true;
+    let steadyNoReason = true;
+    for (let i = 0; i < 120; i++) {
+      subject.player.frame(1 / 60);
+      steadyWebgl = steadyWebgl && subject.active() === 'webgl';
+      steadyNoReason = steadyNoReason && subject.reason() === null;
+    }
+
+    blitter.limitForTesting({ width: 128, height: 64 });
+    let tiled: GlFallbackSample;
+    let tiledJobs: number;
+    try {
+      tiled = subject.draw(0.1, true);
+      tiledJobs = blitter.stats.tiledJobs;
+    } finally {
+      blitter.limitForTesting(null);
+    }
+
+    const { gl } = blitter as unknown as { gl: WebGLRenderingContext };
+    const key = 'drawingBufferWidth';
+    const own = Object.getOwnPropertyDescriptor(gl, key);
+    // The real reserve/acquire path rejects even the currently held buffer.
+    Object.defineProperty(gl, key, { configurable: true, get: () => 0 });
+    let denied: GlFallbackSample;
+    try {
+      denied = subject.draw(0.1, true);
+    } finally {
+      restoreGlProperty(gl, key, own);
+    }
+    // The backend change must invalidate the fallback raster at the same pose.
+    const recovered = subject.draw(0, true);
+    return { healthy, grant: { steadyWebgl, steadyNoReason, tiled, tiledJobs, denied, recovered } };
+  } finally {
+    subject.dispose();
+    assets.dispose();
+  }
 }
 
 /**
@@ -10191,8 +10199,9 @@ window.rigPlayHarness = {
   playerBasicsProbe,
   darkTintProbe,
   darkDomPose,
-  glFallbackProbe,
-  glFlushFallbackProbe,
+  glCreationFallbackProbe,
+  glLossFallbackProbe,
+  glGrantFallbackProbe,
   alphaAdditiveProbe,
   trackModeProbe,
   slotFilterProbe,
