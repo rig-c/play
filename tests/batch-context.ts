@@ -108,11 +108,11 @@ export async function batchContextProbe(ratio: number) {
       for (const job of jobs) if (job.uvs === common.uvs) commonCanvases.add(job.canvas);
       probe.canvas.width = 512;
       probe.canvas.height = 3328;
-      const ok = originalFlush.call(this, jobs);
-      if (!ok) throw new Error('batch-context probe fell back from WebGL');
+      const reason = originalFlush.call(this, jobs);
+      if (reason !== null) throw new Error(`batch-context probe fell back from WebGL: ${reason}`);
       const i = jobs.findIndex((job) => commonCanvases.has(job.canvas));
       if (i >= 0) packs.push({ common: [probe.packX[i], probe.packY[i]], target: [probe.canvas.width, probe.canvas.height] });
-      return ok;
+      return reason;
     };
     const cold = make();
     const a = draw(cold, alone);

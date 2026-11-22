@@ -68,6 +68,11 @@ export function triangleReadSource(source: ArrayLike<number>): ArrayLike<number>
   return kept;
 }
 
+/** Why a renderer selected Canvas2D for its last render. */
+export type WebGLFallbackReason = 'creation-failed' | 'context-lost' | 'over-grant' | 'not-requested';
+
+type FlushFallback = 'context-lost' | 'over-grant';
+
 export interface MeshBlitJob {
   /** Destination per-part canvas; the blit clears its full backing first. */
   canvas: HTMLCanvasElement;
@@ -428,9 +433,8 @@ class MeshGlBlitter {
   }
 
   /**
-   * Rasterizes every job and blits it onto its per-part canvas. Returns false
-   * only when the context is lost, so that the caller draws the batch on its
-   * canvas2d path; a batch's size never sends it there.
+   * Rasterizes every job and blits it onto its per-part canvas. Returns null
+   * on success, or the reason the caller needs to draw on its canvas2d path.
    *
    * A batch that fits one buffer is one pass, shelf-packed as it always was.
    * One that does not — a zoomed-in stage asks for more than the browser
@@ -447,10 +451,10 @@ class MeshGlBlitter {
    * matching sub-rect of the part canvas — so a pixel does not depend on how
    * its job was packed, which pass drew it, or how it was tiled.
    */
-  flush(jobs: MeshBlitJob[]): boolean {
+  flush(jobs: MeshBlitJob[]): FlushFallback | null {
     const gl = this.gl;
     this.stats = { jobs: jobs.length, passes: 0, pieces: 0, tiledJobs: 0 };
-    if (this.lost || gl.isContextLost()) return false;
+    if (this.lost || gl.isContextLost()) return 'context-lost';
 
     // One pass if the buffer holds the whole batch: every job whole, shelf-packed.
     let width = Math.max(512, this.canvas.width);
@@ -458,9 +462,9 @@ class MeshGlBlitter {
     let pieces: Piece[] = jobs.map((job, i) => ({ job: i, tx: 0, ty: 0, tw: job.width, th: job.height, bx: 0, by: 0, pass: 0 }));
     const height = shelfPack(pieces, width, Number.POSITIVE_INFINITY);
     if (!this.reserve(width, height)) {
-      if (!this.acquire(width, height)) return false;
+      if (!this.acquire(width, height)) return this.bufferFallback();
       const planned = this.plan(jobs, this.canvas.width, this.canvas.height);
-      if (!planned) return false;
+      if (!planned) return this.bufferFallback();
       pieces = planned;
     }
     // Where each job's first piece went, for whoever reads the packing.
@@ -523,7 +527,7 @@ class MeshGlBlitter {
       // before blitting stale/blank rects onto the part canvases.
       if (gl.isContextLost()) {
         this.markLost();
-        return false;
+        return 'context-lost';
       }
 
       // Blit each piece onto its per-part canvas: same-task read (no
@@ -555,7 +559,11 @@ class MeshGlBlitter {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, jobs[i].canvas.width, jobs[i].canvas.height);
     }
-    return true;
+    return null;
+  }
+
+  private bufferFallback(): FlushFallback {
+    return this.gl.isContextLost() ? 'context-lost' : 'over-grant';
   }
 
   /**
@@ -728,23 +736,22 @@ class MeshGlBlitter {
 
   /**
    * Draws one player's frame (the canvas render mode) and blits it onto
-   * `job.canvas`, whose full backing is cleared first. Returns false only when
-   * the context is lost, so the caller draws the frame on its canvas2d
-   * fallback. The frame is one job: drawn into one rect when the buffer holds
-   * it, otherwise tiled through passes exactly as flush() tiles a mesh, every
-   * tile re-issuing the frame's runs under its own scissor.
+   * `job.canvas`, whose full backing is cleared first. Returns null on success
+   * or a canvas2d fallback reason. The frame is one job, drawn into one rect
+   * if it fits, otherwise tiled through passes exactly as flush() tiles a mesh.
+   * Every tile re-issues the frame's runs under its own scissor.
    */
-  flushFrame(job: FrameJob): boolean {
+  flushFrame(job: FrameJob): FlushFallback | null {
     const gl = this.gl;
     this.stats = { jobs: 1, passes: 0, pieces: 0, tiledJobs: 0 };
-    if (this.lost || gl.isContextLost()) return false;
+    if (this.lost || gl.isContextLost()) return 'context-lost';
     let pieces: Piece[];
     if (this.reserve(job.width + GUTTER * 2, job.height + GUTTER * 2)) {
       pieces = [{ job: 0, tx: 0, ty: 0, tw: job.width, th: job.height, bx: GUTTER, by: GUTTER, pass: 0 }];
     } else {
-      if (!this.acquire(job.width + GUTTER * 2, job.height + GUTTER * 2)) return false;
+      if (!this.acquire(job.width + GUTTER * 2, job.height + GUTTER * 2)) return this.bufferFallback();
       const planned = this.plan([job], this.canvas.width, this.canvas.height);
-      if (!planned) return false;
+      if (!planned) return this.bufferFallback();
       pieces = planned;
     }
     const bufH = this.canvas.height;
@@ -786,7 +793,7 @@ class MeshGlBlitter {
       }
       if (gl.isContextLost()) {
         this.markLost();
-        return false;
+        return 'context-lost';
       }
       // Same-task read, 1:1 device px.
       if (ctx) {
@@ -806,7 +813,7 @@ class MeshGlBlitter {
     }
     this.stats.pieces = pieces.length;
     if (ctx && !cleared) ctx.clearRect(0, 0, job.canvas.width, job.canvas.height);
-    return true;
+    return null;
   }
 
   /** The mesh tier's layout, [x, y, u, v], and its premultiplied source-over. */
@@ -994,4 +1001,9 @@ export function getMeshGlBlitter(): MeshGlBlitter | null {
     }
   }
   return shared && !shared.lost ? shared : null;
+}
+
+/** The reason for a null result from getMeshGlBlitter(). */
+export function meshGlUnavailableReason(): 'creation-failed' | 'context-lost' {
+  return shared?.lost ? 'context-lost' : 'creation-failed';
 }
