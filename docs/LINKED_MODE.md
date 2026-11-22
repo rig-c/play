@@ -1,12 +1,12 @@
 # Linked Source Development (`@rig-c/source`)
 
-`@rig-c/play` ships a built bundle and declaration set (`dist/index.js` and `dist/*.d.ts`) in its published tarball (`files` in `package.json`). Default package resolution (`import` and `types` conditions) always selects `./dist/index.js` and `./dist/index.d.ts`, and `src/` is not included in the published archive.
+`@rig-c/play` ships a built bundle and declaration set (`dist/index.js` and `dist/*.d.ts`) in its published tarball (`files` in `package.json`). The published manifest exposes `./dist/index.js` for `import` and `./dist/index.d.ts` for `types`. Installed releases use these entries even when the consumer enables `@rig-c/source` for other packages.
 
 In a linked workspace checkout where `@rig-c/play` is consumed directly from source without building `dist/`, enable the explicit `@rig-c/source` package export condition in the consuming tool.
 
 ## Package Export Contract
 
-`package.json` defines:
+The checkout's `package.json` defines:
 
 ```json
 {
@@ -24,7 +24,8 @@ In a linked workspace checkout where `@rig-c/play` is consumed directly from sou
 
 - **Default installed mode (no custom condition):** Node.js, Bun, TypeScript (`bundler` and `nodenext`), and Vite ignore `@rig-c/source` and resolve `./dist/index.d.ts` / `./dist/index.js`.
 - **Explicit linked source mode (`@rig-c/source` enabled):** Resolvers select `./src/index.ts` directly without requiring `dist/` to exist or be rebuilt on source edits.
-- **Missing-source behavior:** Because `src/` is absent from the published tarball, enabling `@rig-c/source` against a packed/installed package causes Node.js, Bun, and Vite to fail module resolution immediately (their `exports` resolvers treat the first matched condition as terminal and do not fall back to `dist/index.js`). TypeScript's `exports` resolver logs `Failed to resolve under condition '@rig-c/source'` under `--traceResolution` and falls through to `types` (`./dist/index.d.ts`) when `dist/` is present, and fails with `TS2307` in a linked checkout where both `src/index.ts` and `dist/` are absent.
+- **Published package:** The release packer removes the checkout-only condition from the staged manifest. The installed package resolves to `dist/` with either condition set.
+- **Incomplete linked checkout:** Source mode needs `src/index.ts` and its dependencies. If both the source and built entries are missing, resolution fails.
 
 ## Consumer Wiring
 

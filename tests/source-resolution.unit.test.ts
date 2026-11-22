@@ -23,13 +23,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tscBin = resolve(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
 
 let sandbox = '';
-let pkgDist = '';
 
 function ensureSandbox(): void {
   if (sandbox) return;
   sandbox = mkdtempSync(resolve(tmpdir(), 'play-source-res-'));
-  const pkgRoot = resolve(sandbox, 'node_modules', '@rig-c', 'play');
-  pkgDist = resolve(pkgRoot, 'dist');
+  const pkgRoot = resolve(sandbox, 'release-input');
+  const pkgDist = resolve(pkgRoot, 'dist');
   mkdirSync(pkgRoot, { recursive: true });
 
   const built = spawnSync('node', [resolve(repoRoot, 'scripts', 'build-lib.mjs'), pkgDist], {
@@ -38,11 +37,25 @@ function ensureSandbox(): void {
   });
   assert.equal(built.status, 0, `scripts/build-lib.mjs failed:\n${built.stdout}${built.stderr}`);
 
-  cpSync(resolve(repoRoot, 'package.json'), resolve(pkgRoot, 'package.json'));
+  for (const file of ['package.json', 'LICENSE', 'NOTICE.md', 'README.md', 'skills']) {
+    cpSync(resolve(repoRoot, file), resolve(pkgRoot, file), { recursive: true });
+  }
+  const packed = spawnSync('node', [resolve(repoRoot, 'scripts', 'pack-release.mjs'), resolve(sandbox, 'tarballs'), pkgRoot], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  assert.equal(packed.status, 0, packed.stdout + packed.stderr);
+  assert.deepEqual(readFileSync(resolve(pkgRoot, 'package.json')), readFileSync(resolve(repoRoot, 'package.json')));
+
   writeFileSync(
     resolve(sandbox, 'package.json'),
     `${JSON.stringify({ name: 'play-consumer', private: true, type: 'module' }, null, 2)}\n`,
   );
+  const installed = spawnSync('npm', [
+    'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
+    '--package-lock=false', packed.stdout.trim(),
+  ], { cwd: sandbox, encoding: 'utf8' });
+  assert.equal(installed.status, 0, installed.stdout + installed.stderr);
 }
 
 function stripComments(source: string): string {
@@ -196,138 +209,89 @@ test(
 });
 
 test(
-  'default installed mode resolves dist in Node, Bun, TypeScript and Vite, and refuses missing src under @rig-c/source',
+  'installed release resolves the same dist API with and without the linked source condition',
   { timeout: 60_000 },
   async () => {
     ensureSandbox();
-  const nodeDefault = spawnSync(
-    'node',
-    [
-      '--input-type=module',
-      '-e',
-      "const m = await import('@rig-c/play'); console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play'), keys: Object.keys(m).sort() }));",
-    ],
-    { cwd: sandbox, encoding: 'utf8' },
-  );
-  assert.equal(nodeDefault.status, 0, nodeDefault.stderr);
-  const nodeData = JSON.parse(nodeDefault.stdout) as { resolved: string; keys: string[] };
-  assert.match(nodeData.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
-  assert.deepEqual(nodeData.keys, [
-    'CanvasRenderer',
-    'DomRenderer',
-    'RigPlayer',
-    'createAtlasRegions',
-    'loadModel',
-    'readSetupMesh',
-    'revokeRegions',
-    'unpackRegions',
-  ]);
-
-  const bunDefault = spawnSync(
-    'bun',
-    ['-e', "console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play') }))"],
-    { cwd: sandbox, encoding: 'utf8' },
-  );
-  assert.equal(bunDefault.status, 0, bunDefault.stderr);
-  assert.match(
-    (JSON.parse(bunDefault.stdout) as { resolved: string }).resolved.replaceAll('\\', '/'),
-    /\/node_modules\/@rig-c\/play\/dist\/index\.js$/,
-  );
-
-  writeFileSync(
-    resolve(sandbox, 'consumer-default.ts'),
-    "import { RigPlayer, type ModelAssets } from '@rig-c/play';\nexport function check(root: HTMLElement, assets: ModelAssets): RigPlayer { return new RigPlayer(root, assets); }\n",
-  );
-  for (const [mode, moduleName] of [
-    ['bundler', 'ESNext'],
-    ['nodenext', 'NodeNext'],
-  ] as const) {
-    const cfg = resolve(sandbox, `tsconfig.default.${mode}.json`);
-    writeFileSync(
-      cfg,
-      JSON.stringify({
-        compilerOptions: {
-          target: 'ES2022',
-          module: moduleName,
-          moduleResolution: mode,
-          lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-          strict: true,
-          noEmit: true,
-          skipLibCheck: false,
-        },
-        files: ['consumer-default.ts'],
-      }),
-    );
-    const tscRes = spawnSync('node', [tscBin, '--noEmit', '--listFiles', '-p', cfg], {
-      cwd: sandbox,
-      encoding: 'utf8',
+    const pkg = resolve(sandbox, 'node_modules/@rig-c/play');
+    const manifest = JSON.parse(readFileSync(resolve(pkg, 'package.json'), 'utf8'));
+    assert.deepEqual(manifest.exports, {
+      '.': { types: './dist/index.d.ts', import: './dist/index.js' },
     });
-    assert.equal(tscRes.status, 0, tscRes.stdout + tscRes.stderr);
-    assert.match(tscRes.stdout.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.d\.ts/);
-  }
+    assert.equal(existsSync(resolve(pkg, 'src')), false);
+    const entry = resolve(sandbox, 'consumer.ts');
+    writeFileSync(entry,
+      "import { RigPlayer, type ModelAssets } from '@rig-c/play';\nexport function check(root: HTMLElement, assets: ModelAssets): RigPlayer { return new RigPlayer(root, assets); }\n",
+    );
 
-  // Negative missing-source refusal: when src/index.ts is absent (as in an installed package), @rig-c/source must fail rather than falling back to dist/.
-  const nodeMissing = spawnSync(
-    'node',
-    ['--conditions=@rig-c/source', '--input-type=module', '-e', "await import('@rig-c/play')"],
-    { cwd: sandbox, encoding: 'utf8' },
-  );
-  assert.notEqual(nodeMissing.status, 0);
-  assert.match(nodeMissing.stderr, /src\/index\.ts/);
+    const probe = "const m = await import('@rig-c/play'); console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play'), keys: Object.keys(m).sort() }));";
+    for (const source of [false, true]) {
+      const flags = source ? ['--conditions=@rig-c/source'] : [];
+      for (const [runtime, args] of [['node', ['--input-type=module']], ['bun', []]] as const) {
+        const result = spawnSync(runtime, [...flags, ...args, '-e', probe], { cwd: sandbox, encoding: 'utf8' });
+        assert.equal(result.status, 0, result.stderr);
+        const data = JSON.parse(result.stdout) as { resolved: string; keys: string[] };
+        assert.match(data.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
+        assert.deepEqual(data.keys, [
+          'CanvasRenderer', 'DomRenderer', 'RigPlayer', 'createAtlasRegions',
+          'loadModel', 'readSetupMesh', 'revokeRegions', 'unpackRegions',
+        ]);
+      }
 
-  const bunMissing = spawnSync(
-    'bun',
-    ['--conditions=@rig-c/source', '-e', "await import('@rig-c/play')"],
-    { cwd: sandbox, encoding: 'utf8' },
-  );
-  assert.notEqual(bunMissing.status, 0);
+      for (const [moduleResolution, module] of [['bundler', 'ESNext'], ['nodenext', 'NodeNext']] as const) {
+        const cfg = resolve(sandbox, 'tsconfig.json');
+        writeFileSync(cfg, JSON.stringify({
+          compilerOptions: {
+            target: 'ES2022', module, moduleResolution, lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+            strict: true, noEmit: true, customConditions: source ? ['@rig-c/source'] : [],
+          },
+          files: ['consumer.ts'],
+        }));
+        const result = spawnSync('node', [tscBin, '--listFiles', '--traceResolution', '-p', cfg], {
+          cwd: sandbox, encoding: 'utf8',
+        });
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        assert.match(result.stdout, /Module name '@rig-c\/play' was successfully resolved to '.*\/dist\/index\.d\.ts'/);
+        assert.doesNotMatch(result.stdout, /Failed to resolve under condition '@rig-c\/source'/);
+      }
 
-  const missingTsconfig = resolve(sandbox, 'tsconfig.missing-src.json');
-  writeFileSync(
-    missingTsconfig,
-    JSON.stringify({
-      compilerOptions: {
-        target: 'ES2022',
-        module: 'ESNext',
-        moduleResolution: 'bundler',
-        customConditions: ['@rig-c/source'],
-        allowImportingTsExtensions: true,
-        lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-        strict: true,
-        noEmit: true,
-      },
-      files: ['consumer-default.ts'],
-    }),
-  );
-  const tscMissing = spawnSync('node', [tscBin, '--noEmit', '--traceResolution', '-p', missingTsconfig], {
-    cwd: sandbox,
-    encoding: 'utf8',
-  });
-  assert.match(tscMissing.stdout + tscMissing.stderr, /Failed to resolve under condition '@rig-c\/source'/);
+      const vite = await viteBuild({
+        root: sandbox, configFile: false, logLevel: 'silent',
+        resolve: { conditions: source ? ['@rig-c/source', ...defaultClientConditions] : [...defaultClientConditions] },
+        build: { write: false, lib: { entry, formats: ['es'], fileName: 'out' } },
+      });
+      const outputs = Array.isArray(vite) ? vite : [vite];
+      assert(outputs.some((result) => 'output' in result && result.output.some(
+        (chunk) => chunk.type === 'chunk' && Object.keys(chunk.modules).some(
+          (id) => id.endsWith('/node_modules/@rig-c/play/dist/index.js'),
+        ),
+      )));
+    }
 
-  await assert.rejects(() =>
-    viteBuild({
-      root: sandbox,
-      configFile: false,
-      logLevel: 'silent',
-      resolve: { conditions: ['@rig-c/source', ...defaultClientConditions] },
-      build: {
-        write: false,
-        lib: {
-          entry: resolve(sandbox, 'consumer-default.ts'),
-          formats: ['es'],
-          fileName: () => 'out.js',
-        },
-      },
-    }),
-  );
-});
+    // Plant the old dangling export in the installed copy. The default
+    // import above still works, so this control exercises condition selection.
+    const manifestPath = resolve(pkg, 'package.json');
+    const original = readFileSync(manifestPath, 'utf8');
+    writeFileSync(manifestPath, JSON.stringify({
+      ...manifest, exports: { '.': { '@rig-c/source': './src/index.ts', ...manifest.exports['.'] } },
+    }));
+    try {
+      const missing = spawnSync('node', ['--conditions=@rig-c/source', '--input-type=module', '-e', probe], {
+        cwd: sandbox, encoding: 'utf8',
+      });
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.stderr, /ERR_MODULE_NOT_FOUND/);
+      assert.match(missing.stderr, /src\/index\.ts/);
+    } finally {
+      writeFileSync(manifestPath, original);
+    }
+  },
+);
 
 test(
   'explicit @rig-c/source mode resolves src/index.ts without dist and observes live synthetic edits',
   { timeout: 60_000 },
   async () => {
-    ensureSandbox();
   const linkedRoot = mkdtempSync(resolve(tmpdir(), 'play-linked-'));
   try {
     const linkedPlay = resolve(linkedRoot, 'play-checkout');
@@ -451,7 +415,7 @@ test(
     assert.match(bundleCode, /observed-without-dist-build/);
     assert.match(bundleCode, /class RigPlayer/);
 
-    // Negative missing-source refusal in linked workspace (no dist/, src/index.ts removed): tsc, Bun and Vite all refuse.
+    // TypeScript refuses a linked checkout with neither source nor dist.
     rmSync(tempIndex);
     const tscLinkedMissing = spawnSync('node', [tscBin, '--noEmit', '-p', linkedTsconfig], {
       cwd: consumerDir,

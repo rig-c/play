@@ -92,8 +92,8 @@ jobs:
           npm run build:lib
           dest="$(mktemp -d)"
           trap 'rm -rf "$dest"' EXIT
-          npm pack --pack-destination "$dest"
-          node scripts/install-smoke.mjs --tarball "$dest"/*.tgz
+          tarball="$(node scripts/pack-release.mjs "$dest")"
+          node scripts/install-smoke.mjs --tarball "$tarball"
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           npm run build:lib
-          npm pack --dry-run --json
+          tarball="$(node scripts/pack-release.mjs "$RUNNER_TEMP/canonical")"
           for alias in rig-play spine-html; do
-            node scripts/alias-tarball.mjs pack --alias "$alias" --out "$RUNNER_TEMP/alias-$alias"
+            node scripts/alias-tarball.mjs pack --alias "$alias" --out "$RUNNER_TEMP/alias-$alias" --tarball "$tarball"
           done

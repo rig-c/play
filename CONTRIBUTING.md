@@ -24,7 +24,7 @@ node --test scripts/check-readme.test.mjs
 bun test scripts/release-workflow.test.ts
 bun run build
 bun run build:lib
-npm pack --dry-run
+node scripts/pack-release.mjs "$(mktemp -d)"
 ```
 
 Browser verification runs through Playwright over headless Chromium and WebKit (install browsers with `PLAYWRIGHT_SKIP_BROWSER_GC=1 bunx playwright install chromium webkit`; set a distinct `TEST_PORT` when running multiple checkouts):

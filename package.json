@@ -71,7 +71,7 @@
     "prebuild": "bash scripts/fetch-assets.sh",
     "build": "tsc --noEmit && vite build",
     "build:lib": "rm -rf dist && node scripts/build-lib.mjs dist",
-    "prepublishOnly": "npm run build:lib",
+    "prepublishOnly": "node -e \"console.error('Publish the release tarball produced by scripts/pack-release.mjs. See RELEASING.md.'); process.exit(1)\"",
     "preview": "vite preview",
     "test": "playwright test",
     "bench": "bash scripts/fetch-assets.sh && node scripts/bench.mjs",

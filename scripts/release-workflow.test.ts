@@ -26,7 +26,7 @@ const canonicalRecovery = 'gh workflow run release.yml --repo rig-c/play --ref v
 const aliasRecovery = (names: string) => 'gh workflow run release.yml --repo rig-c/play --ref v1.12.0 -f alias_version=1.12.0 -f alias_names=' + names.replaceAll(' ', '\\ ');
 const sourceGuard = (s: Step) => s.name === 'Verify the dispatched source commit';
 const resolver = workflow.jobs.release.steps.find((s: Step) => s.id === 'target') as Step;
-const originalSteps = workflow.jobs.release.steps.filter((s: Step) => !sourceGuard(s) && s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
+const publicationSteps = workflow.jobs.release.steps.filter((s: Step) => !sourceGuard(s) && s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
 
 // The mock never delegates npm/gh/bun/git to the host. Only node's local JSON checks
 // reach a real interpreter; alias pack/compare are recorded stand-ins here.
@@ -101,18 +101,14 @@ if (command === 'npm') {
     console.log(version); process.exit(0);
   }
   if (args[0] === 'install' || args[0] === '--version') process.exit(0);
+  if (args.join(' ') === 'run build:lib') {
+    if (config.buildFails) process.exit(1);
+    state.built = true; save(); process.exit(0);
+  }
   if (args[0] === 'publish') {
-    if (!args.includes('--provenance') || !args.includes('--access') || !args.includes('public')) fail('publish lost provenance/access');
-    let name;
-    if (args[1] === '--provenance') {
-      const p = JSON.parse(readFileSync('package.json', 'utf8'));
-      record('prepublishOnly', [p.scripts.prepublishOnly]);
-      if (config.buildFails) process.exit(1);
-      name = p.name;
-    } else {
-      if (!args.includes('--ignore-scripts')) fail('alias lifecycle scripts enabled');
-      name = JSON.parse(readFileSync(args[1], 'utf8')).name;
-    }
+    if (JSON.stringify(args.slice(2)) !== JSON.stringify(['--provenance','--access','public','--ignore-scripts'])) fail('publish lost provenance/access or enabled lifecycle scripts');
+    const {name} = JSON.parse(readFileSync(args[1], 'utf8'));
+    if (name === '@rig-c/play' && args[1] !== state.canonicalTarball) fail('wrong canonical publish input');
     if (state.served.includes(name)) fail('attempted duplicate publish');
     state.served.push(name); save(); record('published', [name]); process.exit(0);
   }
@@ -136,14 +132,28 @@ if (command === 'node') {
     const result = spawnSync(process.env.MOCK_REAL_NODE, args, {stdio:'inherit', env:process.env});
     process.exit(result.status ?? 1);
   }
+  if (args[0] === 'scripts/pack-release.mjs') {
+    if (!state.built) fail('pack before library build');
+    if (config.packFails) process.exit(1);
+    const dir = args[1];
+    mkdirSync(dir, {recursive:true});
+    const file = join(dir, 'canonical.tgz');
+    const {name, version} = JSON.parse(readFileSync('package.json', 'utf8'));
+    writeFileSync(file, JSON.stringify({name, version}));
+    state.canonicalTarball = file; save(); console.log(file); process.exit(0);
+  }
   if (args[0] === 'scripts/alias-tarball.mjs') {
     if (args[1] === 'pack') {
       const name = args[args.indexOf('--alias') + 1];
       if (!['rig-play', 'spine-html'].includes(name)) fail('unknown alias');
+      const input = args[args.indexOf('--tarball') + 1];
+      if (!args.includes('--tarball') || (state.canonicalTarball && input !== state.canonicalTarball)) fail('wrong alias source tarball');
+      const canonical = JSON.parse(readFileSync(input, 'utf8'));
+      if (canonical.name !== '@rig-c/play') fail('alias source must be canonical');
       const dest = args[args.indexOf('--out') + 1];
       mkdirSync(dest, {recursive:true});
       const file = join(dest, name + '.tgz');
-      writeFileSync(file, JSON.stringify({name, version:JSON.parse(readFileSync('package.json', 'utf8')).version})); console.log(file); process.exit(0);
+      writeFileSync(file, JSON.stringify({name, version:canonical.version})); console.log(file); process.exit(0);
     }
     if (args[1] === 'compare') {
       const a = JSON.parse(readFileSync(args[2], 'utf8'));
@@ -161,7 +171,7 @@ type Scenario = {
   event?: string; tag?: string; aliasVersion?: string;
   aliasNames?: string; ref?: string; served?: string[]; registryError?: string;
   registryMalformed?: boolean; packageVersion?: string;
-  packageName?: string; buildFails?: boolean; shallow?: string; gitQueryFails?: boolean;
+  packageName?: string; buildFails?: boolean; packFails?: boolean; shallow?: string; gitQueryFails?: boolean;
   gitFetchFails?: boolean; ancestryStatus?: number; runSha?: string; headSha?: string; headQueryFails?: boolean;
   resolvedSha?: string; commitLookupFails?: boolean; recording?: string;
   movedTagSha?: string;
@@ -275,7 +285,7 @@ function exercise(config: Scenario = {}, workflowFile?: string) {
 }
 const published = (r: ReturnType<typeof exercise>) => r.calls.filter(c => c.command === 'published').map(c => c.args[0]);
 function noInstallOrPublish(r: ReturnType<typeof exercise>) {
-  expect(r.calls.filter(c => c.command === 'npm' && ['install','publish'].includes(c.args[0]) || c.command === 'bun' || c.command === 'prepublishOnly')).toEqual([]);
+  expect(r.calls.filter(c => c.command === 'npm' && ['install','publish','run'].includes(c.args[0]) || c.command === 'bun')).toEqual([]);
 }
 function refused(config: Scenario, code: string) {
   const r = exercise(config);
@@ -337,21 +347,21 @@ describe('release workflow contract', () => {
       }
     }
   });
-  test('preserves original publication bodies/order and alias job steps', () => {
+  test('pins publication bodies, order and alias recovery steps', () => {
     const clean = (s: Step) => {
       const c = structuredClone(s); delete c.if;
       if (c.uses === 'actions/checkout@v4') delete c.with!.ref;
       if (c.env) delete c.env.TAG_NAME;
       return c;
     };
-    // SHA-256 of parsed original steps, excluding only routing condition/ref.
-    expect(digest(originalSteps.map(clean))).toBe('c7f2006c122bfbe3ea3dac280cb673e2857a9592278f0abb427f8fb45afb5e0a');
+    // SHA-256 of parsed publication steps, excluding only routing condition/ref.
+    expect(digest(publicationSteps.map(clean))).toBe('fef3d061ca69a84c8a8c71b8df0a380a6b9190c22288f4e06b4ead4a213797fc');
     expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)).map((s: Step) =>
       s.uses === 'actions/checkout@v4' ? {...s, with:{...s.with, ref:'v${{ inputs.alias_version }}'}} : s
     ))).toBe('606aa08f03e85f08d66f5d6aca4dc8db871d5a382bbafa1b49e395356d3606d9');
     // Preserve the existing steps in full, including publish conditions and
     // the canonical HEAD-to-main ancestry guard, with release-please removed.
-    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('5f72bf7f34375c78028dcd6d32a02fae6e9cd84bdec4c1e0e9d35897503e362b');
+    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('e667d6ae202bd075dd069aa5d748e03ecd4b86f2c934060f931c2bf96924a5b7');
     expect(existsSync(join(root, 'release-please-config.json'))).toBe(false);
     expect(existsSync(join(root, '.release-please-manifest.json'))).toBe(false);
     expect(source).not.toContain('release-please');
@@ -392,14 +402,15 @@ describe('release workflow contract', () => {
     expect(resolver.env!.CREATED).toBeUndefined();
     expect(resolver.env!.CUT_TAG).toBeUndefined();
   });
-  test('same-SHA tag-ref retry checks out validated commit, original build hook and all three publishes/confirmations without requiring a GitHub release (mock only)', () => {
+  test('same-SHA tag-ref retry checks out validated commit, one library build and all three publishes/confirmations without requiring a GitHub release (mock only)', () => {
     const r = exercise(); expect(r.status).toBe(0); expect(r.aliasRan).toBe(false);
     expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.actions.some(a=>a.uses === 'googleapis/release-please-action@v4')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(ALIASES.map(a=>['@rig-c/play',a,'1.12.0']));
-    expect(r.calls.find(c=>c.command === 'prepublishOnly')?.args).toEqual(['npm run build:lib']);
+    expect(r.calls.filter(c=>c.command === 'npm' && c.args[0] === 'run').map(c=>c.args)).toEqual([['run','build:lib']]);
+    expect(r.calls.filter(c=>c.command === 'node' && c.args[0] === 'scripts/pack-release.mjs')).toHaveLength(1);
   });
   test.each(['v1.12.0;touch injected','v1.12.0\npublish=true','1.12.0','v1.12.0-beta.1','v01.12.0'])('rejects malformed tag %j before external requests', tag => {
     const r = unresolvedBeforeCheckout({tag}, 'RELEASE_TAG_FORM'); expect(r.calls).toEqual([]);
@@ -486,10 +497,10 @@ describe('release workflow contract', () => {
   ])('checks tagged manifest before installs/publish %j', scenario => {
     const r = refused(scenario, 'RELEASE_TAG_VERSION'); expect(r.calls.some(c=>c.command === 'npm' && c.args[0] === 'install')).toBe(false);
   });
-  test('canonical build-hook failure prevents aliases and confirmation', () => {
-    const r = exercise({buildFails:true}); expect(r.status).not.toBe(0); expect(published(r)).toEqual([]);
-    expect(r.calls.some(c=>c.command === 'compared')).toBe(false);
-    expect(r.calls.filter(c=>c.command === 'prepublishOnly')).toHaveLength(1);
+  test.each([{buildFails:true},{packFails:true}])('canonical build or pack failure prevents all publication %j', scenario => {
+    const r = exercise(scenario); expect(r.status).not.toBe(0); expect(published(r)).toEqual([]);
+    expect(r.calls.some(c=>c.command === 'compared' || c.command === 'npm' && c.args[0] === 'publish')).toBe(false);
+    expect(r.calls.filter(c=>c.command === 'npm' && c.args[0] === 'run')).toHaveLength(1);
   });
   test('tag push with same SHA validates ancestry, source commit and manifest before publish and ignores dispatch inputs', () => {
     const r = exercise({event:'push',ref:'refs/tags/v1.12.0',tag:'bad-input',aliasVersion:'ignored'});
@@ -506,7 +517,7 @@ describe('release workflow contract', () => {
     expect(r.status).toBe(0); expect(r.aliasRan).toBe(true); expect(published(r)).toEqual(['spine-html']);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
-    expect(r.calls.some(c=>c.command === 'prepublishOnly' || c.command === 'bun' || c.command === 'npm' && c.args[0] === 'install' && !c.args.includes('-g'))).toBe(false);
+    expect(r.calls.some(c=>c.command === 'bun' || c.command === 'npm' && (c.args[0] === 'run' || c.args[0] === 'install' && !c.args.includes('-g')))).toBe(false);
     expect(r.calls.filter(c=>c.command === 'git').map(c=>c.args)).toEqual([['rev-parse','--verify','HEAD^{commit}']]);
     expect(r.calls.findIndex(c=>c.command === 'git')).toBeLessThan(r.calls.findIndex(c=>c.command === 'npm'));
     const pack = r.calls.find(c=>c.command === 'node' && c.args[1] === 'pack');
