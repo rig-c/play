@@ -284,6 +284,31 @@ writes carries a `NODE_AUTH_TOKEN` placeholder that nothing sets.
 
 ## If the automation is unavailable
 
-Repair the workflow before publishing. Use `node scripts/pack-release.mjs
-<outDir>` after `npm run build:lib` to inspect the release artifact locally.
-Plain `npm pack` on the checkout uses the development manifest.
+Repair the workflow when there is time. When there is not, the owner can
+publish by hand with the same commands the workflow runs, from a clean checkout
+of the tag, on npm 12.2.2:
+
+```bash
+bun install --frozen-lockfile
+npm run build:lib
+tarball="$(node scripts/pack-release.mjs "$(mktemp -d)")"
+npm publish "$tarball" --access public --ignore-scripts
+for alias in rig-play spine-html; do
+  alias_tgz="$(node scripts/alias-tarball.mjs pack --alias "$alias" --out "$(mktemp -d)" --tarball "$tarball")"
+  npm publish "$alias_tgz" --access public --ignore-scripts
+done
+```
+
+- Publish the tarball, never the folder. `npm publish` in the checkout is
+  refused by `prepublishOnly`, because it would ship the development manifest
+  with `@rig-c/source`. Plain `npm pack` uses that manifest too.
+- These commands carry no `--provenance`. npm generates provenance only inside
+  a supported CI provider, so a hand publish has no provenance attestation and
+  the package page shows none for that version. The files are the same ones the
+  workflow would publish.
+- A hand publish authenticates as the owner's npm account (`npm login`, then
+  the account's two-factor step when `npm publish` asks). Trusted publishing
+  does not apply outside the workflow, and a classic token stops working once
+  "require two-factor authentication and disallow tokens" is on.
+- Afterwards check each name as the workflow's confirmation does:
+  `node scripts/install-smoke.mjs --spec "@rig-c/play@<version>"`.
