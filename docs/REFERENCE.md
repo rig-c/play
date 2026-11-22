@@ -170,9 +170,10 @@ stage.addEventListener('pointermove', (e) => {
 
 The block is plain JavaScript, so it runs inside the page as written.
 `environment(null)` returns to the runtime's start values, and `environment()`
-reads what stands. The state is the player's, not a track's: every track and
-layer answers the same world, and a `seek` replays under the environment as it
-stands — no history is kept. A rig with no physics ignores both.
+reads the standing environment, which every track and layer shares. The player
+keeps only its current environment. A plain `seek(time)` replays under those
+values, and `seek(time, environmentAt)` can supply wind and gravity for that
+replay. A rig with no physics shows no effect from wind, gravity or `moved()`.
 `tests/readme-page.spec.ts` runs this block in the minimal page.
 
 **Moving only some physics (`physicsMoved`)**. When an external/deform-only
@@ -241,6 +242,42 @@ without it the rig is posed the way a fresh Spine skeleton is, with no skin
 set. `player.color` multiplies a whole-rig colour into every slot's tint.
 `player.renderer` is the `DomRenderer` underneath, whose knobs and counters
 are below.
+
+**Seeking with changing wind and gravity** (#265). The optional second argument
+to `seek(time, environmentAt)` is a `RigEnvironmentSchedule`, exported from
+`@rig-c/play`.
+
+```ts
+import type { RigEnvironmentSchedule } from '@rig-c/play';
+
+const gust: RigEnvironmentSchedule = (replayTime) => ({
+  wind: replayTime < 0.5 ? [0, 0] : [1, 0],
+  gravity: [0, 1],
+});
+player.seek(1.25, gust);
+```
+
+On the oracle poser, the player opens the animation at pose zero and calls the
+schedule once before each positive replay step, including any shorter final
+step. The callback receives the stepper's unwrapped track time in seconds,
+independent of `timeScale`, animation wrapping and the physics clock. The first
+step is sampled at `0`. Seeking to zero takes the initial pose with no callback.
+Return both `wind` and `gravity` as finite `[x, y]` pairs with x right and y down.
+Use the callback to supply values from replay time and keep player mutations
+outside it.
+
+Each scheduled seek rebuilds the physics from pose zero. Past movement calls
+and held steps belong to the prior live run. Ordinary seek snapshots stay
+available for later `seek(time)` calls. After a successful replay, the player
+holds the resulting pose and integrated physics state. `environment()` still
+reports the standing values, which the next live step uses. If the callback
+throws or the core refuses the replay, the error propagates and the player keeps
+its previous pose, time and environment. A successful seek lands a set ease in
+flight, keeps pause or hold, and suppresses replay events and completions.
+
+The schedule works on the oracle's single track and with `tracks: true` before
+composition. The same composition restrictions apply as for plain seeks. The
+runtime poser has no physics. It seeks as usual and skips the callback.
 
 **Physics on a held frame (`hold`)**. `pause()` stops the physics with the
 clip; `hold(true)` stops only the clip (#248). While held, `advance(dt)` and
@@ -840,8 +877,8 @@ integrated history and does not instantly undo the motion caused by old values.
 The player retains the **current standing patch** across new play, seek, skin
 replay and promotion to composed tracks. Like `environment()`, it records no
 historical changes. **After a mid-run patch change, a backward seek recomputes the
-past interval with the patch standing now**, under the current environment; it
-does not reproduce the old trajectory across that change. New single tracks and
+past interval with the patch standing now**, under the standing environment or
+the environment schedule supplied to `seek`. New single tracks and
 new composed tracks first evaluate their ordinary authored first pose, then
 receive the standing patch as pending, with no extra adjustment callback. At
 seek time 0, effective can therefore still be the initial authored value while
