@@ -36,18 +36,15 @@ articles, badges other READMEs copied — point at the earlier names, and nothin
 but an alias keeps its npm page current. GitHub redirects the old repository
 URLs (`firejune/spine-html`, `firejune/rig-play`); nothing redirects an npm page.
 
-- **One tarball's files.** After `npm publish --access public` has published
-  `@rig-c/play` from the checkout — gated by `prepublishOnly`, which builds
-  `dist/` from the tagged tree; a scoped package is restricted unless told
-  otherwise — the next step runs, once per alias, `node scripts/alias-tarball.mjs
-  pack --alias <name> --out "$RUNNER_TEMP/alias-<name>"`: it packs the same
-  checkout with scripts ignored (the `dist/` that was just published), extracts
-  the tarball into the runner's temp directory, rewrites the one `"name"` line
-  of the extracted `package.json` to the alias, packs that again, and prints the
-  path only after reading the two tarballs as the same files. `npm publish <that
-  tarball> --access public --ignore-scripts` publishes it with provenance. The
-  checkout is never modified. The aliases the script accepts are listed once, in
-  `ALIASES` at the top of the script.
+- **One tarball's files.** The release job runs `npm run build:lib` on the
+  verified tagged tree and passes its output to `node scripts/pack-release.mjs
+  <outDir>`. The packer stages npm's selected files in a temporary directory
+  and omits `@rig-c/source` from the staged export map. The checkout manifest
+  retains the condition for linked source development. The workflow publishes
+  the resulting tarball with `--provenance --access public --ignore-scripts`.
+  Each alias uses that same tarball via `alias-tarball.mjs pack --tarball`;
+  the script repacks it with the new `name` and verifies every file. The aliases
+  are listed in `ALIASES` in that script.
 - **The comparison.** The two tarballs never share a `dist.shasum` — one line of
   one file differs by design, and the tar and gzip headers with it — so "the
   same files" is read off the unpacked tarballs: the same set of paths, every
@@ -119,10 +116,9 @@ and require that checked-out tag commit to be an ancestor of `origin/main`
 run; an unknown result never counts as ancestry. These checks run before
 installing dependencies or publishing, then that tree's package name and version
 must match the tag (`RELEASE_TAG_VERSION`).
-The existing `prepublishOnly` library build gates the canonical publish; the
-same steps then publish both aliases with provenance and confirm all three
-names from registry tarballs. There is no separate typecheck/smoke gate in this
-workflow beyond the build that `prepublishOnly` runs.
+The library build and canonical pack gate publication. The same workflow
+publishes both aliases with provenance and confirms all three names from
+registry tarballs.
 
 Checkout source and workflow execution context are distinct. For **tag push, tag
 retry and alias-only repair**, before checkout or enabling publication, the
@@ -288,8 +284,6 @@ writes carries a `NODE_AUTH_TOKEN` placeholder that nothing sets.
 
 ## If the automation is unavailable
 
-The old path still works and needs nothing from this workflow: `npm version
-<patch|minor|major>`, push the commit and the tag, `npm publish`. It publishes
-with a classic token and a 2FA one-time password — which is why it stops being
-available the moment "require two-factor authentication and disallow tokens" is
-switched on. Fix the workflow instead.
+Repair the workflow before publishing. Use `node scripts/pack-release.mjs
+<outDir>` after `npm run build:lib` to inspect the release artifact locally.
+Plain `npm pack` on the checkout uses the development manifest.

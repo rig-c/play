@@ -248,42 +248,35 @@ jobs:
           npm install -g npm@12.2.2
           npm --version
 
-      # The repository's lockfile is bun.lock — there is no package-lock.json,
-      # so `npm ci` has nothing to read. Deps exist only to let prepublishOnly
-      # run tsc; the publish itself is npm's.
       - name: Install dependencies
         if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
-      # prepublishOnly runs `build:lib` (tsc -p tsconfig.build.json), so the
-      # tarball is built from the tagged tree and a type error fails the
-      # publish instead of shipping. `--access public`: a scoped package is
-      # restricted unless told otherwise.
-      - name: Publish @rig-c/play
-        if: ${{ steps.target.outputs.publish == 'true' }}
-        run: npm publish --provenance --access public
-
-      # The aliases (#65, #98): the same files under the names the package
-      # shipped as before, so every link that points at `rig-play` or
-      # `spine-html` keeps receiving every version. For each,
-      # `scripts/alias-tarball.mjs` packs this checkout — the
-      # tagged tree the step above built `dist/` in and published from, with
-      # scripts ignored so nothing is rebuilt — into the runner's temp
-      # directory, rewrites the one `"name"` line of the extracted
-      # package.json, packs that again, and prints the path only after holding
-      # the result to the package tarball file by file. The checkout is never
-      # modified.
-      #
-      # No lifecycle script runs here, and that is the design rather than a
-      # gap: `npm publish <tarball>` runs none (`--ignore-scripts` says so
-      # explicitly), so `prepublishOnly` gates the step above and only that
-      # one. The alias is that publish's files, and the script holds it to them.
-      - name: Publish the aliases rig-play and spine-html
+      # Build the verified tagged tree once. Publish and derive aliases from
+      # the same tarball, whose manifest omits the checkout-only source entry.
+      - name: Build and pack the release tarball
+        id: pack
         if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
+          npm run build:lib
+          tarball="$(node scripts/pack-release.mjs "$RUNNER_TEMP/canonical")"
+          printf 'tarball=%s\n' "$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Publish @rig-c/play
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          CANONICAL_TGZ: ${{ steps.pack.outputs.tarball }}
+        run: npm publish "$CANONICAL_TGZ" --provenance --access public --ignore-scripts
+
+      - name: Publish the aliases rig-play and spine-html
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          CANONICAL_TGZ: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
           for alias in rig-play spine-html; do
-            alias_tgz="$(node scripts/alias-tarball.mjs pack --alias "$alias" --out "$RUNNER_TEMP/alias-$alias")"
+            alias_tgz="$(node scripts/alias-tarball.mjs pack --alias "$alias" --out "$RUNNER_TEMP/alias-$alias" --tarball "$CANONICAL_TGZ")"
             npm publish "$alias_tgz" --provenance --access public --ignore-scripts
           done
 

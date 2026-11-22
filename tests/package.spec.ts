@@ -494,16 +494,19 @@ test('the real tarball includes every library output but excludes planted dev as
     writeFileSync(path, content);
   }
   const destination = resolve(sandbox, 'contaminated-tarball');
-  mkdirSync(destination, { recursive: true });
-  const packed = spawnSync('npm', ['pack', source, '--ignore-scripts', '--pack-destination', destination, '--json'], { cwd: sandbox, encoding: 'utf8' });
+  const packed = node([resolve(repoRoot, 'scripts/pack-release.mjs'), destination, source], sandbox);
   expect(packed.status, `${packed.stdout}${packed.stderr}`).toBe(0);
-  const result = JSON.parse(packed.stdout) as Array<{ filename: string; files: Array<{ path: string }> }>;
   const libraryFiles = readdirSync(pkgDist).map(String).sort();
   const expected = ['LICENSE', 'NOTICE.md', 'README.md', 'package.json', 'skills/rig-play/SKILL.md', ...libraryFiles.map((file) => `dist/${file}`)].sort();
-  expect(result[0].files.map(({ path }) => path).sort()).toEqual(expected);
   const extracted = resolve(sandbox, 'contaminated-read');
-  const actual = unpack(resolve(destination, result[0].filename), extracted);
+  const actual = unpack(packed.stdout.trim(), extracted);
   expect(actual).toEqual(expected.map((file) => `package/${file}`));
+  const checkoutManifest = JSON.parse(readFileSync(resolve(source, 'package.json'), 'utf8'));
+  const releaseManifest = JSON.parse(readFileSync(resolve(extracted, 'package/package.json'), 'utf8'));
+  expect(checkoutManifest.exports['.']['@rig-c/source']).toBe('./src/index.ts');
+  expect(releaseManifest.exports).toEqual({
+    '.': { types: './dist/index.d.ts', import: './dist/index.js' },
+  });
   for (const file of libraryFiles) {
     expect(readFileSync(resolve(extracted, 'package/dist', file)).equals(readFileSync(resolve(pkgDist, file))), file).toBe(true);
   }
@@ -520,14 +523,9 @@ for (const ALIAS of ALIASES) test(`the ${ALIAS} tarball is the package tarball u
     cpSync(resolve(repoRoot, file), resolve(src, file));
   }
   const primaryDir = resolve(sandbox, `alias-primary-${ALIAS}`);
-  mkdirSync(primaryDir, { recursive: true });
-  const packed = spawnSync(
-    'npm',
-    ['pack', src, '--ignore-scripts', '--pack-destination', primaryDir, '--loglevel=error'],
-    { cwd: sandbox, encoding: 'utf8' },
-  );
-  expect(packed.status, `npm pack failed:\n${packed.stdout}${packed.stderr}`).toBe(0);
-  const primary = resolve(primaryDir, readdirSync(primaryDir).find((file) => file.endsWith('.tgz')) as string);
+  const packed = node([resolve(repoRoot, 'scripts/pack-release.mjs'), primaryDir, src], sandbox);
+  expect(packed.status, `release pack failed:\n${packed.stdout}${packed.stderr}`).toBe(0);
+  const primary = packed.stdout.trim();
 
   const made = node([aliasScript, 'pack', '--alias', ALIAS, '--tarball', primary, '--out', resolve(sandbox, `alias-out-${ALIAS}`)], sandbox);
   expect(made.status, `alias-tarball pack failed:\n${made.stdout}${made.stderr}`).toBe(0);
