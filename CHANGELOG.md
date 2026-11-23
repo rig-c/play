@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.25.0
+
+### Features
+
+* **player:** replay physics from time zero with `seek(time, environmentAt)`, sampling wind and gravity at the start of each step and resuming under the standing environment ([#266](https://github.com/rig-c/play/pull/266)).
+* **renderers:** report why the last render selected Canvas2D through `backendFallbackReason` on `CanvasRenderer` and `meshBackendFallbackReason` on `DomRenderer` ([#267](https://github.com/rig-c/play/pull/267)).
+* **sample:** add a pointer-driven parallax camera with a centered animated figure and pan and fixed modes for comparison ([#270](https://github.com/rig-c/play/pull/270)).
+
+### Bug Fixes
+
+* **release:** omit the checkout-only `@rig-c/source` export condition from published manifests so installed packages resolve the built bundle and declarations ([#268](https://github.com/rig-c/play/pull/268), refs [#259](https://github.com/rig-c/play/issues/259)).
+
+### CI
+
+* **permissions:** limit the CI workflow token to `contents: read` ([#261](https://github.com/rig-c/play/pull/261)).
+* **release:** pin npm to `12.2.2` for publication and alias repair, and exercise release packing with the same version in CI ([#262](https://github.com/rig-c/play/pull/262)).
+* **smoke:** require the installed package to draw pixels in Chromium, using a packed tarball in CI and the canonical registry package after publication ([#263](https://github.com/rig-c/play/pull/263)).
+
 ## 1.24.0
 
 ### Features
