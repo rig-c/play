@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@rig-c/play — parallax camera</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); background: #121d26; color: #f1e9db; }
+      header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding: 12px 20px; border-bottom: 1px solid #3a4950; }
+      h1 { font-size: 17px; margin: 0; }
+      label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+      select { font: inherit; padding: 4px 8px; }
+      dl { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0; font: 12px ui-monospace, monospace; }
+      dl div { display: grid; gap: 4px; min-width: 15ch; white-space: nowrap; }
+      dt { color: #aab9bd; }
+      dd, p { margin: 0; }
+      p { font-size: 13px; }
+      canvas { display: block; width: 100%; height: 100%; min-height: 240px; touch-action: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Parallax camera</h1>
+      <label>Camera <select id="camera-mode"><option value="parallax">Parallax</option><option value="pan">Pan (equal gains)</option><option value="fixed">Fixed</option></select></label>
+      <dl aria-label="Offsets in pixels">
+        <div><dt>Camera (+Y up)</dt><dd><output id="camera-position"></output></dd></div>
+        <div><dt>Background</dt><dd><output id="background-shift"></output></dd></div>
+        <div><dt>Figure</dt><dd><output id="figure-shift"></output></dd></div>
+        <div><dt>Foreground</dt><dd><output id="foreground-shift"></output></dd></div>
+      </dl>
+      <p id="status" role="status">Loading figure…</p>
+    </header>
+    <canvas id="stage" aria-label="Synthetic parallax scene with an animated figure"></canvas>
+    <script type="module">
+      import { mountParallax } from '/samples/parallax.ts';
+      mountParallax().catch((error) => {
+        document.getElementById('status').textContent = `Load failed: ${error.message}`;
+        console.error(error);
+      });
+    </script>
+  </body>
+</html>
