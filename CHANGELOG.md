@@ -6,7 +6,7 @@
 
 * **New subpath `@rig-c/play/composed-take`.** It exports `mountComposedTake` and `ComposedTakeError`, and the types `CameraMode`, `ComposedPlane`, `ComposedTakeOptions` and `MountedTake`. Bind planes with named `planes`. The option names and refusal codes are supported. Until the demo page ships on this entry, a minor release may retune the defaults of `transitionMs`, `autoSweep` and the pointer hover excursion. `docs/REFERENCE.md` gives each default with its date.
 * **`dist/index.js` bytes change.** The root entry and the new subpath now share their renderer and player code in the private chunk `dist/_play-runtime.js`, so both use one `RigPlayer` and `CanvasRenderer`. The root exports and every existing declaration file are unchanged. If your deployment copies individual package files, ship the chunk with either entry.
-* **The package ships its reference docs.** `docs/REFERENCE.md`, `docs/MIGRATION.md` and `docs/STABILITY.md` are now in the tarball, so the README's links resolve on the package page.
+* **The package ships its reference docs.** `docs/REFERENCE.md`, `docs/MIGRATION.md` and `docs/STABILITY.md` are now in the tarball, so they can be read from an installed copy. The package page already resolved the README's links against the repository.
 
 ### Features
 
