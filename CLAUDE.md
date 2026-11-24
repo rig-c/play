@@ -9,7 +9,7 @@ DOM — rigid slots as `<img>` posed
 by CSS `matrix()`, mesh slots on small per-part canvases (canvas2d or WebGL-blit
 backend), interleaved in one stacking context. It loads the compiled model
 document `rigc build` writes (`skeleton.model.json`, `rigc-compiled/3`), poses it
-through the bundled `rig-c/runtime` and `rig-c/core`, and draws each pose as a
+through the bundled `@rig-c/core/runtime` and `@rig-c/core/core`, and draws each pose as a
 borrowed `LiveFrame` or detached `PosedFrame`. Production since
 v0.3.0; the model path since #60. Read README.md, then `docs/REFERENCE.md` and
 `docs/BENCHMARK.md`, for architecture and measured numbers. `rig-play` and `spine-html` are the same package under earlier names.
@@ -50,7 +50,7 @@ do not recalculate it on each feature PR.
 
 ## Architecture invariants
 
-- **`rig-c/core` and `rig-c/runtime` (both bundled) are the player's only math
+- **`@rig-c/core/core` and `@rig-c/core/runtime` (both bundled) are the player's only math
   sources; the renderer only draws.**
   Nothing under `src/` imports an Esoteric Software runtime. Issue #39 adds
   a development-only official WebGL oracle and comparison tool outside that
@@ -58,9 +58,9 @@ do not recalculate it on each feature PR.
   player's frames. This is a raster comparison, not a second production
   poser or a revival of the old Spine-generation compatibility matrix (#63).
   With the default `poser: 'auto'`, covered models and animations use
-  `compileRuntime` and `RuntimePose` from `rig-c/runtime`, drawn through the
+  `compileRuntime` and `RuntimePose` from `@rig-c/core/runtime`, drawn through the
   borrowed `LiveFrame` that `player.liveFrame()` exposes. The oracle path uses
-  `rig-c/core`'s `openTrack` or `openTracks` for unsupported features and
+  `@rig-c/core/core`'s `openTrack` or `openTracks` for unsupported features and
   operations, including physics constraints and track composition;
   `poser: 'oracle'` selects it explicitly. `player.poser` names the selected
   path and any fallback reason. Renderers accept a **`LiveFrame`** or a detached
@@ -72,7 +72,7 @@ do not recalculate it on each feature PR.
   snapshot on either poser; a live frame expires at the next pose mutation.
   See [Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame) for
   the buffer layout, lifetime and fallback policy.
-- **The `rig-c/core` adapter is `src/posedFrame.ts` (`frameOf`), re-cut from
+- **The `@rig-c/core/core` adapter is `src/posedFrame.ts` (`frameOf`), re-cut from
   rigc's `src/render_core.ts`**, which is its specification and
   cannot be imported (it value-imports node-bound modules). The rules, each one
   rigc's: `order` is `pose.drawn` on active bones (`activeBones` of the view —
@@ -105,18 +105,18 @@ do not recalculate it on each feature PR.
   what each runtime reads of it — is rigc's (`docs/GENERATIONS.md` there), not
   this package's: the seam over spine-core 4.0–4.3 and its four CI columns went
   with the package's own spine-core reads (#60, #63).
-- **The poser is `rig-c`, pinned to an exact version, and a pose doubt is a
-  rigc issue.** `devDependencies["rig-c"]` is a bare version (no range;
+- **The poser is `@rig-c/core`, pinned to an exact version, and a pose doubt is a
+  rigc issue.** `devDependencies["@rig-c/core"]` is a bare version (no range;
   `tests/package.spec.ts` asserts it), the build bundles that version's
   `./core` and `./runtime` into `index.js`, and `scripts/fetch-assets.sh` builds
   every fixture with the same version's `rigc build` from the same tag. The
   oracle pose is what rig-c's own CI holds to spine-core 4.3.13 at tolerance 0
   (`core_gate`, `--raw`; rigc
   `docs/SECOND_ORACLE.md` §4–§5, and §7 on this player posing through
-  `rig-c/core`). Runtime coverage and the player's fallback policy are described
+  `@rig-c/core/core`). Runtime coverage and the player's fallback policy are described
   in [Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame).
   One crossing was measured here and needs no standing gate:
-  moving the player onto `rig-c/core` changed no frame (#60: 14 builds, 28
+  moving the player onto `@rig-c/core/core` changed no frame (#60: 14 builds, 28
   animations, 1,034 frames, 0 mismatches). So when a pose looks wrong, the
   move is a rigc issue with a public repro — the rig spec, the motion spec, the
   frame — answered by that gate. The development pixel oracle checks the
@@ -265,7 +265,7 @@ do not recalculate it on each feature PR.
   extensionless one with TS2835 (#16 was the same defect in the `.js`). The
   guard is `tests/package.spec.ts`'s nodenext consumer typecheck.
 - **The package is one self-contained bundle** (`scripts/build-lib.mjs`):
-  vite library mode bundles `src/index.ts` with `rig-c` **not** external — its
+  vite library mode bundles `src/index.ts` with `@rig-c/core` **not** external — its
   `./core` and `./runtime` entries are TypeScript source in a devDependency,
   which no consumer has and no node loads from `node_modules` — and
   `tsc --emitDeclarationOnly` writes the types, with `stripInternal` dropping
@@ -277,7 +277,7 @@ do not recalculate it on each feature PR.
   reaches no `node:` module and contains `openTrack`. Measured: `index.js`
   290 KB unminified (the demo's minified chunk for the player and the core,
   139 KB / 46 KB gzip). Anything marked `@internal` must stay out of the public
-  types' reach, or the consumer typecheck goes red on `rig-c/core`.
+  types' reach, or the consumer typecheck goes red on `@rig-c/core/core`.
 - **One shared WebGL context** at module level — browsers cap WebGL contexts at
   ~16; never create one per renderer/mesh. Because it outlives every renderer,
   its page textures are reference-counted per page (retained as a mesh job is
@@ -415,7 +415,7 @@ do not recalculate it on each feature PR.
   `window.rigPlayHarness`; its loader probes run on the packed gallery build,
   whose regions are cut and mint blobs — a one-part-per-page build mints none).
   The probes draw frames the package's own adapter reads off a rigc build
-  (`tests/rigFrames.ts`: `loadModel`, `rig-c/core`'s live track, `frameOf`), and
+  (`tests/rigFrames.ts`: `loadModel`, `@rig-c/core/core`'s live track, `frameOf`), and
   may choose which slots of a frame to draw — never construct a pose.
   Blob-URL ownership has no visual signature, so its oracle is the browser: a
   revoked object URL stops resolving. Keep test hooks in the harness, out of
@@ -454,7 +454,7 @@ do not recalculate it on each feature PR.
   development runtime generation.
 - **The fixtures are built, not fetched as binaries**: `scripts/fetch-assets.sh`
   builds rigc's gallery rigs from a pinned rigc tag, and this repository's test
-  rigs from `tests/rigs/`, with the rig-c devDependency of the same version,
+  rigs from `tests/rigs/`, with the `@rig-c/core` devDependency of the same version,
   into `public/rigs/<name>/` (and `<name>-packed/`, `--pack`), each with
   `skeleton.model.json` and its pages (and the Spine pair `rigc build` writes
   beside it for the official development oracle), stamped so a version change — or, for a test
@@ -523,7 +523,7 @@ do not recalculate it on each feature PR.
 
 HQ assigns the issue and its scope; the authoring sub-commander implements,
 validates and reports it. These gates replace the former blanket permission to
-merge features and release-please PRs.
+merge features and cut releases.
 
 - **One issue = one PR = one branch.** Start assigned work from current `main`
   on `<agent>/<number>-slug`, link the issue in the PR, and keep its acceptance bars
@@ -560,10 +560,11 @@ merge features and release-please PRs.
 
 ### Merge and release gates
 
-- **A release-please release PR may merge and cut only after HQ explicitly says
-  `LGTM #NNN` for that PR.** Landing a feature or green CI grants no release
-  autonomy. Follow RELEASING.md's artifact checks; never run `npm version` or
-  `npm publish` by hand. CI publishes over OIDC.
+- **A release may be prepared on `main` and cut with a `vX.Y.Z` tag only after
+  HQ explicitly approves that release.** Landing a feature or green CI grants no
+  release autonomy. Follow RELEASING.md's release preparation, manual tag push
+  and artifact checks; never run `npm version` or `npm publish` by hand. CI
+  publishes over OIDC.
 - **Approve only a held run for the PR's current head.** Read the current PR
   head and the selected run's `head_sha` immediately before approving; refuse
   stale runs. Use `gh api -X POST
@@ -582,8 +583,9 @@ merge features and release-please PRs.
 
 ### Commits and cleanup
 
-- Use Conventional Commits with English subjects and bodies; release-please
-  reads the subjects for versions and CHANGELOG.md. Stage explicit paths with
+- Use Conventional Commits with English subjects and bodies; release preparation
+  updates `package.json` and `CHANGELOG.md` on `main` before the `vX.Y.Z` tag is
+  pushed (see RELEASING.md). Stage explicit paths with
   `git add -- <path>`, never `git add -A`; preserve other owners' work.
 - Each contributing agent's commits and the final squash carry that agent's
   own `Co-Authored-By` trailer; read back the resulting commit to verify it.

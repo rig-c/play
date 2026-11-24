@@ -27,9 +27,11 @@
 ### Release preparation
 
 * **release:** use validated version-tag publication for the canonical package and both aliases.
-* **dependencies:** version `@rig-c/play` independently, with exact `@rig-c/core` 3.7.0 and `@rig-c/parts` 2.37.0 development pins and matching fixture tags ([rig-hq#22](https://github.com/rig-c/hq/issues/22)).
+* **dependencies:** version `@rig-c/play` independently, with exact `@rig-c/core` 3.7.0 and `@rig-c/parts` 2.37.0 development pins and matching fixture tags.
 
 ## 3.7.0
+
+Deprecated on npm ("Version alignment withdrawn; the next release returns to the 1.x line").
 
 **Explicit `@rig-c/source` export condition** (#254). `package.json` `exports["."]` now declares `"@rig-c/source": "./src/index.ts"` ahead of `"types": "./dist/index.d.ts"` and `"import": "./dist/index.js"`, letting workspace consumers that opt into the `@rig-c/source` condition resolve the live TypeScript entrypoint directly while standard package imports continue to resolve `./dist/index.js`.
 
@@ -59,7 +61,7 @@
 
 ### Bug Fixes
 
-* **blitter:** draw only through a buffer the browser granted in full (rig-c/review[#332](https://github.com/rig-c/play/issues/332)) ([#241](https://github.com/rig-c/play/issues/241)) ([7c46667](https://github.com/rig-c/play/commit/7c4666735069e85e7d35d2efee68bc4ff2eacb41))
+* **blitter:** draw only through a buffer the browser granted in full ([rig-c/review#332](https://github.com/rig-c/review/issues/332)) ([#241](https://github.com/rig-c/play/issues/241)) ([7c46667](https://github.com/rig-c/play/commit/7c4666735069e85e7d35d2efee68bc4ff2eacb41))
 
 ## [1.22.1](https://github.com/rig-c/play/compare/v1.22.0...v1.22.1) (2026-11-01)
 

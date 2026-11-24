@@ -14,8 +14,8 @@
 compiled model document `rigc build` writes, `skeleton.model.json` — as **plain
 DOM**: one absolutely-positioned `<img>` per rigid slot, posed with a single CSS
 `matrix()` write per frame, and deforming meshes on small per-part canvases; or
-as **one canvas** per player. It poses through rigc's bundled `rig-c/runtime`
-and `rig-c/core`, and links nothing from Esoteric Software.
+as **one canvas** per player. It poses through rigc's bundled `@rig-c/core/runtime`
+and `@rig-c/core/core`, and links nothing from Esoteric Software.
 `rig-play` is the convenience install name; `spine-html` is the legacy install name.
 The compiler is [@rig-c/core](https://github.com/rig-c/core) (npm `@rig-c/core`)
 and the part generator [rig-c/parts](https://github.com/rig-c/parts).
@@ -32,7 +32,7 @@ the blockers named were meshes, clipping and DOM update overhead, and the 0.x li
 answered each of them (per-part mesh canvases, element-level `clip-path`, dirty-skip).
 
 At 1.0 it stopped being a Spine runtime. It plays the model document `rigc build` writes,
-poses it through `rig-c/core` — rigc's own posing core, bundled into the package — and
+poses it through `@rig-c/core/core` — rigc's own posing core, bundled into the package — and
 links nothing from Esoteric Software; a Spine export is refused by name. It gained a
 second render mode that draws the whole frame into one canvas. And it took the name
 `rig-play`, which says what it is; after 1.8 it moved with the rest of the toolchain to
@@ -63,7 +63,7 @@ The package plays rigs built by [rigc](https://github.com/rig-c/core):
 is what the player loads, and it states everything posing and drawing need —
 the skeleton, the animations, and where every region sits on its page — so the
 `.atlas` and `skeleton.json` beside it are not fetched. Poses are computed by
-the bundled `rig-c/runtime` and `rig-c/core`: there is nothing else to install.
+the bundled `@rig-c/core/runtime` and `@rig-c/core/core`: there is nothing else to install.
 
 ```ts
 import { loadModel, RigPlayer } from '@rig-c/play';
@@ -175,11 +175,11 @@ deterministic captures.
 
 ## How it works
 
-`loadModel` reads the rig's compiled model document (`rig-c/core`'s `readModel`).
-With the default `poser: 'auto'`, `RigPlayer` uses `rig-c/runtime`'s
+`loadModel` reads the rig's compiled model document (`@rig-c/core/core`'s `readModel`).
+With the default `poser: 'auto'`, `RigPlayer` uses `@rig-c/core/runtime`'s
 `compileRuntime` and `RuntimePose` for covered models and animations, drawing
 from a borrowed `LiveFrame` exposed by `player.liveFrame()`. Features and
-operations outside that path's coverage use the `rig-c/core` oracle —
+operations outside that path's coverage use the `@rig-c/core/core` oracle —
 `openTrack` for a single track, `openTracks` for track composition. Models with
 physics constraints stay on that oracle path. `player.poser` reports `"runtime"` or
 `"oracle: <reason>"`; `poser: 'oracle'` selects the oracle explicitly. Posing

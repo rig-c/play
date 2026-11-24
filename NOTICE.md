@@ -6,7 +6,7 @@
 `@rig-c/play` (or of `rig-play` or `spine-html`, the same files under the names the
 package shipped as before) carries one JavaScript module, `dist/index.js`, plus type
 declarations, and that module bundles two things: the renderer, and
-`rig-c/core` (MIT), rigc's own posing core, which poses the compiled model
+`@rig-c/core/core` and `@rig-c/core/runtime` (MIT), rigc's own posing core, which poses the compiled model
 document `rigc build` writes. No part of the
 [Spine Runtimes](https://github.com/EsotericSoftware/spine-runtimes) is in it,
 imported by it, or required beside it.

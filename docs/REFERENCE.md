@@ -47,7 +47,7 @@ player: every slot as textured triangles from its atlas page through the same
 shared WebGL context the mesh tier's `webgl` backend uses, into one rect, then
 one `drawImage` onto the player's canvas. Tint and dark (two-colour) tint are
 vertex colours, blend modes are batch state, clips are cut on the CPU by
-`rig-c/core`'s clipper — no `clip-path`, no SVG filter, no per-slot element.
+`@rig-c/core/core`'s clipper — no `clip-path`, no SVG filter, no per-slot element.
 `RigPlayer` swaps between the two in place (`player.mode = 'canvas'`). The
 canvas mode is held against the DOM tier pixel for pixel on the parity suite's
 frozen poses (bad pixels ≤ 1.6% of drawn content, measured, macOS Chromium and
@@ -293,7 +293,7 @@ attachments, deform, draw order — and only what physics drives moves. `time`
 stands, no event or complete fires, and an eased set switch holds where it is.
 `hold(false)` resumes from the physics state the held steps left, with no reset.
 A held step is the core's zero step on a clock that moves the held step, so it
-equals a `rig-c/core` track given those steps. A rig with no physics constraint
+equals an `@rig-c/core/core` track given those steps. A rig with no physics constraint
 ignores held steps: nothing is re-posed and the generation stands. `pause()`
 still stops everything, held or not. `play` releases the hold, as it releases a
 pause; `seek` keeps it and replays as it always does. `moved()` and
@@ -304,7 +304,7 @@ bars and their planted controls are in `tests/held-clock.spec.ts`, on the
 
 **What it refuses, by name.** A Spine export (`.json`, `.skel`) is refused
 before anything is fetched: this package reads compiled models and nothing
-else. A document whose `spec` is not one `rig-c/core` reads is refused with the
+else. A document whose `spec` is not one `@rig-c/core/core` reads is refused with the
 core's own sentence plus "build it with `rigc build`", and so is a
 `rigc-compiled/1` document, which predates the `pages` section.
 
@@ -421,7 +421,7 @@ const head = player.bone('head');   // { x, y, a, b, c, d, rotationX, rotationY,
 const box = player.bounds();        // { x, y, width, height } | null — world units, Y up
 ```
 
-`bone` is the core's world transform for that bone (`rig-c/core`'s `RawBone`,
+`bone` is the core's world transform for that bone (`@rig-c/core/core`'s `RawBone`,
 unchanged), and an unknown name is refused by name. `bounds` is the box of
 every region's four corners and every mesh's vertices in the frame record the
 renderer takes; a slot under a clip counts only inside the clip polygon's own
@@ -804,7 +804,7 @@ player.adjust = null;   // or set it later; setting it re-poses the held pose at
 ```
 
 The function runs once per pose, after the animation's timelines and before the
-world transforms, constraints and physics — `rig-c/core`'s `openTrack({ adjust })`,
+world transforms, constraints and physics — `@rig-c/core/core`'s `openTrack({ adjust })`,
 which rig-c holds to the Spine runtime at tolerance 0. **A write lasts one
 pose.** The core poses every step from the setup pose, so a value you want held
 is written again each pose and nothing compounds; a 0.8 caller that multiplied a
