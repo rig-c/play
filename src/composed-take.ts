@@ -1,5 +1,5 @@
 import { poseRawSetup, underNoSkin } from '@rig-c/core/core';
-import { CanvasRenderer, type CanvasBackend, type CanvasViewport } from './CanvasRenderer.js';
+import { CanvasRenderer, rememberComposedClip, type CanvasBackend, type CanvasViewport } from './CanvasRenderer.js';
 import { cameraLimits, createCameraHandoff, easeCamera, planeOffsets, planeShift, pointerTarget, type CameraMode } from './composed-camera.js';
 import { loadModel, type ModelAssets, type ReadDocument } from './loadModel.js';
 import { RigPlayer, type BoneAdjust } from './player.js';
@@ -319,16 +319,22 @@ function namedPlanes(assets: ModelAssets, options: RuntimeTakeOptions): NamedPla
 function transformFrame(
   frame: PosedFrame,
   shiftFor: (slot: PosedSlot) => Point,
-  origin: Point = NEUTRAL,
-  scale: Point = { x: 1, y: 1 },
-  centered?: ReadonlyMap<string, PosedRegion>,
+  { origin = NEUTRAL, scale = { x: 1, y: 1 }, centered, clipInStockSpace = false }: {
+    origin?: Point;
+    scale?: Point;
+    centered?: ReadonlyMap<string, PosedRegion>;
+    clipInStockSpace?: boolean;
+  } = {},
 ): PosedFrame {
   const clips = new Map<PosedClip, PosedClip>();
   const native = origin.x === 0 && origin.y === 0 && scale.x === 1 && scale.y === 1;
   return { order: frame.order.map(slot => {
     const shift = shiftFor(slot);
     const setup = centered?.get(slot.slot);
-    if (native && shift.x === 0 && shift.y === 0 && !setup) return slot;
+    if (native && shift.x === 0 && shift.y === 0 && !setup) {
+      // A neutral draw still uses the composed clip path, with the original coordinates.
+      return clipInStockSpace && slot.clip ? rememberComposedClip({ ...slot }, slot, shift, origin, scale) : slot;
+    }
     const transform = (xy: number[], delta = shift) => xy.map((value, i) => i % 2 === 0
       ? (value + delta.x - origin.x) * scale.x
       : (value - delta.y - origin.y) * scale.y);
@@ -338,9 +344,16 @@ function transformFrame(
       clips.set(clip, transformed);
       clip = transformed;
     }
-    if (slot.kind === 'mesh') return { ...slot, clip, vertices: transform(slot.vertices) };
-    const corners = setup ? (native ? setup.corners : transform(setup.corners, NEUTRAL)) : transform(slot.corners);
-    return { ...slot, clip, corners };
+    const positioned: PosedSlot = slot.kind === 'mesh'
+      ? { ...slot, clip, vertices: transform(slot.vertices) }
+      : { ...slot, clip, corners: setup ? (native ? setup.corners : transform(setup.corners, NEUTRAL)) : transform(slot.corners) };
+    if (!clipInStockSpace || !slot.clip) return positioned;
+    // Centering pins the quad to setup while the polygon still follows the plane.
+    // Undo the plane shift on those corners so both inputs share the original clip space.
+    const source: PosedSlot = slot.kind === 'region' && setup
+      ? { ...slot, corners: setup.corners.map((value, i) => i % 2 === 0 ? value - shift.x : value + shift.y) }
+      : slot;
+    return rememberComposedClip(positioned, source, shift, origin, scale);
   }) };
 }
 
@@ -445,10 +458,12 @@ function backdropGuard(audit: ReturnType<typeof backdropAlphaAudit>, stage: Canv
     // The union of all stage locations in backdrop space is one rectangle.
     // Rasterize its entire area, including both edges of each axis and the
     // interior. Fit the raster to this rectangle without adding a guard pad.
+    // The coverage probe cuts in the projected envelope's coordinates.
     const width = Math.ceil(layout.width + 2 * x * layout.width / stage.width);
     const height = Math.ceil(layout.height + 2 * y * layout.height / stage.height);
-    const envelope = transformFrame({ order }, () => NEUTRAL, { x: bounds.left, y: bounds.top }, {
-      x: width / (bounds.right - bounds.left), y: height / (bounds.top - bounds.bottom),
+    const envelope = transformFrame({ order }, () => NEUTRAL, {
+      origin: { x: bounds.left, y: bounds.top },
+      scale: { x: width / (bounds.right - bounds.left), y: height / (bounds.top - bounds.bottom) },
     });
     let lastNonOpaque: number;
     try {
@@ -737,14 +752,19 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       if (!layout.native) {
         // CanvasRenderer rounds world viewports outward. Project fractional
         // stage edges onto the exact integer backing rect before it draws.
-        positioned = transformFrame(frame, shiftFor, origin, {
-          x: layout.width / stage.width, y: layout.height / stage.height,
-        }, centered);
-      } else if (centered.size) {
-        positioned = transformFrame(frame, shiftFor, NEUTRAL, undefined, centered);
+        positioned = transformFrame(frame, shiftFor, {
+          origin, scale: { x: layout.width / stage.width, y: layout.height / stage.height }, centered, clipInStockSpace: true,
+        });
+      } else if (!centered.size && (namedShifts ? [...namedShifts.values()] : Object.values(shifts))
+        .every(shift => shift.x === 0 && shift.y === 0)) {
+        positioned = frame;
+        if (frame.order.some(slot => slot.clip)) {
+          positioned = transformFrame(frame, () => NEUTRAL, { clipInStockSpace: true });
+          const generation = Object.getOwnPropertyDescriptor(frame, 'generation');
+          if (generation) Object.defineProperty(positioned, 'generation', generation);
+        }
       } else {
-        positioned = ((namedShifts ? [...namedShifts.values()] : Object.values(shifts))
-          .every(shift => shift.x === 0 && shift.y === 0) ? frame : transformFrame(frame, shiftFor));
+        positioned = transformFrame(frame, shiftFor, { centered, clipInStockSpace: true });
       }
       return { frame: positioned, offsets: frameOffsets };
     }
@@ -754,6 +774,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       const isFigure = (slot: { slot: string }) => figureSlots.has(slot.slot);
       const figures = frame.order.filter(isFigure);
       const firstFigure = figures.length === figureSlots.size ? figures[0] : poser.slotIdentity().slots.find(isFigure);
+      // Keep the prepared slots so the audit samples the same clip geometry as the display.
       const order = frame.order.filter(slot => slot.z < (firstFigure?.z ?? Infinity));
       coverage.backend = renderer.backend;
       coverage.clipping = renderer.clipping;

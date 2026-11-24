@@ -28,6 +28,15 @@ const COMPOSITE: Record<BlendMode, GlobalCompositeOperation> = {
 /** Root units added round the drawn bounds when the automatic viewport grows. */
 const GROW_PAD = 16;
 
+type Point = { readonly x: number; readonly y: number };
+const composedClips = new WeakMap<PosedSlot, { source: PosedSlot; shift: Point; origin: Point; scale: Point }>();
+
+/** @internal Keep the stock clip input for the composed Canvas2D draw. */
+export function rememberComposedClip(slot: PosedSlot, source: PosedSlot, shift: Point, origin: Point, scale: Point): PosedSlot {
+  if (source.clip) composedClips.set(slot, { source, shift, origin, scale });
+  return slot;
+}
+
 /**
  * Renders a posed frame (`PosedFrame`) into **one `<canvas>`** — the canvas
  * render mode, beside the DOM tier (`DomRenderer`) and with the same
@@ -235,6 +244,11 @@ export class CanvasRenderer {
       this.backendActive = 'canvas2d';
       this.backendFallbackReason = reason;
       this.sigLength = -1;
+      if (order.some(slot => composedClips.has(slot))) {
+        // The fallback cuts the stock geometry and counts the pieces it draws.
+        this.drawCalls = this.blendFlushes = this.trianglesDrawn = 0;
+        this.clipCount = this.clipSkipCount = 0;
+      }
     }
     this.draw2d(order);
   }
@@ -323,6 +337,7 @@ export class CanvasRenderer {
     sig[n++] = this.backendActive === 'webgl' ? 1 : 0;
     sig[n++] = this.clipping ? 1 : 0;
     sig[n++] = order.length;
+    const stockClipping = this.backendActive === 'canvas2d' && this.clipping;
     let lastClip: PosedClip | undefined;
     for (let i = 0; i < order.length; i++) {
       const slot = order[i];
@@ -352,6 +367,28 @@ export class CanvasRenderer {
         sig[n++] = clip.polygon.length;
         for (let k = 0; k < clip.polygon.length; k++) sig[n++] = clip.polygon[k];
         lastClip = clip;
+      }
+      if (stockClipping && clip && clip.polygon.length >= 6) {
+        const composed = composedClips.get(slot);
+        need(1);
+        sig[n++] = composed ? 1 : 0;
+        if (composed) {
+          // Identical projected inputs can round differently when cut in stock space.
+          const { source, shift, origin, scale } = composed;
+          const vertices = source.kind === 'region' ? source.corners : source.vertices;
+          const polygon = source.clip!.polygon;
+          need(8 + vertices.length + polygon.length);
+          sig[n++] = shift.x;
+          sig[n++] = shift.y;
+          sig[n++] = origin.x;
+          sig[n++] = origin.y;
+          sig[n++] = scale.x;
+          sig[n++] = scale.y;
+          sig[n++] = vertices.length;
+          for (let k = 0; k < vertices.length; k++) sig[n++] = vertices[k];
+          sig[n++] = polygon.length;
+          for (let k = 0; k < polygon.length; k++) sig[n++] = polygon[k];
+        }
       }
       refs.push(this.pages.get(slot.page), slot.uvs);
       if (slot.kind === 'mesh') refs.push(slot.triangles);
@@ -504,8 +541,15 @@ export class CanvasRenderer {
       const slot = order[i];
       const image = this.pages.get(slot.page);
       if (!image) continue;
-      const piece = this.piecesOf(slot, clips);
+      const composed = this.clipping && slot.clip ? composedClips.get(slot) : undefined;
+      const sourceSlot = composed?.source ?? slot;
+      const piece = this.piecesOf(sourceSlot, clips);
       if (!piece) continue;
+      const sourceVertices = sourceSlot.kind === 'region' ? sourceSlot.corners : sourceSlot.vertices;
+      const cut = piece.vertices !== sourceVertices;
+      const project = cut ? composed : undefined;
+      const drawX = project ? (x: number) => X((x + project.shift.x - project.origin.x) * project.scale.x) : X;
+      const drawY = project ? (y: number) => Y((y - project.shift.y - project.origin.y) * project.scale.y) : Y;
       const source: PageSource = straightAlphaSource(image, slot.pma);
       const uw = source.width;
       const uh = source.height;
@@ -516,12 +560,12 @@ export class CanvasRenderer {
       }
       ctx.globalAlpha = Math.max(0, Math.min(1, slot.tint[3]));
       this.drawCalls++;
-      const { vertices, uvs } = piece;
+      const { uvs } = piece;
       const triangles = triangleReadSource(piece.triangles);
-      if (slot.kind === 'region' && vertices === slot.corners) {
+      if (slot.kind === 'region' && !cut) {
         // A whole quad: its page sub-rect under the affine that sends the UL,
         // UR and BL texel corners to their device corners (BL, UL, UR, BR).
-        const c = vertices;
+        const c = slot.corners;
         const sx0 = uvs[2] * uw, sy0 = uvs[3] * uh; // UL
         const sx1 = uvs[4] * uw, sy1 = uvs[5] * uh; // UR
         const sx2 = uvs[0] * uw, sy2 = uvs[1] * uh; // BL
@@ -538,15 +582,16 @@ export class CanvasRenderer {
         this.trianglesDrawn += 2;
         continue;
       }
+      const vertices = cut ? piece.vertices : slot.kind === 'region' ? slot.corners : slot.vertices;
       for (let t = 0; t + 2 < triangles.length; t += 3) {
         const i0 = triangles[t] * 2;
         const i1 = triangles[t + 1] * 2;
         const i2 = triangles[t + 2] * 2;
         drawTexturedTriangle(
           ctx, source, 0.5, this.meshSourceRect,
-          X(vertices[i0]), Y(vertices[i0 + 1]), uvs[i0] * uw, uvs[i0 + 1] * uh,
-          X(vertices[i1]), Y(vertices[i1 + 1]), uvs[i1] * uw, uvs[i1 + 1] * uh,
-          X(vertices[i2]), Y(vertices[i2 + 1]), uvs[i2] * uw, uvs[i2 + 1] * uh,
+          drawX(vertices[i0]), drawY(vertices[i0 + 1]), uvs[i0] * uw, uvs[i0 + 1] * uh,
+          drawX(vertices[i1]), drawY(vertices[i1 + 1]), uvs[i1] * uw, uvs[i1 + 1] * uh,
+          drawX(vertices[i2]), drawY(vertices[i2 + 1]), uvs[i2] * uw, uvs[i2 + 1] * uh,
         );
       }
       this.trianglesDrawn += triangles.length / 3;

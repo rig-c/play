@@ -206,8 +206,9 @@ interface CompiledClip {
   vertices: { weighted: false; xy: number[] };
 }
 
-function attachmentClip(page: Page, crossPlane: boolean) {
+function attachmentClip(page: Page, crossPlane: boolean, stage?: typeof STAGE) {
   return alterModel(page, crossPlane ? 'cross-plane' : 'figure-clip', doc => {
+    if (stage) doc.stage = stage;
     const name = 'test-attachment-clip';
     doc.slots.splice(crossPlane ? 0 : 1, 0, { name, bone: 'root', setup: name });
     doc.rig?.slotOrder.splice(crossPlane ? 0 : 1, 0, name);
@@ -769,6 +770,44 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
       });
       expect(result.alpha.transparent).toBeGreaterThan(0);
     });
+
+    if (backend === 'canvas2d') {
+      test(check(7, 'preserves stock Canvas2D attachment clip RGBA at zero displacement'), async ({ page }, info) => {
+        // Use the stock camera from the displaced clip comparison, baked into
+        // the model's stage so both renderers draw untranslated geometry.
+        const viewport = { ...STAGE, x: STAGE.x - 12, y: STAGE.y + 12 };
+        const url = await attachmentClip(page, false, viewport);
+        const zero = { x: 0, y: 0 };
+        await mount(page, backend, { modelUrl: url, maxDisplacement: zero });
+        await ordinary(page, backend, url);
+        await freeze(page, 2);
+        await setCamera(page, 'pan');
+        const current = await state(page);
+        expect(current.mode).toBe('pan');
+        expect(current.offsets).toEqual({ background: zero, figure: zero, foreground: zero });
+
+        const views = await page.evaluate(figure =>
+          (window as ComposedHarnessWindow).composedTest.stockClipReference(2, figure), SLOTS.figure);
+        const measurement = JSON.stringify({ engine: info.project.name, backend, shift: zero, limit: 0, views });
+        console.log(measurement);
+        await info.attach('composed-stock-clip-raster', { body: measurement, contentType: 'application/json' });
+
+        for (const view of views) {
+          expect(view.viewport, `${view.view} viewport`).toEqual(viewport);
+          expect([view.width, view.height], `${view.view} backing size`).toEqual([viewport.width, viewport.height]);
+          expect(view.backends, `${view.view} backends`).toEqual([backend, backend]);
+          expect(view.clipCounts, `${view.view} applied clips`).toEqual([1, 1]);
+          expect(view.reused, `${view.view} freshly drawn`).toEqual([0, 0]);
+          if (view.view === 'figure') {
+            expect(view.transparent, 'figure has a transparent surround').toBeGreaterThan(0);
+            expect(view.transparent, 'figure has visible pixels').toBeLessThan(view.width * view.height);
+          } else {
+            expect(view.nonOpaque, 'scene has opaque backdrop coverage').toBe(0);
+          }
+          expect.soft(view.changed, `stock Canvas2D ${view.view} RGBA`).toBe(0);
+        }
+      });
+    }
 
     const refusals: {
       name: string;
