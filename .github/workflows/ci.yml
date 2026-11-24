@@ -71,9 +71,27 @@ jobs:
       - name: Install Playwright system dependencies
         timeout-minutes: 10
         run: |
-          # apt logs the requested and newly-installed packages; browser cache
-          # hits do not cache system packages. Do not gate apt on --dry-run:
-          # that diagnostic can exit nonzero when packages are missing.
+          # ubuntu-24.04 uses deb822, with the runner mirror list or direct Ubuntu URIs.
+          sources=/etc/apt/sources.list.d/ubuntu.sources
+          mirror_list=/etc/apt/apt-mirrors.txt
+          ubuntu_uri='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|archive|security|us-east-2\.ec2\.archive)\.ubuntu\.com/ubuntu)/?'
+          uri_line="^(URIs:[[:blank:]]+)${ubuntu_uri}([[:blank:]]*)$"
+          if ! uris=$(grep -E '^URIs:' "$sources"); then
+            echo "::error::No Ubuntu APT URI fields in $sources"
+            exit 1
+          fi
+          printf 'Ubuntu APT URI fields before pinning (%s)\n%s\n' "$sources" "$uris"
+          if grep -qvE "$uri_line" <<< "$uris"; then
+            echo "::error::Unexpected Ubuntu APT URI in $sources"
+            exit 1
+          fi
+          if [[ $uris == *"mirror+file:$mirror_list"* ]]; then
+            printf 'Runner APT mirror list (%s)\n' "$mirror_list"
+            cat "$mirror_list"
+          fi
+          sudo sed -i -E "s#${uri_line}#\1http://azure.archive.ubuntu.com/ubuntu\4#" "$sources"
+          printf 'Ubuntu APT URI fields after pinning (%s)\n' "$sources"
+          grep -E '^URIs:' "$sources"
           /usr/bin/time -p bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         timeout-minutes: 10
