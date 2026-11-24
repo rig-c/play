@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Composed take test harness</title>
+<style>
+  body { margin: 0; color: #f0f2f5; background: #171b22; font: 14px system-ui, sans-serif; }
+  #evidence { display: inline-flex; flex-wrap: wrap; align-items: start; gap: 18px; padding: 20px; }
+  #stage { position: relative; width: 128px; height: 128px; background: #ff00ad; }
+  #reading { margin: 0; white-space: pre-wrap; }
+  #reference { margin: 0; }
+  #reference canvas { display: block; }
+</style>
+<main id="evidence">
+  <div id="stage"></div>
+  <pre id="reading" hidden></pre>
+  <figure id="reference" hidden><figcaption>Full geometry, cropped to stage</figcaption></figure>
+</main>
+<script type="module" src="./composed-take-harness.ts"></script>
+</html>

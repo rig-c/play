@@ -1,0 +1,786 @@
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { expect, type Page, test, type TestInfo } from '@playwright/test';
+import { build } from 'vite';
+import type { ComposedHarnessWindow, MountOptions } from './composed-take-harness.js';
+
+const FIXTURES = 'tests/fixtures/composed-direction';
+const model = (name: string) => `/${FIXTURES}/${name}/skeleton.model.json`;
+const SLOTS = {
+  background: ['backdrop'],
+  figure: ['actor:background', 'actor:torso', 'actor:lantern', 'actor:face', 'actor:eye_r', 'actor:eye_l'],
+  foreground: ['foreground'],
+} as const;
+const PLANES = ['background', 'figure', 'foreground'] as const;
+const ORDER = [...SLOTS.background, ...SLOTS.figure, ...SLOTS.foreground];
+const STAGE = { x: -64, y: 0, width: 128, height: 128 };
+const CORNERS = [[-2, -2], [-2, 2], [2, -2], [2, 2]] as const;
+type Backend = NonNullable<MountOptions['backend']>;
+type Mode = NonNullable<MountOptions['camera']>;
+type Point = { x: number; y: number };
+const check = (row: number, name: string) => `C2-${row} ${name}`;
+
+let bundledHarness: Promise<{ html: string; script: string }> | undefined;
+function harness() {
+  bundledHarness ??= (async () => {
+    const [html, bundle] = await Promise.all([
+      readFile('tests/composed-take-harness.html', 'utf8'),
+      build({
+        configFile: false, logLevel: 'silent',
+        build: { write: false, lib: { entry: resolve('tests/composed-take-harness.ts'), formats: ['es'] } },
+      }),
+    ]);
+    const output = Array.isArray(bundle) ? bundle[0] : bundle;
+    if (!('output' in output)) throw new Error('Expected composed harness bundle');
+    const entry = output.output.find(item => item.type === 'chunk' && item.isEntry);
+    if (entry?.type !== 'chunk') throw new Error('Missing composed harness entry');
+    return { html: html.replace('./composed-take-harness.ts', '/composed-probe.js'), script: entry.code };
+  })();
+  return bundledHarness;
+}
+
+async function open(page: Page): Promise<void> {
+  const { html, script } = await harness();
+  await page.route('**/composed-probe.html', route => route.fulfill({ contentType: 'text/html', body: html }));
+  await page.route('**/composed-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: script }));
+  await page.route(`**/${FIXTURES}/**`, async route => {
+    const filename = new URL(route.request().url()).pathname.slice(FIXTURES.length + 2);
+    if (!/^[a-z0-9-]+\/skeleton\.(model\.json|png)$/.test(filename)) return route.fallback();
+    return route.fulfill({ path: join(FIXTURES, filename) });
+  });
+  await page.goto('/composed-probe.html');
+  await page.waitForFunction(() => Boolean((window as ComposedHarnessWindow).composedTest), undefined, { polling: 20 });
+}
+
+function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = {}) {
+  return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), {
+    modelUrl: model('overscan'), animation: 'idle', loop: true, slots: SLOTS, backend, ...overrides,
+  } as MountOptions);
+}
+
+function setCamera(page: Page, mode: Mode) {
+  return page.evaluate(mode => (window as ComposedHarnessWindow).composedTest.camera(mode), mode);
+}
+
+function state(page: Page) {
+  return page.evaluate(() => (window as ComposedHarnessWindow).composedTest.state());
+}
+
+function point(page: Page, x: number, y: number) {
+  return page.evaluate(([x, y]) => (window as ComposedHarnessWindow).composedTest.point(x, y), [x, y]);
+}
+
+function tick(page: Page, ms: number) {
+  return page.evaluate(dt => (window as ComposedHarnessWindow).composedTest.tick(dt), ms);
+}
+
+function reset(page: Page, event: 'pointercancel' | 'pointerleave') {
+  return page.evaluate(event => (window as ComposedHarnessWindow).composedTest.reset(event), event);
+}
+
+function draw(page: Page, ms = 0) {
+  return page.evaluate(ms => (window as ComposedHarnessWindow).composedTest.draw(ms), ms);
+}
+
+function backdrop(page: Page) {
+  return page.evaluate(slots => (window as ComposedHarnessWindow).composedTest.backdrop(slots), SLOTS.background);
+}
+
+function freeze(page: Page, time: number) {
+  return page.evaluate(time => (window as ComposedHarnessWindow).composedTest.freeze(time), time);
+}
+
+function ordinary(page: Page, backend: Backend, url: string) {
+  return page.evaluate(([url, backend]) => (window as ComposedHarnessWindow).composedTest.openReference(url, 'idle', backend),
+    [url, backend] as const);
+}
+
+function closePoint(actual: Point, expected: Point, label: string): void {
+  expect(actual.x, `${label} x`).toBeCloseTo(expected.x, 8);
+  expect(actual.y, `${label} y`).toBeCloseTo(expected.y, 8);
+}
+
+function offsets(camera: Point, mode: Mode) {
+  const gains = mode === 'pan' ? [1, 1, 1] : mode === 'parallax' ? [-0.55, 0, 0.55] : [0, 0, 0];
+  return Object.fromEntries(PLANES.map((plane, index) => [
+    plane, { x: -camera.x * gains[index], y: camera.y * gains[index] },
+  ])) as Record<(typeof PLANES)[number], Point>;
+}
+
+function poseDigest(bytes: string) {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function assertOpaque(result: Awaited<ReturnType<typeof backdrop>>, backend: Backend): void {
+  expect(result.backend, 'requested backend drew').toBe(backend);
+  expect(result.nonOpaque, 'backdrop-only alpha < 255').toBe(0);
+  expect(result.corners).toEqual([255, 255, 255, 255]);
+}
+
+async function alterModel(page: Page, name: string, change: (doc: CompiledControl) => void): Promise<string> {
+  const [sourceDoc, sourcePng] = await Promise.all([
+    readFile(join(FIXTURES, 'overscan/skeleton.model.json'), 'utf8'),
+    readFile(join(FIXTURES, 'overscan/skeleton.png')),
+  ]);
+  const doc = JSON.parse(sourceDoc) as CompiledControl;
+  change(doc);
+  // Give every derived document its own in-memory inputs. Both the embed and
+  // the ordinary player still go through loadModel and the browser image decoder.
+  return page.evaluate(async ({ doc, source, name }) => {
+    let pageUrl = source;
+    if (name === 'transparent') {
+      const plate = doc.pages[0].regions.find(region => region.name === 'scene-plate.0');
+      if (!plate) throw new Error('Missing authored backdrop atlas region');
+      const image = new Image();
+      image.src = source;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext('2d')!;
+      context.drawImage(image, 0, 0);
+      context.clearRect(plate.x + 25, plate.y + 25, 8, 8);
+      pageUrl = canvas.toDataURL();
+    }
+    doc.pages[0].name = pageUrl;
+    return URL.createObjectURL(new File([JSON.stringify(doc)], `${name}.model.json`, { type: 'application/json' }));
+  }, { doc, source: `data:image/png;base64,${sourcePng.toString('base64')}`, name });
+}
+
+interface CompiledControl {
+  stage?: { x: number; y: number; width: number; height: number } | null;
+  slots: { name: string; bone?: string; setup?: string }[];
+  animations: { bones: { name: string }[]; slots?: { name: string }[] }[];
+  skins: { attachments: Record<string, Record<string, { width?: number; height?: number } | CompiledClip>> }[];
+  pages: { name: string; regions: { name: string; x: number; y: number; width: number; height: number }[] }[];
+  editorOrder: { skins: { name: string; slots: string[] }[] };
+  rig?: { slotOrder: string[] };
+}
+
+interface CompiledClip {
+  kind: 'clipping';
+  end: string;
+  convex: true;
+  vertexCount: number;
+  vertices: { weighted: false; xy: number[] };
+}
+
+function attachmentClip(page: Page, crossPlane: boolean) {
+  return alterModel(page, crossPlane ? 'cross-plane' : 'figure-clip', doc => {
+    const name = 'test-attachment-clip';
+    doc.slots.splice(crossPlane ? 0 : 1, 0, { name, bone: 'root', setup: name });
+    doc.rig?.slotOrder.splice(crossPlane ? 0 : 1, 0, name);
+    doc.editorOrder.skins.find(skin => skin.name === 'default')!.slots.push(name);
+    doc.skins[0].attachments[name] = {
+      [name]: {
+        kind: 'clipping', end: 'actor:eye_l', convex: true, vertexCount: 4,
+        vertices: { weighted: false, xy: [-40, 20, 30, 20, 30, 103, -40, 103] },
+      },
+    };
+  });
+}
+
+async function withoutForeground(page: Page) {
+  return alterModel(page, 'without-foreground', doc => {
+    doc.slots = doc.slots.filter(slot => slot.name !== 'foreground');
+    for (const skin of doc.skins) delete skin.attachments.foreground;
+    for (const skin of doc.editorOrder.skins) skin.slots = skin.slots.filter(slot => slot !== 'foreground');
+    for (const animation of doc.animations) {
+      animation.bones = animation.bones.filter(row => row.name !== 'foreground');
+      if (animation.slots) animation.slots = animation.slots.filter(row => row.name !== 'foreground');
+    }
+    if (doc.rig) doc.rig.slotOrder = doc.rig.slotOrder.filter(name => name !== 'foreground');
+  });
+}
+
+async function shortPlate(page: Page, axis: 'x' | 'y') {
+  return alterModel(page, `short-${axis}`, doc => {
+    const plate = doc.skins[0].attachments.backdrop.backdrop as { width: number; height: number };
+    if (axis === 'x') plate.width = 146;
+    else plate.height = 146;
+  });
+}
+
+function transparentPlate(page: Page) {
+  return alterModel(page, 'transparent', () => {});
+}
+
+type CropReading = ReturnType<ComposedHarnessWindow['composedTest']['cropReference']>;
+
+async function expectCropRaster(
+  result: CropReading, backend: Backend, shift: Point, info: TestInfo, labels: Record<'scene' | 'actor', string>,
+): Promise<void> {
+  // Canvas2D affine/filtering quantization motivates the bounded comparison, and the frozen readings support exact WebGL parity.
+  const limit = backend === 'webgl' ? 0 : 4;
+  const views = (['actor', 'scene'] as const).map(view => {
+    const reading = result[view];
+    expect(reading.actualBackend, `${view} output backend`).toBe(backend);
+    const control = backend === 'webgl' ? reading : reading.stage;
+    if (backend === 'webgl') expect(reading.wideBackend, `${view} wide reference backend`).toBe(backend);
+    if (!control) throw new Error('Canvas2D requires a same-sized stock viewport control');
+    const { changed, alphaChanged, maxChannelDelta } = control;
+    return { view, assertion: labels[view], changed, alphaChanged, maxChannelDelta };
+  });
+  const measurement = JSON.stringify({
+    engine: info.project.name, backend, shift, limit, views,
+    reference: backend === 'webgl' ? 'wide' : 'same-sized stock',
+  });
+  console.log(measurement);
+  await info.attach('composed-crop-raster', { body: measurement, contentType: 'application/json' });
+  for (const view of views) {
+    expect(view.maxChannelDelta, view.assertion).toBeLessThanOrEqual(limit);
+  }
+}
+
+for (const backend of ['canvas2d', 'webgl'] as const) {
+  test.describe(backend, () => {
+    test.beforeEach(async ({ page }) => open(page));
+
+    test(check(1, 'clamps Y-up pointer and smooths by elapsed time'), async ({ page }) => {
+      const maximum = 12.8;
+      const measurements = [];
+      for (const schedule of [[40, 40, 40, 40, 40, 40], [17, 223]]) {
+        await mount(page, backend, { camera: 'pan' });
+        await point(page, 2, 2);
+        for (const ms of schedule) await tick(page, ms);
+        const { offsets, cameraExcursion } = await state(page);
+        expect(cameraExcursion).toEqual({ x: maximum, y: maximum });
+        const response = maximum * (1 - Math.exp(-2));
+        closePoint(offsets.figure, { x: -response, y: response }, 'clamp Y-up elapsed');
+        measurements.push({ schedule, offsets });
+      }
+      closePoint(measurements[0].offsets.figure, measurements[1].offsets.figure, 'equal elapsed');
+      await point(page, 0.5, -0.5);
+      await tick(page, 4000);
+      closePoint((await state(page)).offsets.figure, { x: -6.4, y: -6.4 }, 'fractional pointer');
+      console.log(JSON.stringify({ measurements }));
+    });
+
+    for (const event of ['pointerleave', 'pointercancel'] as const) {
+      test(check(1, `${event} eases back to exact neutral`), async ({ page }) => {
+        await mount(page, backend, { camera: 'pan' });
+        await point(page, 1, -1);
+        await tick(page, 4000);
+        closePoint((await state(page)).offsets.figure, { x: -12.8, y: -12.8 }, 'extreme before reset');
+        await reset(page, event);
+        await tick(page, 120);
+        closePoint((await state(page)).offsets.figure, { x: -12.8 / Math.E, y: -12.8 / Math.E }, event);
+        await tick(page, 4000);
+        const settled = (await state(page)).offsets;
+        for (const plane of PLANES) {
+          expect(settled[plane].x === 0 && settled[plane].y === 0, `${event} settled ${plane}`).toBe(true);
+        }
+      });
+    }
+
+    test(check(2, 'applies landed signed gains and anchors figure pixels'), async ({ page }) => {
+      await mount(page, backend);
+      await freeze(page, 2);
+      await page.evaluate(slots => (window as ComposedHarnessWindow).composedTest.storeFigure(slots), SLOTS.figure);
+      const base = (await draw(page)).order;
+      const results = [];
+      for (const mode of ['parallax', 'pan'] as const) {
+        await setCamera(page, mode);
+        for (const [x, y] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          await point(page, x, y);
+          const frame = await draw(page, 4000);
+          const applied = (await state(page)).offsets;
+          const expected = offsets({ x: x * 12.8, y: y * 12.8 }, mode);
+          expect(frame.backend).toBe(backend);
+          for (const plane of PLANES) closePoint(applied[plane], expected[plane], `${mode} gains ${plane}`);
+          for (const [i, slot] of frame.order.entries()) {
+            const plane = PLANES.find(plane => (SLOTS[plane] as readonly string[]).includes(slot.slot))!;
+            for (const [j, coordinate] of slot.coords.entries()) {
+              expect(coordinate - base[i].coords[j], `${mode} posed geometry ${slot.slot} coordinate ${j}`)
+                .toBeCloseTo(j % 2 ? -expected[plane].y : expected[plane].x, 7);
+            }
+          }
+          const figure = await page.evaluate(slots => (window as ComposedHarnessWindow).composedTest.compareFigure(slots), SLOTS.figure);
+          expect(figure.nonOpaque).toBeLessThan(128 * 128);
+          if (mode === 'parallax') expect(figure.changed, 'anchored figure RGBA').toBe(0);
+          else expect(figure.changed, 'Pan moves actor pixels').toBeGreaterThan(0);
+          results.push({ mode, excursion: { x: x * 12.8, y: y * 12.8 }, applied, figure: figure.changed });
+        }
+      }
+      console.log(JSON.stringify({ results }));
+    });
+
+    test(check(3, 'Fixed and settled neutral match ordinary RGBA at equal take times'), async ({ page }) => {
+      await mount(page, backend);
+      expect((await state(page)).mode).toBe('fixed');
+      await ordinary(page, backend, model('overscan'));
+      const readings = [];
+      const positions: number[][] = [];
+      for (const time of [0, 2]) {
+        await setCamera(page, 'fixed');
+        await freeze(page, time);
+        const fixedDraw = await draw(page);
+        expect(fixedDraw.backend).toBe(backend);
+        positions.push(fixedDraw.order.find(slot => slot.slot === 'foreground')!.coords);
+        for (const mode of ['fixed', 'parallax', 'pan'] as const) {
+          await setCamera(page, mode);
+          await point(page, 1, 1);
+          await tick(page, 4000);
+          if (mode !== 'fixed') {
+            await reset(page, 'pointercancel');
+            await tick(page, 4000);
+          }
+          const result = await page.evaluate(time => (window as ComposedHarnessWindow).composedTest.fixedReference(time), time);
+          expect(result.backend).toBe(backend);
+          expect(result.changed, `${mode} ordinary RGBA at ${time}s`).toBe(0);
+          readings.push({ time, mode, ...result });
+        }
+      }
+      const foregroundX = positions[1].filter((_, i) => i % 2 === 0).map((value, i) => value - positions[0][i * 2]);
+      for (const dx of foregroundX) expect(dx, 'authored foreground travels +3 px').toBeCloseTo(3, 7);
+      console.log(JSON.stringify({ readings, foregroundX }));
+    });
+
+    test(check(4, 'identical source time and pose bytes across a loop wrap'), async ({ page }) => {
+      async function run(moving: boolean) {
+        await mount(page, backend, { camera: 'parallax' });
+        const rows = [];
+        // 62.5 ms is exactly representable, below Card 1's rig cap and divides
+        // the four-second fixture loop exactly. Inspect one sample on each side.
+        for (let i = 1; i <= 66; i++) {
+          if (moving) await point(page, i % 4 < 2 ? -1 : 1, i % 3 ? 1 : -1);
+          await tick(page, 62.5);
+          if (i < 63) continue;
+          const current = await state(page);
+          const bytes = await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.poseBytes());
+          rows.push({ trackTime: current.trackTime, animationTime: current.animationTime, offsets: current.offsets, bytes });
+        }
+        return rows;
+      }
+      const still = await run(false);
+      const moving = await run(true);
+      expect(still.map(row => row.trackTime)).toEqual([3.9375, 4, 4.0625, 4.125]);
+      expect(still.map(row => row.animationTime)).toEqual([3.9375, 0, 0.0625, 0.125]);
+      const rows = still.map((row, i) => ({
+        trackTime: row.trackTime, animationTime: row.animationTime, bytes: Buffer.byteLength(row.bytes),
+        still: poseDigest(row.bytes), moving: poseDigest(moving[i].bytes), offsets: moving[i].offsets,
+      }));
+      console.log(JSON.stringify({ rows }));
+      expect(moving.some(row => Math.abs(row.offsets.background.x) > 1), 'pointer advances the camera').toBe(true);
+      for (const [i, row] of moving.entries()) {
+        expect(row.trackTime, 'pointer-independent source clock').toBe(still[i].trackTime);
+        expect(row.animationTime, 'pointer-independent wrapped clock').toBe(still[i].animationTime);
+        expect(poseDigest(row.bytes), 'pointer-independent pose bytes').toBe(poseDigest(still[i].bytes));
+      }
+    });
+
+    test(check(5, 'preserves complete model order, one mesh and optional foreground'), async ({ page }) => {
+      await mount(page, backend, { camera: 'parallax' });
+      await point(page, 1, 1);
+      const full = await draw(page, 4000);
+      const original = await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.sourceGeometry());
+      expect(original.map(row => row.slot)).toEqual(ORDER);
+      expect(full.order.map(row => row.slot), 'exact draw order and one draw per slot').toEqual(ORDER);
+      const actorBackdrop = full.order.find(row => row.slot === 'actor:background');
+      expect(actorBackdrop, 'actor:background stays on the figure').toEqual(original[1]);
+      expect(full.order.find(row => row.slot === 'actor:torso'), 'authored mesh retained').toMatchObject({
+        kind: 'mesh', triangles: 40,
+      });
+      expect(full.order.find(row => row.slot === 'actor:torso')?.coords).toHaveLength(60);
+      expect(full.backend).toBe(backend);
+      await mount(page, backend, {
+        modelUrl: await withoutForeground(page), slots: { background: SLOTS.background, figure: SLOTS.figure },
+      });
+      const without = await draw(page);
+      expect(without.order.map(row => row.slot), 'foreground may be absent in the model').toEqual(ORDER.slice(0, -1));
+      console.log(JSON.stringify({ backend, full: full.order.map(({ slot, kind, triangles }) => ({ slot, kind, triangles })), without: without.order.map(row => row.slot) }));
+    });
+
+    test(check(6, 'backdrop remains opaque at all envelope corners after relayout'), async ({ page }) => {
+      await mount(page, backend);
+      const results = [];
+      for (const [width, height] of [[128, 128], [112, 96]]) {
+        await page.evaluate(([w, h]) => (window as ComposedHarnessWindow).composedTest.layout(w, h), [width, height]);
+        for (const mode of ['parallax', 'pan'] as const) {
+          await setCamera(page, mode);
+          for (const [x, y] of CORNERS) {
+            await point(page, x, y);
+            await tick(page, 4000);
+            const current = await state(page);
+            expect({ width: current.width, height: current.height }, 'actual resized viewport').toEqual({ width, height });
+            const excursion = { x: x / 2 * width * 0.1, y: y / 2 * height * 0.1 };
+            const applied = current.offsets.background;
+            closePoint(applied, offsets(excursion, mode).background, 'relayout CSS envelope');
+            const result = await backdrop(page);
+            assertOpaque(result, backend);
+            results.push({ cssWidth: width, cssHeight: height, mode, excursion, applied, ...result });
+          }
+        }
+      }
+      console.log(JSON.stringify({ results }));
+    });
+
+    test(check(6, 'allows horizontal-only movement with zero bottom overscan'), async ({ page }) => {
+      const modelUrl = await alterModel(page, 'zero-bottom', doc => {
+        const plate = doc.skins[0].attachments.backdrop.backdrop as { height: number; y: number };
+        plate.height = 143;
+        plate.y = 71.5;
+      });
+      await mount(page, backend, { modelUrl });
+      const posed = (await draw(page)).order.find(slot => slot.slot === 'backdrop')!;
+      expect(Math.min(...posed.coords.filter((_, i) => i % 2 === 1)), 'authored plate meets the stage bottom').toBe(STAGE.y);
+      for (const mode of ['parallax', 'pan'] as const) {
+        const refusal = await setCamera(page, mode).then(() => '', error => String(error));
+        expect(refusal).toContain('COMPOSED_BACKDROP_COVERAGE:');
+        expect(refusal).toContain('camera excursion 12.8 × 12.8 CSS px');
+        expect(refusal).toContain('available geometric overscan left=15, right=15, top=15, bottom=0 CSS px');
+        expect(refusal).toContain('uncovered geometric edges bottom');
+        expect((await state(page)).mode).toBe('fixed');
+        console.log(JSON.stringify({ backend, mode, refusal }));
+      }
+
+      const excursion = { x: 14, y: 0 };
+      await mount(page, backend, { modelUrl, maxDisplacement: excursion });
+      const results = [];
+      for (const mode of ['parallax', 'pan'] as const) {
+        await setCamera(page, mode);
+        for (const [x, y] of CORNERS) {
+          await point(page, x, y);
+          await tick(page, 4000);
+          const current = await state(page);
+          expect(current.mode).toBe(mode);
+          expect(current.refusal).toBeUndefined();
+          expect(current.cameraExcursion).toEqual(excursion);
+          const expected = offsets({ x: Math.sign(x) * excursion.x, y: 0 }, mode);
+          for (const plane of PLANES) {
+            closePoint(current.offsets[plane], expected[plane], `${mode} horizontal ${plane} shift`);
+            expect(current.offsets[plane].y === 0, `${mode} keeps ${plane} vertical shift at zero`).toBe(true);
+          }
+          const plate = await backdrop(page);
+          assertOpaque(plate, backend);
+          results.push({ mode, pointer: { x, y }, excursion, applied: current.offsets, backdrop: plate });
+        }
+      }
+      console.log(JSON.stringify({ backend, results }));
+    });
+
+    test(check(6, 'explicit CSS excursion bypasses the default cap and applies plane gain after'), async ({ page }) => {
+      // Non-unit layout converts the same world plate to CSS overscan. Stretch
+      // x only, so the figure's y and the stage crop remain easy to read.
+      await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.layout(768, 480));
+      await mount(page, backend, { camera: 'parallax' });
+      for (const mode of ['parallax', 'pan'] as const) {
+        await setCamera(page, mode);
+        await point(page, 2, 2);
+        await tick(page, 4000);
+        const current = await state(page);
+        const capped = { x: 64, y: 40 };
+        expect(current.cameraExcursion, 'landed CSS excursion cap').toEqual(capped);
+        closePoint(current.offsets.background, offsets(capped, mode).background, 'capped plane shift');
+        assertOpaque(await backdrop(page), backend);
+        console.log(JSON.stringify({ mode, width: current.width, height: current.height, excursion: capped, offsets: current.offsets }));
+      }
+      await mount(page, backend, { camera: 'parallax', maxDisplacement: { x: 160, y: 0 } });
+      await point(page, 2, 2);
+      await tick(page, 4000);
+      const current = await state(page);
+      const excursion = { x: 160, y: 0 };
+      expect(current.cameraExcursion, 'explicit CSS excursion preserved').toEqual(excursion);
+      closePoint(current.offsets.background, offsets(excursion, 'parallax').background, 'explicit CSS excursion');
+      assertOpaque(await backdrop(page), backend);
+      console.log(JSON.stringify({ mode: 'parallax', width: current.width, height: current.height, excursion, offsets: current.offsets }));
+      await mount(page, backend, { camera: 'pan', maxDisplacement: { x: 88, y: 0 } });
+      await point(page, 2, 2);
+      await tick(page, 4000);
+      const pan = await state(page);
+      expect(pan.cameraExcursion).toEqual({ x: 88, y: 0 });
+      closePoint(pan.offsets.background, { x: -88, y: 0 }, 'explicit Pan shift');
+      assertOpaque(await backdrop(page), backend);
+      console.log(JSON.stringify({ mode: 'pan', width: pan.width, height: pan.height, excursion: pan.cameraExcursion, offsets: pan.offsets }));
+    });
+
+    test(check(7, 'crops full authored geometry only after Pan at both horizontal extremes'), async ({ page }, info) => {
+      const url = model('clip');
+      await mount(page, backend, { modelUrl: url, camera: 'pan', maxDisplacement: { x: 12, y: 12 } });
+      await ordinary(page, backend, url);
+      await freeze(page, 2);
+      const results = [];
+      for (const x of [-1, 1]) {
+        await point(page, x, 0);
+        const drawn = await draw(page, 4000);
+        expect(drawn.viewport, 'viewport is original stage').toEqual(STAGE);
+        const shift = { x: -x * 12, y: 0 };
+        const result = await page.evaluate(({ shift, figure }) =>
+          (window as ComposedHarnessWindow).composedTest.cropReference(2, shift, figure), { shift, figure: SLOTS.figure });
+        await expectCropRaster(result, backend, shift, info, {
+          scene: 'stage crop RGBA', actor: 'isolated full-geometry crop RGBA',
+        });
+        const input = result.source.find(row => row.slot === 'actor:background')!;
+        expect(Math.min(...input.coords.filter((_, i) => i % 2 === 0)), 'authored left spill reaches outside stage').toBeLessThan(-64);
+        expect(drawn.order.map(row => row.slot)).toEqual(result.source.map(row => row.slot));
+        for (const [i, row] of drawn.order.entries()) {
+          const source = result.source[i].coords;
+          expect(row.coords).toHaveLength(source.length);
+          for (const [j, value] of row.coords.entries()) {
+            expect(value - source[j], `stage crop keeps full ${row.slot} geometry`)
+              .toBeCloseTo(j % 2 ? -shift.y : shift.x, 7);
+          }
+        }
+        if (x === -1) expect(result.earlyCrop.alphaChanged, 'early crop must erase a visible strip').toBeGreaterThan(500);
+        results.push({ pointerX: x, excursion: { x: x * 12, y: 0 }, shift, earlyCrop: result.earlyCrop });
+      }
+      console.log(JSON.stringify({ results }));
+    });
+
+    test(check(7, 'moves an authored attachment polygon with its plane'), async ({ page }) => {
+      test.setTimeout(15_000);
+      const url = await attachmentClip(page, false);
+      await mount(page, backend, { modelUrl: url, maxDisplacement: { x: 12, y: 12 } });
+      await freeze(page, 2);
+      const base = await draw(page);
+      await setCamera(page, 'pan');
+      const baselineClips = base.order.filter(slot => slot.clip);
+      expect(baselineClips.map(slot => slot.slot), 'only the six figure draw slots share the clip').toEqual(SLOTS.figure);
+      expect(new Set(baselineClips.map(slot => slot.clip?.id)).size).toBe(1);
+      expect(base.clipCount).toBe(1);
+      await point(page, -1, 1);
+      const moved = await draw(page, 4000);
+      expect(moved.clipCount).toBe(1);
+      const shift = { x: 12, y: 12 };
+      const drawn = moved.order.filter(slot => slot.clip);
+      expect(drawn.map(slot => slot.slot)).toEqual(SLOTS.figure);
+      expect(new Set(drawn.map(slot => slot.clip?.id)).size, 'single shared clip after displacement').toBe(1);
+      for (const [i, slot] of drawn.entries()) {
+        for (const [j, value] of slot.clip!.polygon.entries()) {
+          expect(value - baselineClips[i].clip!.polygon[j], 'polygon and figure move together').toBeCloseTo(j % 2 ? -shift.y : shift.x, 7);
+        }
+      }
+    });
+
+    test(check(7, 'renders the displaced attachment clip against stock'), async ({ page }, info) => {
+      const url = await attachmentClip(page, false);
+      await mount(page, backend, { modelUrl: url, maxDisplacement: { x: 12, y: 12 } });
+      await ordinary(page, backend, url);
+      await freeze(page, 2);
+      await setCamera(page, 'pan');
+      await point(page, -1, 1);
+      await tick(page, 4000);
+      const shift = { x: 12, y: 12 };
+      const result = await page.evaluate(({ shift, figure }) =>
+        (window as ComposedHarnessWindow).composedTest.cropReference(2, shift, figure), { shift, figure: SLOTS.figure });
+      await expectCropRaster(result, backend, shift, info, {
+        scene: 'attachment clip scene RGBA', actor: 'attachment clip isolated figure RGBA',
+      });
+      expect(result.alpha.transparent).toBeGreaterThan(0);
+    });
+
+    const refusals: {
+      name: string;
+      code: string;
+      options: (page: Page) => Partial<MountOptions> | Promise<Partial<MountOptions>>;
+    }[] = [
+      { name: 'missing stage', code: 'COMPOSED_STAGE_REQUIRED',
+        options: async page => ({ modelUrl: await alterModel(page, 'without-stage', doc => { doc.stage = null; }) }) },
+      { name: 'absent stage section', code: 'COMPOSED_STAGE_REQUIRED',
+        options: async page => ({ modelUrl: await alterModel(page, 'missing-stage-section', doc => { delete doc.stage; }) }) },
+      { name: 'loop disabled', code: 'COMPOSED_LOOP_REQUIRED', options: () => ({ loop: false as true }) },
+      { name: 'named animation missing', code: 'COMPOSED_LOOP_REQUIRED', options: () => ({ animation: 'absent-loop' }) },
+      { name: 'missing actor slot', code: 'COMPOSED_SLOT_PARTITION',
+        options: () => ({ slots: { ...SLOTS, figure: SLOTS.figure.slice(1) } }) },
+      { name: 'unknown slot', code: 'COMPOSED_SLOT_PARTITION',
+        options: () => ({ slots: { ...SLOTS, figure: [...SLOTS.figure, 'actor:unknown'] } }) },
+      { name: 'duplicate slot', code: 'COMPOSED_SLOT_PARTITION',
+        options: () => ({ slots: { ...SLOTS, foreground: ['foreground', 'actor:torso'] } }) },
+      { name: 'unbound existing foreground', code: 'COMPOSED_SLOT_PARTITION',
+        options: () => ({ slots: { background: SLOTS.background, figure: SLOTS.figure } }) },
+      { name: 'shared cross-plane clip', code: 'COMPOSED_CROSS_PLANE_CLIP',
+        options: async page => ({ modelUrl: await attachmentClip(page, true) }) },
+      { name: 'transparent backdrop', code: 'COMPOSED_BACKDROP_COVERAGE',
+        options: async page => ({ camera: 'pan', modelUrl: await transparentPlate(page) }) },
+      { name: 'original zero-padding backdrop', code: 'COMPOSED_BACKDROP_COVERAGE',
+        options: () => ({ camera: 'parallax', modelUrl: model('original') }) },
+      { name: 'short backdrop X axis', code: 'COMPOSED_BACKDROP_COVERAGE',
+        options: async page => ({ camera: 'pan', modelUrl: await shortPlate(page, 'x') }) },
+      { name: 'short backdrop Y axis', code: 'COMPOSED_BACKDROP_COVERAGE',
+        options: async page => ({ camera: 'pan', modelUrl: await shortPlate(page, 'y') }) },
+      { name: 'negative explicit excursion', code: 'COMPOSED_INVALID_DISPLACEMENT',
+        options: () => ({ maxDisplacement: { x: -1, y: 0 } }) },
+      { name: 'unknown camera mode', code: 'COMPOSED_INVALID_CAMERA',
+        options: () => ({ camera: 'absent' as Mode }) },
+    ];
+
+    for (const { name, code, options } of refusals) {
+      test(check(8, `refuses ${name}`), async ({ page }) => {
+        test.setTimeout(15_000);
+        const overrides = await options(page);
+        const refusal = await mount(page, backend, overrides).then(() => '', error => String(error));
+        console.log(JSON.stringify({ backend, name, refusal }));
+        expect(refusal, `named refusal for ${name}`).toContain(`${code}:`);
+        if (name === 'transparent backdrop') {
+          expect(refusal).toContain('available geometric overscan left=15, right=15, top=15, bottom=15 CSS px');
+          expect(refusal).toMatch(/\b[1-9]\d* envelope pixels have alpha below 255/);
+        }
+        if (name === 'short backdrop X axis' || name === 'short backdrop Y axis') {
+          const shortX = name.includes('X axis');
+          expect(refusal).toContain('requested shift per edge X=12.8, Y=12.8 CSS px');
+          expect(refusal).toContain(shortX
+            ? 'available geometric overscan left=9, right=9, top=15, bottom=15 CSS px'
+            : 'available geometric overscan left=15, right=15, top=9, bottom=9 CSS px');
+          expect(refusal).toContain(shortX ? 'uncovered geometric edges left, right' : 'uncovered geometric edges top, bottom');
+        }
+        await expect(page.locator('#stage canvas')).toHaveCount(0);
+      });
+    }
+
+    test(check(8, 'refuses non-finite explicit excursion on either axis'), async ({ page }) => {
+      const controls = [
+        { name: 'Infinity on X', maxDisplacement: { x: Infinity, y: 0 } },
+        { name: 'NaN on Y', maxDisplacement: { x: 0, y: NaN } },
+      ];
+      for (const { name, maxDisplacement } of controls) {
+        const refusal = await mount(page, backend, { maxDisplacement }).then(() => '', error => String(error));
+        console.log(JSON.stringify({ backend, name, refusal }));
+        expect(refusal, name).toContain('COMPOSED_INVALID_DISPLACEMENT:');
+        await expect(page.locator('#stage canvas')).toHaveCount(0);
+      }
+    });
+
+    test(check(8, 'original stays available in Fixed and refuses both camera modes'), async ({ page }) => {
+      await mount(page, backend, { modelUrl: model('original') });
+      await ordinary(page, backend, model('original'));
+      await freeze(page, 2);
+      const fixed = await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.fixedReference(2));
+      expect(fixed.changed).toBe(0);
+      for (const [width, height, x, y] of [[128, 128, 12.8, 12.8], [1744, 480, 64, 40]]) {
+        await page.evaluate(([width, height]) => (window as ComposedHarnessWindow).composedTest.layout(width, height), [width, height]);
+        for (const mode of ['parallax', 'pan'] as const) {
+          const refusal = await setCamera(page, mode).then(() => '', error => String(error));
+          expect(refusal, `named refusal when selecting ${mode}`).toContain('COMPOSED_BACKDROP_COVERAGE:');
+          expect(refusal).toContain(`${mode} at ${width} × ${height} CSS px`);
+          expect(refusal).toContain(`camera excursion ${x} × ${y} CSS px`);
+          const requested = mode === 'pan' ? { x, y } : { x: Number((x * 0.55).toPrecision(6)), y: Number((y * 0.55).toPrecision(6)) };
+          expect(refusal).toContain(`requested shift per edge X=${requested.x}, Y=${requested.y} CSS px`);
+          expect(refusal).toContain('available geometric overscan left=0, right=0, top=0, bottom=0 CSS px');
+          expect((await state(page)).mode).toBe('fixed');
+          console.log(JSON.stringify({ backend, mode, refusal, fixed }));
+        }
+      }
+    });
+
+    test(check(8, 'revalidates an explicit envelope after destructive relayout'), async ({ page }) => {
+      await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.layout(768, 480));
+      await mount(page, backend, { camera: 'parallax', maxDisplacement: { x: 120, y: 0 } });
+      await point(page, 2, 0);
+      await tick(page, 4000);
+      expect((await state(page)).mode).toBe('parallax');
+      await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.layout(128, 128));
+      await expect.poll(async () => (await state(page)).refusal).toBe('COMPOSED_BACKDROP_COVERAGE');
+      const result = await state(page);
+      expect(result.cameraExcursion).toEqual({ x: 120, y: 0 });
+      expect(result.mode).toBe('fixed');
+      expect(result.refusalMessage).toContain('requested shift per edge X=66, Y=0 CSS px');
+      expect(result.refusalMessage).toContain('available geometric overscan left=15, right=15, top=15, bottom=15 CSS px');
+      expect(result.offsets.background).toEqual({ x: 0, y: 0 });
+      console.log(JSON.stringify({ backend, result }));
+    });
+  });
+}
+
+type ReviewWindow = typeof window & { tickReview: (ms: number) => void };
+
+test('captures the composed review page and independent stage crop', async ({ page }, info) => {
+  const directory = process.env.COMPOSED_TAKE_EVIDENCE;
+  test.skip(!directory, 'Set COMPOSED_TAKE_EVIDENCE to an evidence directory');
+  test.setTimeout(120_000);
+  const root = resolve(directory!);
+  await mkdir(root, { recursive: true });
+  const output = join(root, info.project.name);
+  await mkdir(output);
+  await open(page);
+
+  const positions = [['center', 0, 0], ['left', -1, 0], ['right', 1, 0], ['up', 0, 1], ['down', 0, -1]] as const;
+  const isolated = new Map();
+  await mount(page, 'webgl');
+  await freeze(page, 2);
+  for (const mode of ['parallax', 'pan'] as const) {
+    await setCamera(page, mode);
+    for (const [position, x, y] of positions) {
+      await point(page, x, y);
+      await tick(page, 4000);
+      const result = await backdrop(page);
+      assertOpaque(result, 'webgl');
+      isolated.set(`${mode}-${position}`, { ...await state(page), backdrop: result });
+    }
+  }
+
+  // The comparison panels use a controlled integer translation and, separately,
+  // the actual review-page snapshots below use the normal 12.8 px limit.
+  const clipUrl = model('clip');
+  await mount(page, 'webgl', { modelUrl: clipUrl, camera: 'pan', maxDisplacement: { x: 12, y: 12 } });
+  await ordinary(page, 'webgl', clipUrl);
+  await freeze(page, 2);
+  const clip = [];
+  for (const [position, x] of [['left', -1], ['right', 1]] as const) {
+    await point(page, x, 0);
+    await tick(page, 4000);
+    const shift = { x: -x * 12, y: 0 };
+    const result = await page.evaluate(({ shift, figure }) =>
+      (window as ComposedHarnessWindow).composedTest.cropReference(2, shift, figure), { shift, figure: SLOTS.figure });
+    const current = await state(page);
+    clip.push({ position, ...current, ...result });
+    await page.evaluate(lines => (window as ComposedHarnessWindow).composedTest.showReading(lines, true), [
+      `Pan ${position} at 2 s`, `Camera X ${x * 12} px`, `All planes X ${shift.x} px`,
+      `Crop RGBA differences ${result.scene.changed}`, `Early crop actor alpha differences ${result.earlyCrop.alphaChanged}`,
+    ]);
+    await page.locator('#evidence').screenshot({ path: join(output, `clip-reference-${position}.png`) });
+  }
+  await writeFile(join(output, 'clip-readings.json'), JSON.stringify(clip, null, 2), { flag: 'wx' });
+
+  await page.addInitScript(() => {
+    let now = 0;
+    let id = 0;
+    const pending = new Map<number, FrameRequestCallback>();
+    performance.now = () => now;
+    window.requestAnimationFrame = callback => { pending.set(++id, callback); return id; };
+    window.cancelAnimationFrame = id => { pending.delete(id); };
+    (window as ReviewWindow).tickReview = (elapsed: number) => {
+      now += elapsed;
+      for (const [id, callback] of [...pending]) {
+        if (pending.delete(id)) callback(now);
+      }
+    };
+  });
+
+  const captures = [];
+  for (const mode of ['parallax', 'pan'] as const) {
+    for (const [position, x, y] of positions) {
+      await page.goto(`/composed-parallax.html?fixture=overscan&camera=${mode}&time=2`);
+      await expect(page.locator('#status')).toContainText('Pose held at 2 s');
+      await page.locator('#stage canvas').evaluate((canvas, [x, y]) => {
+        const box = canvas.getBoundingClientRect();
+        canvas.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, isPrimary: true,
+          clientX: box.left + (1 + x) * box.width / 2, clientY: box.top + (1 - y) * box.height / 2,
+        }));
+        (window as ReviewWindow).tickReview(4000);
+      }, [x, y]);
+      const pageReading = await page.evaluate(() => {
+        const read = (id: string) => document.getElementById(id)!.textContent!;
+        const canvas = document.querySelector<HTMLCanvasElement>('#stage canvas')!;
+        const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
+        let nonOpaque = 0;
+        for (let i = 3; i < data.length; i += 4) nonOpaque += Number(data[i] !== 255);
+        return {
+          camera: read('camera-position'), excursion: read('camera-limit'),
+          background: read('background-shift'), figure: read('figure-shift'), foreground: read('foreground-shift'),
+          nonOpaque, width: canvas.width, height: canvas.height,
+        };
+      });
+      const key = `${mode}-${position}`;
+      const raw = isolated.get(key);
+      const expected = (p: Point) => `${(p.x || 0).toFixed(2)}, ${(p.y || 0).toFixed(2)}`;
+      expect(pageReading.camera).toBe(expected({ x: x * 12.8, y: y * 12.8 }));
+      for (const plane of PLANES) expect(pageReading[plane]).toBe(expected(raw.offsets[plane]));
+      expect(pageReading.nonOpaque).toBe(0);
+      captures.push({ mode, position, page: pageReading, raw });
+      await page.locator('main').screenshot({ path: join(output, `${key}.png`) });
+    }
+  }
+  await writeFile(join(output, 'review-readings.json'), JSON.stringify(captures, null, 2), { flag: 'wx' });
+});

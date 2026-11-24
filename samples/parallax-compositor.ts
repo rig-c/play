@@ -34,7 +34,18 @@ export function cameraLimits(width: number, height: number): Point {
 
 function planeShift(camera: Point, gain: number): Point {
   // Positive gain opposes camera motion. The camera is Y-up and the screen is Y-down.
-  return { x: -gain * camera.x, y: gain * camera.y };
+  const x = -gain * camera.x;
+  const y = gain * camera.y;
+  return { x: x === 0 ? 0 : x, y: y === 0 ? 0 : y };
+}
+
+export function planeOffsets(camera: Point, mode: CameraMode): Offsets {
+  if (mode === 'fixed') return { background: ORIGIN, figure: ORIGIN, foreground: ORIGIN };
+  return {
+    background: planeShift(camera, mode === 'pan' ? 1 : GAINS.background),
+    figure: planeShift(camera, mode === 'pan' ? 1 : GAINS.figure),
+    foreground: planeShift(camera, mode === 'pan' ? 1 : GAINS.foreground),
+  };
 }
 
 function context(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -133,13 +144,7 @@ export function createCompositor(canvas: HTMLCanvasElement, figureSource: HTMLCa
     }
 
     return function composite(camera: Point, mode: CameraMode): Offsets {
-      const offsets = mode === 'fixed'
-        ? { background: ORIGIN, figure: ORIGIN, foreground: ORIGIN }
-        : {
-          background: planeShift(camera, mode === 'pan' ? 1 : GAINS.background),
-          figure: planeShift(camera, mode === 'pan' ? 1 : GAINS.figure),
-          foreground: planeShift(camera, mode === 'pan' ? 1 : GAINS.foreground),
-        };
+      const offsets = planeOffsets(camera, mode);
       ctx.clearRect(0, 0, width, height);
       draw(background, offsets.background);
       draw(figure, offsets.figure);
