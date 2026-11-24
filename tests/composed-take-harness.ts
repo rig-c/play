@@ -3,6 +3,7 @@ import { CanvasRenderer, RigPlayer, loadModel, type CanvasViewport, type PosedFr
 import { renderFrameOf } from '../src/liveFrameSource.js';
 
 export type MountOptions = Parameters<typeof mountComposedTake>[1];
+export type TranslationDial = { bone: string; channel: 'x' | 'y' };
 type Take = Awaited<ReturnType<typeof mountComposedTake>>;
 type Backend = NonNullable<MountOptions['backend']>;
 type Point = { x: number; y: number };
@@ -120,6 +121,13 @@ function pixels(canvas: HTMLCanvasElement): ImageData {
   return canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height);
 }
 
+function renderedPixels(): string {
+  const { data } = pixels(take().canvas);
+  let bytes = '';
+  for (let i = 0; i < data.length; i += 8192) bytes += String.fromCharCode(...data.subarray(i, i + 8192));
+  return btoa(bytes);
+}
+
 function alpha({ data, width, height }: ImageData) {
   let nonOpaque = 0;
   let transparent = 0;
@@ -233,6 +241,26 @@ function referenceGeometry(time: number) {
   if (!ordinary) throw new Error('Open the reference first');
   ordinary.player.seek(time);
   return geometry(ordinary.player.posedFrame());
+}
+
+function dialLocals(dials: readonly TranslationDial[]) {
+  // Synthetic drivers are direct children of the identity root. These world
+  // axes therefore read the stored local translations without changing adjust.
+  return dials.map(({ bone, channel }) => take().player.bone(bone)[channel]);
+}
+
+function turnReadouts() {
+  return take().turnReadouts;
+}
+
+function dialReference(time: number, dials: readonly (TranslationDial & { value: number })[]) {
+  if (!ordinary) throw new Error('Open the reference first');
+  const { player } = ordinary;
+  player.adjust = locals => {
+    for (const { bone, channel, value } of dials) locals.bone(bone)[channel] = value;
+  };
+  player.seek(time);
+  return geometry(player.posedFrame());
 }
 
 function fixedReference(time: number) {
@@ -374,7 +402,8 @@ function showReading(lines: string[], showReference = false): void {
 Object.assign(window, {
   composedTest: {
     mount, dispose, point, reset, tick, camera, layout, state, poseBytes, freeze,
-    sourceGeometry, draw, backdrop, openReference, referenceGeometry, fixedReference, livePose, liveReference, storeFigure,
+    sourceGeometry, draw, backdrop, openReference, referenceGeometry, dialLocals, dialReference, turnReadouts,
+    fixedReference, livePose, liveReference, storeFigure, renderedPixels,
     compareFigure, cropReference, planeReferences, layerPixels, compareWithout, showReading,
   },
 });
@@ -386,7 +415,9 @@ export type ComposedHarnessWindow = typeof window & {
     poseBytes: typeof poseBytes; freeze: typeof freeze; sourceGeometry: typeof sourceGeometry;
     draw: typeof draw; backdrop: typeof backdrop; openReference: typeof openReference;
     referenceGeometry: typeof referenceGeometry;
+    dialLocals: typeof dialLocals; dialReference: typeof dialReference; turnReadouts: typeof turnReadouts;
     fixedReference: typeof fixedReference; livePose: typeof livePose; liveReference: typeof liveReference;
+    renderedPixels: typeof renderedPixels;
     storeFigure: typeof storeFigure; compareFigure: typeof compareFigure;
     cropReference: typeof cropReference; planeReferences: typeof planeReferences; layerPixels: typeof layerPixels;
     compareWithout: typeof compareWithout; showReading: typeof showReading;

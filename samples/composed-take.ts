@@ -1,7 +1,7 @@
 import { poseRawSetup, underNoSkin } from '@rig-c/core/core';
 import {
-  CanvasRenderer, RigPlayer, loadModel, type CanvasBackend, type CanvasViewport,
-  type ModelAssets, type PosedClip, type PosedFrame, type PosedSlot,
+  CanvasRenderer, RigPlayer, discoverTurnDials, loadModel, normalizedDial, type BoneAdjust, type CanvasBackend,
+  type CanvasViewport, type ModelAssets, type PosedClip, type PosedFrame, type PosedSlot, type TurnDial,
 } from '../src/index.js';
 import type { ReadDocument } from '../src/loadModel.js';
 import { frameOf, frameSource, type PosedRegion } from '../src/posedFrame.js';
@@ -32,12 +32,14 @@ interface TakeOptions {
   autoStart?: boolean;
 }
 
-type LegacyTakeOptions = TakeOptions & { slots: Bindings; planes?: never; autoSweep?: never; transitionMs?: never };
+type LegacyTakeOptions = TakeOptions & { slots: Bindings; planes?: never; autoSweep?: never; transitionMs?: never; pointerTurn?: never };
 type NamedTakeOptions = TakeOptions & {
   planes: Readonly<Record<string, ComposedPlane>>;
   slots?: never;
   autoSweep?: { periodSeconds: number; maxDisplacement: Point };
   transitionMs?: number;
+  /** Blend compiled turn dials into the Parallax handoff by default. Set false for camera-only control. */
+  pointerTurn?: boolean;
 };
 export type ComposedTakeOptions = LegacyTakeOptions | NamedTakeOptions;
 
@@ -51,6 +53,16 @@ export class ComposedTakeError extends Error {
   }
 }
 
+type TurnValue = Pick<TurnDial, 'axis' | 'min' | 'max'> & {
+  readonly baked: number;
+  readonly pointer: number;
+  readonly value: number;
+};
+type TurnReadout = TurnValue & {
+  /** Whether the current pointer request reaches a limit before easing. */
+  readonly clamped: boolean;
+};
+
 interface MountedTake<PlaneOffsets extends Offsets = Offsets> {
   readonly canvas: HTMLCanvasElement;
   readonly player: RigPlayer;
@@ -60,7 +72,10 @@ interface MountedTake<PlaneOffsets extends Offsets = Offsets> {
   readonly cameraExcursion: Point;
   /** Latest clamped pointer target before gains, in Y-up CSS pixels. */
   readonly cameraTarget: Point;
+  /** Last posed dial values and the current pointer request's limit status. */
+  readonly turnReadouts: readonly TurnReadout[];
   readonly refusal: ComposedTakeError | null;
+  cameraExcursionFor(mode: CameraMode): Point;
   setCamera(next: CameraMode): void;
   advance(rigElapsed: number, cameraElapsed?: number): void;
   render(): void;
@@ -71,6 +86,12 @@ const NEUTRAL = { x: 0, y: 0 };
 const PLANES = ['background', 'figure', 'foreground'] as const;
 const DEFAULT_TRANSITION_MS = 120;
 const BACKDROP_GAIN = -0.55;
+// Normalized distance from the stage center needed to reach each compiled endpoint.
+export const TURN_FULL_RANGE_AT_STAGE_EDGE = 1;
+
+function turnCoordinate(axis: TurnDial['axis'], point: Point): number {
+  return axis === 'pitch' ? point.y : point.x;
+}
 
 type Range = { minX: number; maxX: number; minY: number; maxY: number };
 const ZERO_RANGE: Range = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
@@ -483,7 +504,7 @@ function plateEnvelope(baked: Range, pointer: Point, sweep: Point, mode: CameraM
 }
 
 function checkPlateEnvelopes(
-  stage: CanvasViewport, layout: Layout, mode: CameraMode,
+  stage: CanvasViewport, layout: Layout, mode: CameraMode, excursion: Point,
   plates: LivePlate[], gains: NamedPlanes['gains'], sweep: Point,
 ): void {
   const backingX = layout.width / stage.width;
@@ -496,7 +517,7 @@ function checkPlateEnvelopes(
     const range = baked?.range ?? ZERO_RANGE;
     const requested = plateEnvelope({ minX: range.minX * backingX, maxX: range.maxX * backingX,
       minY: range.minY * backingY, maxY: range.maxY * backingY },
-    { x: gain * layout.excursion.x * cssToBacking.x, y: gain * layout.excursion.y * cssToBacking.y },
+    { x: gain * excursion.x * cssToBacking.x, y: gain * excursion.y * cssToBacking.y },
     { x: gain * sweep.x * cssToBacking.x, y: gain * sweep.y * cssToBacking.y }, mode);
     const left = -requested.maxX;
     const right = layout.width - requested.minX;
@@ -586,22 +607,53 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
     }
     const planes = bindSlots(assets, options);
     const named = namedPlanes(assets, options);
+    const dials = named && options.pointerTurn !== false
+      ? discoverTurnDials((assets.document as ReadDocument).parsed, assets.animations) : [];
+    const handoff = createCameraHandoff(transitionSeconds);
+    let mode: CameraMode = initial;
+    let turnInput = { weight: 0, pointer: NEUTRAL };
+    let posedTurnInput = turnInput;
+    let turnValues: readonly TurnValue[] = [];
+
+    const adjustTurn: BoneAdjust = bones => {
+      const { weight, pointer } = turnInput;
+      turnValues = dials.map(dial => {
+        const { axis, bone, channel, min, max } = dial;
+        const locals = bones.bone(bone);
+        // Core starts each pose from setup and applies the live timelines before this hook.
+        const baked = locals[channel];
+        const n = turnCoordinate(axis, pointer) / TURN_FULL_RANGE_AT_STAGE_EDGE;
+        const limited = normalizedDial(n, dial);
+        const value = weight === 0 ? baked : (1 - weight) * baked + weight * limited;
+        if (value !== baked) locals[channel] = value;
+        return { axis, min, max, baked, pointer: limited, value };
+      });
+      posedTurnInput = turnInput;
+    };
+
+    function syncTurn(next: CameraMode): void {
+      if (!dials.length) return;
+      const weight = mode === 'parallax' && next === mode ? handoff.weight : 0;
+      const pointer = weight === 0 ? NEUTRAL : handoff.pointer;
+      if (weight !== turnInput.weight || pointer.x !== turnInput.pointer.x || pointer.y !== turnInput.pointer.y) {
+        turnInput = { weight, pointer };
+      }
+    }
+
     Object.assign(surface.style, {
       position: 'relative', overflow: 'hidden', width: '100%', height: '100%', aspectRatio: `${stage.width} / ${stage.height}`,
     });
     root.appendChild(surface);
-    const poser = player = new RigPlayer(surface, assets, { mode: 'canvas' });
+    const poser = player = new RigPlayer(surface, assets, { mode: 'canvas', adjust: dials.length ? adjustTurn : null });
     const renderer = poser.renderer as CanvasRenderer;
     const coverage = audit = new CanvasRenderer(doc.createElement('div'), assets.pageImages);
     renderer.backend = coverage.backend = options.backend ?? 'webgl';
     const canvas = renderer.canvas;
     poser.play(take.name, { loop: true });
 
-    let mode: CameraMode = initial;
     let offsets: Offsets = planeOffsets(NEUTRAL, 'fixed');
     let camera = NEUTRAL;
     let target = NEUTRAL;
-    const handoff = createCameraHandoff(transitionSeconds);
     let hover: number | undefined;
     let layout: Layout;
     let refusal: ComposedTakeError | null = null;
@@ -626,25 +678,32 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
       const pixelRatio = width / stage.width;
       const native = [stage.x, stage.y, stage.width, stage.height].every(Number.isInteger)
         && stage.width * pixelRatio === width && stage.height * pixelRatio === height;
-      layout = { cssWidth, cssHeight, width, height, dpr, native, excursion: explicit ?? cameraLimits(cssWidth, cssHeight) };
+      const excursion = explicit ?? cameraLimits(cssWidth, cssHeight);
+      layout = { cssWidth, cssHeight, width, height, dpr, native, excursion };
       renderer.viewport = native ? stage : { x: 0, y: -height, width, height };
       renderer.pixelRatio = native ? pixelRatio : 1;
     }
 
-    const cssTarget = (point: Point): Point => ({ x: point.x * layout.excursion.x, y: point.y * layout.excursion.y });
+    function cameraExcursionFor(next: CameraMode): Point {
+      const { excursion } = layout;
+      // In Parallax the vertical pointer axis drives the turn; Pan keeps both axes.
+      return next === 'parallax' && dials.length ? { x: excursion.x, y: 0 } : excursion;
+    }
 
-    function prepareFrame(frame: PosedFrame, plates: LivePlate[], next: CameraMode): { frame: PosedFrame; offsets: Offsets } {
+    const cssTarget = (point: Point, excursion: Point): Point => ({ x: point.x * excursion.x, y: point.y * excursion.y });
+
+    function prepareFrame(frame: PosedFrame, plates: LivePlate[], next: CameraMode, excursion: Point): { frame: PosedFrame; offsets: Offsets } {
       const worldX = stage.width / layout.cssWidth;
       const worldY = stage.height / layout.cssHeight;
       const centered = new Map<string, PosedRegion>();
-      const shifts = planeOffsets(cssTarget(camera), next) as Offsets;
+      const shifts = planeOffsets(cssTarget(camera, excursion), next) as Offsets;
       let frameOffsets = shifts;
       let namedShifts: Map<string, Point> | undefined;
       if (named) {
         const liveByPlane = new Map(plates.map(plate => [plate.plate.id, plate]));
         const changingMode = mode !== next;
         const weight = changingMode ? 0 : handoff.weight;
-        const pointer = cssTarget(changingMode ? NEUTRAL : next === 'pan' ? camera : handoff.pointer);
+        const pointer = cssTarget(changingMode ? NEUTRAL : next === 'pan' ? camera : handoff.pointer, excursion);
         const phase = sweepPeriod === undefined ? 0 : Math.sin(2 * Math.PI * ((poser.time % sweepPeriod) / sweepPeriod));
         const automatic = { x: sweepLimit.x * phase, y: sweepLimit.y * phase };
         const liveOffsets = new Map<string, Point>();
@@ -711,7 +770,10 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
       }
     }
 
-    function currentFrame() {
+    function currentFrame(next: CameraMode) {
+      syncTurn(next);
+      // Paused, held or zero-time steps may retain the prior pose.
+      if (posedTurnInput !== turnInput) poser.repose();
       const frame = poser.posedFrame(null);
       if (named) return { frame, backdrop: checkFrame(frame, planes, named.backdrop) };
       return { frame, backdrop: checkFrame(frame, planes) };
@@ -719,10 +781,11 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
 
     function drawMode(frame: PosedFrame, backdrop: PosedSlot[], next: CameraMode, switching: boolean): void {
       const plates = named ? livePlates(frame, named, next) : [];
-      if (named) checkPlateEnvelopes(stage, layout, next, plates, named.gains, sweepLimit);
+      const excursion = cameraExcursionFor(next);
+      if (named) checkPlateEnvelopes(stage, layout, next, excursion, plates, named.gains, sweepLimit);
       else requireCoverage(backdrop, layout, next);
 
-      const prepared = prepareFrame(frame, plates, next);
+      const prepared = prepareFrame(frame, plates, next, excursion);
       if (named) checkBackdropAlpha(prepared.frame, named, next);
       renderer.render(prepared.frame);
 
@@ -740,7 +803,7 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
     }
 
     function select(next: CameraMode, switching: boolean, allowFallback: boolean): void {
-      const { frame, backdrop } = currentFrame();
+      const { frame, backdrop } = currentFrame(next);
       try {
         drawMode(frame, backdrop, next, switching);
       } catch (error) {
@@ -748,7 +811,8 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
           || next === 'fixed' || (!named && !allowFallback)) throw error;
         // Check the authored Fixed mode independently before presenting it.
         try {
-          drawMode(frame, backdrop, 'fixed', true);
+          const fixed = turnInput.weight === 0 ? { frame, backdrop } : currentFrame('fixed');
+          drawMode(fixed.frame, fixed.backdrop, 'fixed', true);
         } catch (fixedError) {
           canvas.style.visibility = 'hidden';
           throw fixedError;
@@ -798,8 +862,9 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
 
     function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {
       if (disposed || stopped) return;
-      poser.advance(rigElapsed);
       advanceCamera(cameraElapsed);
+      syncTurn(mode);
+      poser.advance(rigElapsed);
     }
 
     function render(): void {
@@ -874,8 +939,8 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
         const elapsed = Math.max(0, (now - last) / 1000);
         last = now;
         if (named) {
-          advance(Math.min(elapsed, 1 / 15), 0);
           syncCamera(now);
+          advance(Math.min(elapsed, 1 / 15), 0);
         } else {
           advance(Math.min(elapsed, 1 / 15), elapsed);
         }
@@ -889,8 +954,17 @@ export async function mountComposedTake(root: HTMLElement, options: ComposedTake
       canvas, player: poser,
       get mode() { return mode; },
       get offsets() { return offsets; },
-      get cameraExcursion() { return layout.excursion; },
-      get cameraTarget() { return cssTarget(target); },
+      get cameraExcursion() { return cameraExcursionFor(mode); },
+      cameraExcursionFor,
+      get cameraTarget() { return cssTarget(target, cameraExcursionFor(mode)); },
+      get turnReadouts() {
+        return turnValues.map(reading => {
+          const n = turnCoordinate(reading.axis, target);
+          const clamped = mode === 'parallax' && hover !== undefined && (Math.abs(n) >= TURN_FULL_RANGE_AT_STAGE_EDGE
+            || (n < 0 && reading.min === 0) || (n > 0 && reading.max === 0));
+          return { ...reading, clamped };
+        });
+      },
       get refusal() { return refusal; },
       setCamera, advance, render,
       dispose() {

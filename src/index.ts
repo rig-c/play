@@ -14,3 +14,4 @@ export type {
 } from './posedFrame.js';
 
 export type { LiveFrame, LiveNumbers, LiveAttachment, LiveClip } from './liveFrame.js';
+export { discoverTurnDials, normalizedDial, type TurnAxis, type TurnDial } from './turnDials.js';

@@ -62,6 +62,8 @@
     "dist/liveFrame.d.ts.map",
     "dist/liveFrameSource.d.ts",
     "dist/liveFrameSource.d.ts.map",
+    "dist/turnDials.d.ts",
+    "dist/turnDials.d.ts.map",
     "skills"
   ],
   "sideEffects": false,

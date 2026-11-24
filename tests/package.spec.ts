@@ -172,7 +172,9 @@ test('the package entry resolves by name in node and exposes its public API', ()
     'DomRenderer',
     'RigPlayer',
     'createAtlasRegions',
+    'discoverTurnDials',
     'loadModel',
+    'normalizedDial',
     'readSetupMesh',
     'revokeRegions',
     'unpackRegions',
@@ -205,7 +207,7 @@ test('an unlisted subpath is refused by the exports map', () => {
  * (with its map), and one declaration file (with its map) per source module.
  */
 const EMITTED_BUNDLE = ['index.js', 'index.js.map'];
-const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame'];
+const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame', 'turnDials'];
 
 test('the library build emits those modules and nothing else', () => {
   /**
@@ -678,9 +680,11 @@ test('the bundle imports nothing: rig-c/core is inside it, and no node built-in 
  * offers, reached by package name through the shipped `.d.ts`.
  */
 const CONSUMER_SOURCE = [
-  "import { CanvasRenderer, DomRenderer, loadModel, readSetupMesh, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
+  "import { CanvasRenderer, discoverTurnDials, DomRenderer, loadModel, normalizedDial, readSetupMesh, revokeRegions, RigPlayer, unpackRegions } from '@rig-c/play';",
   "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions, SlotIdentity, SlotIdentityReason, SlotIdentitySnapshot } from '@rig-c/play';",
   "import type { BoneAdjust, BoneAdjustContext, PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from '@rig-c/play';",
+  "import type { TurnAxis, TurnDial } from '@rig-c/play';",
+  'export function turn(model: unknown, assets: ModelAssets, input: Partial<Record<TurnAxis, number>>): BoneAdjust { const dials: TurnDial[] = discoverTurnDials(model, assets.animations); return bones => { for (const dial of dials) bones.bone(dial.bone)[dial.channel] = normalizedDial(input[dial.axis] ?? 0, dial); }; }',
   "export const unaryAdjust: BoneAdjust = bones => { bones.bone('root').rotation = 3; };",
   "export const contextualAdjust: BoneAdjust = (bones, ctx: BoneAdjustContext) => { const time: number | null = ctx.trackTime; const animation: string | null = ctx.animation; const global: number = ctx.globalTime; bones.bone('root').rotation = time ?? global; void animation; };",
   "export function physics(p: RigPlayer): PhysicsParameterRead { const patch: PhysicsParameterPatch = { strength: 2, damping: 0.4, inertia: 1, wind: 0, gravity: 3, mix: 0.5 }; p.setPhysicsParameters('cloth', patch); const read: PhysicsParameterRead = p.readPhysicsParameters('cloth'); const effective: PhysicsParameters | null = read.effective; p.clearPhysicsParameters('cloth'); void effective; return read; }",

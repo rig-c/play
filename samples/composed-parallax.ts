@@ -8,6 +8,8 @@ const slots = {
   foreground: ['foreground'],
 } as const;
 const publicPlaneLabels = { background: 'Background', figure: 'Figure', foreground: 'Foreground' };
+const turnLabels = { yaw: 'Yaw', pitch: 'Pitch', body: 'Body turn' };
+const dialNumber = new Intl.NumberFormat('en', { maximumSignificantDigits: 5 });
 export const DEMO_TRANSITION_MS = 120;
 export const DEMO_SWEEP_PERIOD_SECONDS = 12;
 export const DEMO_SWEEP_EXCURSION = { x: 24, y: 0 } as const;
@@ -103,10 +105,38 @@ export async function mountComposedParallax(options: ComposedParallaxOptions) {
     shift.textContent = '—';
     return { plane, shift, limit };
   });
+  const turnTable = document.getElementById('turn-table') as HTMLTableElement | null;
+  const initialTurns = take.turnReadouts;
+  const turnRows = turnTable?.tBodies[0];
+  turnRows?.replaceChildren();
+  const turnReadouts = turnRows ? initialTurns.map(({ axis, min, max }) => {
+    const row = turnRows.insertRow();
+    const heading = document.createElement('th');
+    heading.scope = 'row';
+    heading.textContent = turnLabels[axis];
+    row.append(heading);
+    const current = row.insertCell();
+    const range = row.insertCell();
+    range.textContent = `${dialNumber.format(min)} to ${dialNumber.format(max)}`;
+    const limit = row.insertCell();
+    return { current, limit };
+  }) : [];
+  if (turnTable) turnTable.hidden = turnReadouts.length === 0;
+
+  function showTurnReadouts(): void {
+    if (!turnReadouts.length) return;
+    take.turnReadouts.forEach(({ value, clamped }, i) => {
+      const { current, limit } = turnReadouts[i];
+      const reading = dialNumber.format(value || 0);
+      if (current.textContent !== reading) current.textContent = reading;
+      const clampStatus = clamped ? 'At limit' : '—';
+      if (limit.textContent !== clampStatus) limit.textContent = clampStatus;
+    });
+  }
 
   function updateLimits(): void {
     const selected = cameraMode(camera.value);
-    const { x, y } = selected === 'fixed' ? { x: 0, y: 0 } : take.cameraExcursion;
+    const { x, y } = selected === 'fixed' ? { x: 0, y: 0 } : take.cameraExcursionFor(selected);
     const shifts = planeOffsets({ x, y }, selected) as Readonly<Record<string, { x: number; y: number }>>;
     cameraLimit.textContent = pixels(x, y);
     for (const { plane, limit } of readouts) {
@@ -136,6 +166,7 @@ export async function mountComposedParallax(options: ComposedParallaxOptions) {
   camera.addEventListener('change', changeCamera);
   selectCamera();
   updateLimits();
+  showTurnReadouts();
   const observer = new ResizeObserver(updateLimits);
   observer.observe(root);
 
@@ -158,6 +189,7 @@ export async function mountComposedParallax(options: ComposedParallaxOptions) {
       showPixels(cameraPosition, unit.x === 0 ? 0 : offsets.background.x / unit.x, unit.y === 0 ? 0 : offsets.background.y / unit.y);
     }
     for (const { plane, shift } of readouts) showPixels(shift, offsets[plane].x, offsets[plane].y);
+    showTurnReadouts();
     frame = requestAnimationFrame(readFrame);
   });
 
