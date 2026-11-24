@@ -151,6 +151,8 @@ package built from this tree.
   - Find out why a renderer is not drawing through WebGL:
     `backendFallbackReason`, in
     [Runtime knobs and what they cost](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#runtime-knobs-and-what-they-cost).
+  - Let the pointer move the camera over a composed take: `camera: 'parallax'`, in
+    [Pointer camera for a composed take](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#pointer-camera-for-a-composed-take).
 - [docs/MIGRATION.md](https://github.com/rig-c/play/blob/main/docs/MIGRATION.md) — adding live-frame consumers, coming
   from 1.8 (meshes draw through WebGL by default since 1.9) and from `spine-html`
   0.8 (the 0.8 → 1.0 table, what has no counterpart, before and after).
