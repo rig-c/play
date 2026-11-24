@@ -6,6 +6,7 @@ export type MountOptions = Parameters<typeof mountComposedTake>[1];
 type Take = Awaited<ReturnType<typeof mountComposedTake>>;
 type Backend = NonNullable<MountOptions['backend']>;
 type Point = { x: number; y: number };
+type PointerKind = 'mouse' | 'pen' | 'touch';
 
 const root = document.querySelector<HTMLElement>('#stage')!;
 const reading = document.querySelector<HTMLElement>('#reading')!;
@@ -52,20 +53,21 @@ function dispose(): void {
   referencePanel.hidden = true;
 }
 
-function point(x: number, y: number): void {
+function point(x: number, y: number, event: 'pointerenter' | 'pointermove' = 'pointermove', pointerType: PointerKind = 'mouse'): void {
   // Bubble from the public canvas so the real listener works on the viewport
   // or on the canvas. Coordinates can deliberately lie outside the box.
   const canvas = take().canvas;
   const box = canvas.getBoundingClientRect();
-  canvas.dispatchEvent(new PointerEvent('pointermove', {
-    bubbles: true, isPrimary: true,
+  const target = event === 'pointerenter' ? root : canvas;
+  target.dispatchEvent(new PointerEvent(event, {
+    bubbles: event === 'pointermove', isPrimary: true, pointerType,
     clientX: box.left + (1 + x) * box.width / 2,
     clientY: box.top + (1 - y) * box.height / 2,
   }));
 }
 
-function reset(event: 'pointerleave' | 'pointercancel'): void {
-  take().canvas.dispatchEvent(new PointerEvent(event, { bubbles: true, isPrimary: true }));
+function reset(event: 'pointerleave' | 'pointercancel', pointerType: PointerKind = 'mouse'): void {
+  take().canvas.dispatchEvent(new PointerEvent(event, { bubbles: true, isPrimary: true, pointerType }));
 }
 
 function camera(mode: NonNullable<MountOptions['camera']>): void {
@@ -78,13 +80,13 @@ function layout(width: number, height: number): void {
 }
 
 function state() {
-  const { mode, offsets, cameraExcursion, refusal, canvas, player } = take();
+  const { mode, offsets, cameraExcursion, cameraTarget, refusal, canvas, player } = take();
   const { width, height } = canvas.getBoundingClientRect();
-  return { mode, offsets, cameraExcursion, refusal: refusal?.code, refusalMessage: refusal?.message, width, height, trackTime: player.time, animationTime: player.entry(0)?.animationTime };
+  return { mode, offsets, cameraExcursion, cameraTarget, refusal: refusal?.code, refusalMessage: refusal?.message, width, height, trackTime: player.time, animationTime: player.entry(0)?.animationTime };
 }
 
-function poseBytes(): string {
-  return JSON.stringify(take().player.posedFrame().order, (_key, value) => Object.is(value, -0) ? { number: '-0' } : value);
+function poseBytes(player = take().player): string {
+  return JSON.stringify(player.posedFrame().order, (_key, value) => Object.is(value, -0) ? { number: '-0' } : value);
 }
 
 function freeze(time: number): void {
@@ -180,6 +182,28 @@ function backdrop(slots: readonly string[]) {
   return { ...alpha(result), backend, viewport };
 }
 
+function layerPixels({ x, y }: Point, layers: readonly (readonly string[])[]) {
+  const sample = (slots?: readonly string[]) => {
+    const { pixels: image } = rendered(0, slots);
+    const start = (y * image.width + x) * 4;
+    return Array.from(image.data.subarray(start, start + 4));
+  };
+  try {
+    return { full: sample(), layers: layers.map(slots => sample(slots)) };
+  } finally {
+    tick(0);
+  }
+}
+
+function compareWithout(slot: string) {
+  const full = rendered();
+  try {
+    return compare(full.pixels, rendered(0, full.order.filter(row => row.slot !== slot).map(row => row.slot)).pixels);
+  } finally {
+    tick(0);
+  }
+}
+
 async function makeOrdinary(modelUrl: string, animation: string, backend: Backend) {
   const assets = await loadModel({ modelUrl, regions: 'none', setsUrl: null, crossOrigin: 'anonymous' });
   if (!assets.stage) throw new Error('Reference control has no stage');
@@ -213,6 +237,44 @@ function fixedReference(time: number) {
     ...compare(pixels(take().canvas), pixels(ordinary.renderer.canvas)),
     backend: ordinary.renderer.backendActive,
   };
+}
+
+function livePose(bones: readonly string[], player = take().player) {
+  return {
+    trackTime: player.time, animationTime: player.entry(0)?.animationTime,
+    bytes: poseBytes(player), bones: bones.map(name => player.bone(name)),
+  };
+}
+
+function liveReference(frames: number, ms: number, bones: readonly string[]) {
+  if (!ordinary) throw new Error('Open the reference first');
+  const { player } = ordinary;
+  for (let i = 0; i < frames; i++) player.advance(ms / 1000);
+  return livePose(bones, player);
+}
+
+function planeReferences(time: number, planes: readonly { slots: readonly string[]; shift: Point }[]) {
+  if (!ordinary) throw new Error('Open the reference first');
+  const { player, renderer, stage } = ordinary;
+  player.seek(time);
+  const frame = player.posedFrame();
+  try {
+    return planes.map(({ slots, shift }) => {
+      // Keep the stock geometry untouched and move its viewport. The test
+      // supplies screen-space shifts independently of the compositor readout.
+      renderer.viewport = { ...stage, x: stage.x - shift.x, y: stage.y + shift.y };
+      renderer.render(subset(frame, slots));
+      const actual = rendered(0, slots);
+      return {
+        slots, shift, actualBackend: actual.backend, referenceBackend: renderer.backendActive,
+        ...compare(actual.pixels, pixels(renderer.canvas)),
+        ...alpha(actual.pixels),
+      };
+    });
+  } finally {
+    renderer.viewport = stage;
+    tick(0);
+  }
 }
 
 let fixedFigure: ImageData | undefined;
@@ -306,8 +368,8 @@ function showReading(lines: string[], showReference = false): void {
 Object.assign(window, {
   composedTest: {
     mount, dispose, point, reset, tick, camera, layout, state, poseBytes, freeze,
-    sourceGeometry, draw, backdrop, openReference, fixedReference, storeFigure,
-    compareFigure, cropReference, showReading,
+    sourceGeometry, draw, backdrop, openReference, fixedReference, livePose, liveReference, storeFigure,
+    compareFigure, cropReference, planeReferences, layerPixels, compareWithout, showReading,
   },
 });
 
@@ -317,7 +379,9 @@ export type ComposedHarnessWindow = typeof window & {
     tick: typeof tick; camera: typeof camera; layout: typeof layout; state: typeof state;
     poseBytes: typeof poseBytes; freeze: typeof freeze; sourceGeometry: typeof sourceGeometry;
     draw: typeof draw; backdrop: typeof backdrop; openReference: typeof openReference;
-    fixedReference: typeof fixedReference; storeFigure: typeof storeFigure; compareFigure: typeof compareFigure;
-    cropReference: typeof cropReference; showReading: typeof showReading;
+    fixedReference: typeof fixedReference; livePose: typeof livePose; liveReference: typeof liveReference;
+    storeFigure: typeof storeFigure; compareFigure: typeof compareFigure;
+    cropReference: typeof cropReference; planeReferences: typeof planeReferences; layerPixels: typeof layerPixels;
+    compareWithout: typeof compareWithout; showReading: typeof showReading;
   };
 };

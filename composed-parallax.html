@@ -44,6 +44,12 @@
             <option value="pan">Pan (equal gains)</option>
           </select>
         </label>
+        <label>Motion
+          <select id="camera-motion">
+            <option value="legacy" selected>Pointer only</option>
+            <option value="handoff">Automatic and pointer</option>
+          </select>
+        </label>
       </div>
       <p id="status" role="status">Loading the composed take…</p>
       <div class="review">
@@ -51,15 +57,17 @@
         <table aria-label="Camera excursion and plane shifts in CSS pixels">
           <thead><tr><th scope="col">CSS pixels (X, Y)</th><th scope="col">Current</th><th scope="col">Selected max ±</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Camera (+Y up)</th><td id="camera-position">—</td><td id="camera-limit">—</td></tr>
-            <tr><th scope="row">Background</th><td id="background-shift">—</td><td id="background-limit">—</td></tr>
-            <tr><th scope="row">Figure</th><td id="figure-shift">—</td><td id="figure-limit">—</td></tr>
-            <tr><th scope="row">Foreground</th><td id="foreground-shift">—</td><td id="foreground-limit">—</td></tr>
+            <tr><th id="camera-reading-label" scope="row">Camera (+Y up)</th><td id="camera-position">—</td><td id="camera-limit">—</td></tr>
           </tbody>
+          <tbody id="plane-readouts"></tbody>
         </table>
       </div>
+      <p id="camera-limits-note" hidden>Maximums show camera travel. Current plane shifts include any baked plate travel.</p>
       <p class="source">Plane shifts use screen axes (+Y down). <a href="https://github.com/rig-c/create/tree/ed949ef5a44e443a89f640ab0d6b8f8fac0ca1ae/templates/example-composed-direction">Public Create source</a> · <a href="tests/fixtures/composed-direction/LICENSE.txt">MIT license</a></p>
     </main>
-    <script type="module" src="/samples/composed-parallax.ts"></script>
+    <script type="module">
+      import { mountPublicComposedParallax } from '/samples/composed-parallax.ts';
+      mountPublicComposedParallax();
+    </script>
   </body>
 </html>

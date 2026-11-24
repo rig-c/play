@@ -17,6 +17,7 @@ const ORDER = [...SLOTS.background, ...SLOTS.figure, ...SLOTS.foreground];
 const STAGE = { x: -64, y: 0, width: 128, height: 128 };
 const CORNERS = [[-2, -2], [-2, 2], [2, -2], [2, 2]] as const;
 type Backend = NonNullable<MountOptions['backend']>;
+type NamedMountOptions = Extract<MountOptions, { planes: object }>;
 type Mode = NonNullable<MountOptions['camera']>;
 type Point = { x: number; y: number };
 const check = (row: number, name: string) => `C2-${row} ${name}`;
@@ -59,6 +60,15 @@ function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = 
   } as MountOptions);
 }
 
+function mountNamed(page: Page, backend: Backend, modelUrl: string, overrides: Partial<NamedMountOptions> = {}) {
+  const options: NamedMountOptions = {
+    modelUrl, animation: 'idle', loop: true, planes: NAMED_PLANES, backend,
+    camera: 'parallax', maxDisplacement: { x: 64, y: 0 }, transitionMs: 120,
+    ...overrides,
+  };
+  return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), options);
+}
+
 function setCamera(page: Page, mode: Mode) {
   return page.evaluate(mode => (window as ComposedHarnessWindow).composedTest.camera(mode), mode);
 }
@@ -67,16 +77,16 @@ function state(page: Page) {
   return page.evaluate(() => (window as ComposedHarnessWindow).composedTest.state());
 }
 
-function point(page: Page, x: number, y: number) {
-  return page.evaluate(([x, y]) => (window as ComposedHarnessWindow).composedTest.point(x, y), [x, y]);
+function point(page: Page, x: number, y: number, event?: 'pointerenter' | 'pointermove', pointerType?: 'mouse' | 'pen' | 'touch') {
+  return page.evaluate(args => (window as ComposedHarnessWindow).composedTest.point(...args), [x, y, event, pointerType] as const);
 }
 
 function tick(page: Page, ms: number) {
   return page.evaluate(dt => (window as ComposedHarnessWindow).composedTest.tick(dt), ms);
 }
 
-function reset(page: Page, event: 'pointercancel' | 'pointerleave') {
-  return page.evaluate(event => (window as ComposedHarnessWindow).composedTest.reset(event), event);
+function reset(page: Page, event: 'pointercancel' | 'pointerleave', pointerType?: 'mouse' | 'pen' | 'touch') {
+  return page.evaluate(args => (window as ComposedHarnessWindow).composedTest.reset(...args), [event, pointerType] as const);
 }
 
 function draw(page: Page, ms = 0) {
@@ -112,13 +122,13 @@ function poseDigest(bytes: string) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function assertOpaque(result: Awaited<ReturnType<typeof backdrop>>, backend: Backend): void {
+function assertOpaque(result: Pick<Awaited<ReturnType<typeof backdrop>>, 'backend' | 'nonOpaque' | 'corners'>, backend: Backend): void {
   expect(result.backend, 'requested backend drew').toBe(backend);
   expect(result.nonOpaque, 'backdrop-only alpha < 255').toBe(0);
   expect(result.corners).toEqual([255, 255, 255, 255]);
 }
 
-async function alterModel(page: Page, name: string, change: (doc: CompiledControl) => void): Promise<string> {
+async function alterModel(page: Page, name: string, change: (doc: CompiledControl) => void, alphaHole?: { region: string; offset: number }): Promise<string> {
   const [sourceDoc, sourcePng] = await Promise.all([
     readFile(join(FIXTURES, 'overscan/skeleton.model.json'), 'utf8'),
     readFile(join(FIXTURES, 'overscan/skeleton.png')),
@@ -127,11 +137,11 @@ async function alterModel(page: Page, name: string, change: (doc: CompiledContro
   change(doc);
   // Give every derived document its own in-memory inputs. Both the embed and
   // the ordinary player still go through loadModel and the browser image decoder.
-  return page.evaluate(async ({ doc, source, name }) => {
+  return page.evaluate(async ({ doc, source, name, alphaHole }) => {
     let pageUrl = source;
-    if (name === 'transparent') {
-      const plate = doc.pages[0].regions.find(region => region.name === 'scene-plate.0');
-      if (!plate) throw new Error('Missing authored backdrop atlas region');
+    if (alphaHole) {
+      const plate = doc.pages[0].regions.find(region => region.name === alphaHole.region);
+      if (!plate) throw new Error(`Missing atlas region ${alphaHole.region} for the alpha-hole control`);
       const image = new Image();
       image.src = source;
       await image.decode();
@@ -140,22 +150,33 @@ async function alterModel(page: Page, name: string, change: (doc: CompiledContro
       canvas.height = image.naturalHeight;
       const context = canvas.getContext('2d')!;
       context.drawImage(image, 0, 0);
-      context.clearRect(plate.x + 25, plate.y + 25, 8, 8);
+      context.clearRect(plate.x + alphaHole.offset, plate.y + alphaHole.offset, 8, 8);
       pageUrl = canvas.toDataURL();
     }
     doc.pages[0].name = pageUrl;
     return URL.createObjectURL(new File([JSON.stringify(doc)], `${name}.model.json`, { type: 'application/json' }));
-  }, { doc, source: `data:image/png;base64,${sourcePng.toString('base64')}`, name });
+  }, { doc, source: `data:image/png;base64,${sourcePng.toString('base64')}`, name, alphaHole });
 }
 
 interface CompiledControl {
   stage?: { x: number; y: number; width: number; height: number } | null;
+  bones: { name: string; parent?: string; x: number; y: number }[];
   slots: { name: string; bone?: string; setup?: string }[];
-  animations: { bones: { name: string }[]; slots?: { name: string }[] }[];
-  skins: { attachments: Record<string, Record<string, { width?: number; height?: number } | CompiledClip>> }[];
+  animations: { name: string; bones: { name: string; timelines: object[] }[]; slots?: { name: string }[] }[];
+  constraints: { kind: string; name: string; bone: string; [parameter: string]: string | number | boolean }[];
+  skins: { attachments: Record<string, Record<string, CompiledRegion | CompiledClip>> }[];
   pages: { name: string; regions: { name: string; x: number; y: number; width: number; height: number }[] }[];
   editorOrder: { skins: { name: string; slots: string[] }[] };
   rig?: { slotOrder: string[] };
+}
+
+interface CompiledRegion {
+  kind: 'region';
+  path: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface CompiledClip {
@@ -203,7 +224,69 @@ async function shortPlate(page: Page, axis: 'x' | 'y') {
 }
 
 function transparentPlate(page: Page) {
-  return alterModel(page, 'transparent', () => {});
+  return alterModel(page, 'transparent', () => {}, { region: 'scene-plate.0', offset: 25 });
+}
+
+const TABLES_SLOT = 'tables';
+const NAMED_PLANES = {
+  backdrop: { role: 'backdrop', slots: SLOTS.background, baked: { bone: 'backdrop' } },
+  tables: { role: 'overlay', slots: [TABLES_SLOT], baked: { bone: 'tables' } },
+  figure: { role: 'figure', slots: SLOTS.figure },
+  foreground: { role: 'overlay', slots: SLOTS.foreground, gain: 0.55 },
+} as const;
+const NAMED_IDS = Object.keys(NAMED_PLANES) as (keyof typeof NAMED_PLANES)[];
+const NAMED_ORDER = NAMED_IDS.flatMap<string>(plane => [...NAMED_PLANES[plane].slots]);
+const STILL_PLANES = {
+  ...NAMED_PLANES,
+  backdrop: { role: 'backdrop', slots: SLOTS.background },
+  tables: { role: 'overlay', slots: [TABLES_SLOT], gain: -0.55 * 28 / 24 },
+} as const;
+const COMPOSITE_PLANES = {
+  ...STILL_PLANES,
+  backdrop: { ...STILL_PLANES.backdrop, gain: -0.5 },
+  tables: { ...STILL_PLANES.tables, gain: -0.5 },
+} as const;
+const COMPOSITE_SLOTS = [...SLOTS.background, TABLES_SLOT];
+const NAMED_ALPHA_HOLE = /\b[1-9]\d* stage pixels have alpha below 255/;
+
+type FourPlaneVariant = 'still' | 'live-physics' | 'left-edge' | 'alpha-hole' | 'tables-edge' | 'covered-hole' | 'visible-hole';
+
+function fourPlaneModel(page: Page, variant?: FourPlaneVariant) {
+  const composite = variant === 'covered-hole' || variant === 'visible-hole';
+  return alterModel(page, `four-plane${variant ? `-${variant}` : ''}`, doc => {
+    const attachments = doc.skins[0].attachments;
+    const backdrop = attachments.backdrop.backdrop as CompiledRegion;
+    backdrop.width = variant === 'left-edge' ? 240 : 320;
+    backdrop.x = variant === 'left-edge' ? 48 : 0;
+    const foreground = attachments.foreground.foreground as CompiledRegion;
+    attachments[TABLES_SLOT] = {
+      [TABLES_SLOT]: composite
+        // The center of the diamond is opaque. Moving it below the same
+        // base hole leaves the composite geometry valid but exposes the hole.
+        ? { ...foreground, x: 0, y: variant === 'covered-hole' ? 64 : 16, width: 112, height: 48 }
+        : { ...foreground, width: variant === 'tables-edge' ? 0 : 12, height: 12 },
+    };
+    doc.bones.push({ name: 'tables', parent: 'root', x: 0, y: 0 });
+    doc.slots.splice(1, 0, { name: TABLES_SLOT, bone: 'tables', setup: TABLES_SLOT });
+    doc.rig?.slotOrder.splice(1, 0, TABLES_SLOT);
+    doc.editorOrder.skins.find(skin => skin.name === 'default')!.slots.push(TABLES_SLOT);
+    const idle = doc.animations.find(animation => animation.name === 'idle')!;
+    if (variant !== 'still' && !composite) {
+      for (const [name, amplitude] of [['backdrop', 24], ['tables', 28]] as const) {
+        idle.bones.push({ name, timelines: [{
+          name: 'translate', keys: [0, amplitude, 0, -amplitude, 0].map((x, time) => ({ time, x, y: 0 })),
+        }] });
+      }
+    }
+    if (variant === 'live-physics') {
+      idle.bones.push({ name: 'actor:body_yaw_dial', timelines: [{
+        name: 'rotate', keys: [{ time: 0, value: 0 }, { time: 1, value: -12 }, { time: 4, value: 0 }],
+      }] });
+      doc.constraints.push({
+        kind: 'physics', name: 'actor:follow', declaredIn: 'rig', bone: 'actor:body', x: 1, wind: 30, strength: 35,
+      });
+    }
+  }, variant === 'alpha-hole' || composite ? { region: 'scene-plate.0', offset: 75 } : undefined);
 }
 
 type CropReading = ReturnType<ComposedHarnessWindow['composedTest']['cropReference']>;
@@ -678,6 +761,276 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
       expect(result.refusalMessage).toContain('available geometric overscan left=15, right=15, top=15, bottom=15 CSS px');
       expect(result.offsets.background).toEqual({ x: 0, y: 0 });
       console.log(JSON.stringify({ backend, result }));
+    });
+
+    test(check(9, 'accepts a small tables overlay and preserves four named planes'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page);
+      // A half-width pointer step gives integer raster translations with all
+      // three gains, including the inferred 28/24 ratio.
+      const rasterCap = { x: 480 / 11, y: 0 };
+      await mountNamed(page, backend, modelUrl, { maxDisplacement: rasterCap });
+      await ordinary(page, backend, modelUrl);
+      await freeze(page, 0);
+      const base = await draw(page);
+      expect(base.order.map(row => row.slot), 'exact named draw order and one draw per slot').toEqual(NAMED_ORDER);
+      expect(Object.keys((await state(page)).offsets).sort(), 'exact named plane IDs').toEqual([...NAMED_IDS].sort());
+      const table = base.order[1];
+      const span = (axis: number) => {
+        const values = table.coords.filter((_, i) => i % 2 === axis);
+        return Math.max(...values) - Math.min(...values);
+      };
+      expect(span(0), 'tables authored width without auto-fit').toBeCloseTo(12, 6);
+      expect(span(1), 'tables authored height without auto-fit').toBeCloseTo(12, 6);
+      await point(page, 1, 1, 'pointerenter');
+      await tick(page, 120);
+
+      for (const direction of [-1, 1]) {
+        await point(page, direction / 2, direction * 2);
+        const current = await draw(page, 4000);
+        const reading = await state(page);
+        expect(reading.mode).toBe('parallax');
+        expect(reading.refusal).toBeUndefined();
+        expect(reading.cameraExcursion).toEqual(rasterCap);
+        expect(current.viewport, 'original stage with no auto-fit').toEqual(STAGE);
+        expect(current.order.map(row => row.slot), 'exact named draw order and one draw per slot').toEqual(NAMED_ORDER);
+        const shifts = { backdrop: 12 * direction, tables: 14 * direction, figure: 0, foreground: -12 * direction };
+        const controls = NAMED_IDS.map(id => ({ slots: NAMED_PLANES[id].slots, shift: { x: shifts[id], y: 0 } }));
+        for (const [i, id] of NAMED_IDS.entries()) {
+          closePoint(reading.offsets[id], controls[i].shift, `named ${id} gain`);
+          for (const [slotIndex, slot] of current.order.entries()) {
+            if (!(controls[i].slots as readonly string[]).includes(slot.slot)) continue;
+            expect(slot.z).toBe(base.order[slotIndex].z);
+            for (const [coordinate, value] of slot.coords.entries()) {
+              const expected = base.order[slotIndex].coords[coordinate] + (coordinate % 2 ? 0 : shifts[id]);
+              expect(value, `${id} ${slot.slot} coordinate ${coordinate}`).toBeCloseTo(expected, 6);
+            }
+          }
+        }
+
+        const rasters = await page.evaluate(controls =>
+          (window as ComposedHarnessWindow).composedTest.planeReferences(0, controls), controls);
+        for (const [i, raster] of rasters.entries()) {
+          const id = NAMED_IDS[i];
+          expect([raster.actualBackend, raster.referenceBackend], `${id} backends`).toEqual([backend, backend]);
+          expect(raster.maxChannelDelta, `named ${id} stock RGBA`).toBeLessThanOrEqual(backend === 'webgl' ? 0 : 4);
+        }
+        assertOpaque({ ...rasters[0], backend: rasters[0].actualBackend }, backend);
+        const size = 128 * 128;
+        expect(rasters[1].transparent, 'small tables leave most of the isolated stage empty').toBeGreaterThan(size - 13 * 13);
+        expect(rasters[1].transparent, 'small tables have visible pixels').toBeLessThan(size);
+        expect(rasters[3].transparent, 'true foreground has visible pixels').toBeLessThan(size);
+        expect(current.alpha.nonOpaque, 'opaque backdrop fills uncovered overlay pixels').toBe(0);
+        const foreground = await page.evaluate(slot => (window as ComposedHarnessWindow).composedTest.compareWithout(slot), 'foreground');
+        expect(foreground.changed, 'true foreground contributes to composed pixels').toBeGreaterThan(0);
+      }
+    });
+
+    test(check(9, 'scales inherited tables gain with an explicit backdrop gain'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page);
+      const planes = { ...NAMED_PLANES, backdrop: { ...NAMED_PLANES.backdrop, gain: -0.375 } };
+      await mountNamed(page, backend, modelUrl, { planes });
+      await freeze(page, 0);
+      await point(page, 0, 0, 'pointerenter');
+      const base = await draw(page, 120);
+      for (const direction of [-1, 1]) {
+        await point(page, direction, 0);
+        const current = await draw(page, 4000);
+        const reading = await state(page);
+        expect(reading.mode).toBe('parallax');
+        expect(reading.refusal).toBeUndefined();
+        closePoint(reading.cameraTarget, { x: 64 * direction, y: 0 }, 'explicit backdrop gain camera target');
+        for (const [id, distance, label] of [
+          ['backdrop', 24, 'explicit backdrop gain'], ['tables', 28, 'inherited tables gain with backdrop override'],
+        ] as const) {
+          const shift = distance * direction;
+          closePoint(reading.offsets[id], { x: shift, y: 0 }, label);
+          const before = base.order.find(row => row.slot === id)!;
+          const after = current.order.find(row => row.slot === id)!;
+          for (const [i, value] of after.coords.entries()) {
+            expect(value - before.coords[i], `${label} rendered coordinate ${i}`).toBeCloseTo(i % 2 ? 0 : shift, 6);
+          }
+        }
+      }
+    });
+
+    test(check(9, 'accepts a covered base hole behind the figure'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'covered-hole');
+      await mountNamed(page, backend, modelUrl, { planes: COMPOSITE_PLANES, maxDisplacement: { x: 16, y: 0 } });
+      await point(page, 0, 0, 'pointerenter');
+      await tick(page, 120);
+
+      for (const direction of [0, -1, 1]) {
+        await point(page, direction, 0);
+        const current = await draw(page, 4000);
+        const reading = await state(page);
+        expect(reading.mode, 'covered base hole keeps Parallax active').toBe('parallax');
+        expect(reading.refusal).toBeUndefined();
+        expect(current.order.map(row => row.slot), 'covering overlay draws behind the figure').toEqual(NAMED_ORDER);
+        const shift = { x: 8 * direction, y: 0 };
+        closePoint(reading.offsets.backdrop, shift, 'base hole translation');
+        closePoint(reading.offsets.tables, shift, 'covering overlay translation');
+        const result = await page.evaluate(({ x, layers }) =>
+          (window as ComposedHarnessWindow).composedTest.layerPixels({ x, y: 64 }, layers), {
+          x: 64 + shift.x,
+          layers: [SLOTS.background, [TABLES_SLOT], COMPOSITE_SLOTS, SLOTS.figure],
+        });
+        const [base, overlay, composite, figure] = result.layers;
+        expect(base[3], 'base has a real alpha hole').toBe(0);
+        expect(overlay[3], 'overlay is opaque at the hole').toBe(255);
+        expect(composite, 'overlay fills the hole without figure pixels').toEqual(overlay);
+        expect(figure[3], 'figure is opaque at the overlap').toBe(255);
+        expect(figure, 'figure and overlay have distinct pixels').not.toEqual(overlay);
+        expect(result.full, 'figure occludes the overlay').toEqual(figure);
+        const isolated = await page.evaluate(slots =>
+          (window as ComposedHarnessWindow).composedTest.backdrop(slots), COMPOSITE_SLOTS);
+        assertOpaque(isolated, backend);
+      }
+    });
+
+    test(check(9, 'refuses a visible hole in the composited backdrop'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'visible-hole');
+      const refusal = await mountNamed(page, backend, modelUrl, {
+        planes: COMPOSITE_PLANES, maxDisplacement: { x: 16, y: 0 },
+      }).then(() => '', error => String(error));
+      expect(refusal, 'visible composited backdrop hole refusal').toContain('COMPOSED_BACKDROP_COVERAGE:');
+      expect(refusal, 'refusal identifies the backdrop').toContain('plane "backdrop"');
+      expect(refusal, 'composited backdrop has non-opaque pixels').toMatch(NAMED_ALPHA_HOLE);
+      await expect(page.locator('#stage canvas')).toHaveCount(0);
+    });
+
+    for (const [defect, plate, detail] of [
+      ['alpha-hole', 'backdrop', NAMED_ALPHA_HOLE],
+      ['left-edge', 'backdrop', /uncovered geometric edges left\b/],
+      ['tables-edge', 'tables', /invalid quad at (left|top|right|bottom) edge/],
+    ] as const) {
+      const label = `named ${plate} ${defect}`;
+      test(check(9, `refuses the ${label}`), async ({ page }) => {
+        const modelUrl = await fourPlaneModel(page, defect);
+        const refusal = await mountNamed(page, backend, modelUrl).then(() => '', error => String(error));
+        expect(refusal, `${label} refusal`).toContain('COMPOSED_BACKDROP_COVERAGE:');
+        expect(refusal, 'refusal identifies the plate').toContain(`plane "${plate}"`);
+        expect(refusal, `${label} detail`).toMatch(detail);
+        await expect(page.locator('#stage canvas')).toHaveCount(0);
+      });
+    }
+
+    test(check(9, 'refuses an invalid named slot partition'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page);
+      const { foreground, ...withoutForeground } = NAMED_PLANES;
+      for (const [planes, label] of [
+        [withoutForeground, 'unbound drawable slots foreground'],
+        [{ ...NAMED_PLANES, tables: { ...NAMED_PLANES.tables, slots: foreground.slots } }, 'duplicate slot "foreground"'],
+      ] as const) {
+        const refusal = await mountNamed(page, backend, modelUrl, { planes }).then(() => '', error => String(error));
+        expect(refusal, 'named slot partition refusal').toContain('COMPOSED_SLOT_PARTITION:');
+        expect(refusal).toContain(label);
+        await expect(page.locator('#stage canvas')).toHaveCount(0);
+      }
+    });
+
+    test(check(10, 'centers on enter and returns to the live baked phase'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'live-physics');
+      await mountNamed(page, backend, modelUrl, { transitionMs: 125 });
+      await ordinary(page, backend, modelUrl);
+      const bones = ['actor:body_ctl', 'actor:body_yaw_dial', 'actor:body'];
+      const reference = async (frames: number) => {
+        const check = await page.evaluate(({ frames, bones }) => {
+          const rig = (window as ComposedHarnessWindow).composedTest;
+          for (let i = 0; i < frames; i++) rig.tick(31.25);
+          return { current: rig.livePose(bones), stock: rig.liveReference(frames, 31.25, bones) };
+        }, { frames, bones });
+        expect(check.current.trackTime, 'live source clock').toBe(check.stock.trackTime);
+        expect(check.current.animationTime, 'live wrapped source clock').toBe(check.stock.animationTime);
+        expect(poseDigest(check.current.bytes), 'live stock pose bytes through camera handoff').toBe(poseDigest(check.stock.bytes));
+        expect(check.current.bones).toEqual(check.stock.bones);
+        return check.current;
+      };
+      const source = () => page.evaluate(() => (window as ComposedHarnessWindow).composedTest.sourceGeometry());
+      const setupAtStart = (await draw(page)).order;
+      const start = await reference(0);
+      const automatic = await reference(16);
+      expect(automatic.trackTime).toBe(0.5);
+      expect(automatic.bones[0].y).not.toBe(start.bones[0].y);
+      expect(automatic.bones[1].rotationX).not.toBe(start.bones[1].rotationX);
+      expect(Math.abs(automatic.bones[2].x - automatic.bones[0].x), 'physics moves the body off the controller origin').toBeGreaterThan(0.01);
+      expect((await draw(page)).order, 'automatic preserves authored plate and figure geometry').toEqual(await source());
+
+      await point(page, 2, -2, 'pointerenter');
+      await point(page, 2, -2);
+      await reference(2);
+      const acquiring = await state(page);
+      closePoint(acquiring.offsets.backdrop, { x: 0.5625 * 24 / 2, y: 0 }, 'enter blends the live backdrop toward center');
+      closePoint(acquiring.offsets.tables, { x: 0.5625 * 28 / 2, y: 0 }, 'enter blends the live tables toward center');
+      await reference(2);
+      const centered = await draw(page);
+      const centeredSource = await source();
+      for (const index of [0, 1]) {
+        expect(centered.order[index], 'center rendered before applying the pointer').toEqual(setupAtStart[index]);
+        expect(centeredSource[index], 'baked source keeps running behind the center').not.toEqual(setupAtStart[index]);
+      }
+      expect(centered.order.slice(2), 'live figure and foreground remain in the composed frame').toEqual(centeredSource.slice(2));
+
+      await reference(8);
+      const tracking = await state(page);
+      expect(tracking.trackTime).toBe(0.875);
+      expect(tracking.cameraExcursion).toEqual({ x: 64, y: 0 });
+      closePoint(tracking.cameraTarget, { x: 64, y: 0 }, 'positive horizontal pointer cap');
+      const cameraX = 64 * (1 - Math.exp(-0.25 / 0.12));
+      closePoint(tracking.offsets.backdrop, { x: 0.55 * cameraX, y: 0 }, 'pointer-only backdrop');
+      closePoint(tracking.offsets.tables, { x: 0.55 * cameraX * 28 / 24, y: 0 }, 'pointer-only tables');
+      closePoint(tracking.offsets.figure, { x: 0, y: 0 }, 'focal figure');
+
+      await point(page, -2, 2);
+      closePoint((await state(page)).cameraTarget, { x: -64, y: 0 }, 'negative horizontal pointer cap');
+
+      await reset(page, 'pointerleave');
+      await reference(2);
+      const releasing = await state(page);
+      closePoint(releasing.offsets.backdrop, { x: (tracking.offsets.backdrop.x + 0.9375 * 24) / 2, y: 0 }, 'leave blends toward the advancing backdrop');
+      closePoint(releasing.offsets.tables, { x: (tracking.offsets.tables.x + 0.9375 * 28) / 2, y: 0 }, 'leave blends toward the advancing tables');
+      const released = await reference(2);
+      expect(released.trackTime).toBe(1);
+      expect((await draw(page)).order, 'leave reaches the current baked phase').toEqual(await source());
+      await reference(8);
+      expect((await draw(page)).order, 'automatic keeps following the live baked phase').toEqual(await source());
+    });
+
+    test(check(11, 'runs the 12-second horizontal still sweep even with touch input'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'still');
+      const run = async (touch: boolean) => {
+        await mountNamed(page, backend, modelUrl, {
+          planes: STILL_PLANES, autoSweep: { periodSeconds: 12, maxDisplacement: { x: 24, y: 0 } },
+        });
+        return page.evaluate(touch => {
+          const rig = (window as ComposedHarnessWindow).composedTest;
+          const ms = touch ? 31.25 : 62.5;
+          const steps = 3000 / ms;
+          const rows = [rig.state()];
+          for (let i = 0; i < 4; i++) {
+            if (touch) {
+              rig.point(2, 2, 'pointerenter', 'touch');
+              rig.point(-2, 2, 'pointermove', 'touch');
+            }
+            for (let step = 0; step < steps; step++) {
+              if (touch && step === steps / 2) rig.reset(i % 2 ? 'pointercancel' : 'pointerleave', 'touch');
+              rig.tick(ms);
+            }
+            rows.push(rig.state());
+          }
+          return rows;
+        }, touch);
+      };
+      const plain = await run(false);
+      const touch = await run(true);
+      for (const [i, cameraX] of [0, 24, 0, -24, 0].entries()) {
+        expect(plain[i].trackTime, 'still plates leave the figure clock running').toBe(i * 3);
+        expect(touch[i].trackTime).toBe(i * 3);
+        const shifts = { backdrop: 0.55 * cameraX, tables: 0.55 * cameraX * 28 / 24, figure: 0, foreground: -0.55 * cameraX };
+        for (const id of NAMED_IDS) {
+          closePoint(plain[i].offsets[id], { x: shifts[id], y: 0 }, `automatic sweep ${id} at ${i * 3}s`);
+          closePoint(touch[i].offsets[id], plain[i].offsets[id], `touch stays automatic for ${id} at ${i * 3}s`);
+        }
+      }
     });
   });
 }

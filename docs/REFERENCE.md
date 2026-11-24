@@ -474,6 +474,14 @@ The page starts in Fixed. Use `?camera=parallax` or `?camera=pan` to opt in, and
 interactive. The readouts separate camera excursion from each plane's shift
 and show the requested maximum even when a mode is refused.
 
+Select **Automatic and pointer** (or add `?motion=handoff&camera=parallax`)
+to try the handoff on the same public fixtures. Move into the stage to acquire
+pointer control, then leave to return to the automatic motion. The demo uses a
+120 ms handoff in each direction and a 12-second horizontal sine sweep with a
+24 CSS px camera excursion before plane gains. The pose-hold control also holds
+the sweep's phase. The original plate has zero overscan, so use the overscan
+fixture for the moving camera.
+
 For another take, import [`mountComposedTake`](../samples/composed-take.ts) from the
 repository sample and serve the take's `skeleton.model.json` with its named page
 images. Give the root a CSS width and height for the stage. Use the take's
@@ -520,15 +528,68 @@ needed margins. The mount and `setCamera` report these conditions by code.
 A layout or backdrop change that invalidates a moving mode draws Fixed and
 exposes the reason on `take.refusal`.
 
+#### Named planes and camera handoff
+
+Use `planes` in place of `slots` to name the planes and declare their roles.
+Give the take one `backdrop`, one `figure`, and any `overlay` planes. Each
+plate binds one drawable region slot. Each figure binds its drawable slots.
+An overlay can be smaller than the stage. The backdrop quad must cover the
+stage throughout the selected motion envelope. For each displayed state,
+including Fixed, the layers below the first figure slot in the model's current
+draw order must composite to opaque pixels across the stage at its backing
+resolution. An opaque overlay below the figure can fill a hole in the backdrop.
+
+```ts
+const take = await mountComposedTake(viewport, {
+  modelUrl: '/take/skeleton.model.json',
+  animation: 'idle',
+  loop: true,
+  camera: 'parallax',
+  planes: {
+    backdrop: { slots: ['backdrop'], role: 'backdrop' },
+    figure: { slots: ['actor:body'], role: 'figure' },
+    overlay: { slots: ['overlay'], role: 'overlay', gain: 0.55 },
+  },
+  transitionMs: 120,
+  autoSweep: { periodSeconds: 12, maxDisplacement: { x: 24, y: 0 } },
+});
+```
+
+In Parallax, the backdrop defaults to gain −0.55 and the figure stays at gain
+0. Pointer entry ramps the automatic plate motion to its setup center before
+tracking the pointer. Pointer exit ramps back to the current automatic phase.
+`transitionMs` sets the ramp duration. The player keeps advancing the take
+through the handoff. `cameraTarget` gives the requested pointer position in
+Y-up CSS pixels. With named planes, `offsets` gives each plane's displayed
+shift in Y-down CSS pixels, including baked plate displacement when present.
+Pan moves all planes at equal gain. Fixed plays the authored pose with the
+camera at rest.
+
+A plate with compiled travel can declare `baked: { bone: 'plate-bone' }`.
+Bind the region's direct root-child bone with a linear translate loop from
+setup center back to setup center. In Parallax, baked travel drives that plate
+outside the stage pointer. Inside, the handoff brings the plate to center and
+pointer motion replaces its baked displacement. An overlay with a comparable
+horizontal baked track can infer its gain by multiplying the backdrop's
+resolved gain by the ratio of the overlay's travel amplitude to the backdrop's.
+Choose `autoSweep` for a take whose plates use a camera-only sweep.
+
+Import `mountComposedParallax` from [`samples/composed-parallax.ts`](../samples/composed-parallax.ts)
+to reuse the demo controls with another take. Pass its `take` options and
+`poseDuration`, and optionally pass `planeLabels` and `inferredGains` for the
+readouts. The page supplies the stage, camera control and readouts. The caller
+supplies the fixture selector and model URLs.
+
 | Code | Condition |
 | --- | --- |
 | `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
 | `COMPOSED_LOOP_REQUIRED` | Missing positive-duration animation or `loop: true` |
 | `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
 | `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
-| `COMPOSED_BACKDROP_COVERAGE` | Inadequate opaque backdrop coverage for a moving mode |
+| `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry or inadequate backdrop opacity in a named mode, or inadequate backdrop coverage in a legacy moving mode |
 | `COMPOSED_INVALID_DISPLACEMENT` | An excursion axis is negative or non-finite |
 | `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
+| `COMPOSED_PLATE_TRACK` | Named plane has an unsupported plate track or gain binding |
 
 See the [public fixture and its producer receipts](../tests/fixtures/composed-direction/README.md).
 

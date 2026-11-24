@@ -36,6 +36,13 @@ const clipRaster = 'renders the displaced attachment clip';
 const clipAssertions = ['attachment clip scene RGBA', 'attachment clip isolated figure RGBA'];
 const refuse = (name) => `refuses ${name}`;
 const named = (name) => `named refusal for ${name}`;
+const namedOrder = 'accepts a small tables overlay';
+const backdropGain = 'scales inherited tables gain with an explicit backdrop gain';
+const coveredHole = 'accepts a covered base hole behind the figure';
+const visibleHole = 'refuses a visible hole in the composited backdrop';
+const backdropAudit = 'auditBackdrop({ order }, renderer.viewport!, renderer.pixelRatio)';
+const handoff = 'centers on enter and returns to the live baked phase';
+const sweep = 'runs the 12-second horizontal still sweep';
 
 const plants = [
   code('pointer-unclamped', 1, clamps, 'clamp Y-up elapsed', compositor,
@@ -139,7 +146,33 @@ const plants = [
     'if (lastNonOpaque) throw fail(', 'if (false) throw fail('),
   ...[['X', 'x'], ['Y', 'y']].map(([axis, suffix]) =>
     code(`short-${suffix}-accepted`, 8, refuse(`short backdrop ${axis} axis`), named(`short backdrop ${axis} axis`), mount,
-      "if (uncovered.length) throw fail(`uncovered geometric edges ${uncovered.join(', ')}`);", 'if (uncovered.length) return;')),
+      "].filter(Boolean);\n    if (uncovered.length) throw fail(`uncovered geometric edges ${uncovered.join(', ')}`);",
+      '].filter(Boolean);\n    if (uncovered.length) return;')),
+  code('named-tables-requires-stage-fill', 9, namedOrder, 'plane "tables"', mount,
+    "    if (role === 'overlay') continue;\n", ''),
+  code('named-tables-ignores-authored-ratio', 9, namedOrder, 'named tables gain', mount,
+    'backdropGain * (baked.amplitudeX / reference.amplitudeX)', 'backdropGain'),
+  code('named-tables-ignores-backdrop-gain-override', 9, backdropGain, 'inherited tables gain with backdrop override', mount,
+    'backdropGain * (baked.amplitudeX / reference.amplitudeX)', 'BACKDROP_GAIN * (baked.amplitudeX / reference.amplitudeX)'),
+  code('named-audits-base-without-overlay', 9, coveredHole, 'COMPOSED_BACKDROP_COVERAGE: plane "backdrop"', mount,
+    backdropAudit, 'auditBackdrop({ order: order.slice(0, 1) }, renderer.viewport!, renderer.pixelRatio)'),
+  code('named-figure-masks-composite-hole', 9, visibleHole, 'visible composited backdrop hole refusal', mount,
+    backdropAudit, 'auditBackdrop(frame, renderer.viewport!, renderer.pixelRatio)'),
+  code('named-backdrop-alpha-accepted', 9, 'refuses the named backdrop alpha-hole', 'named backdrop alpha-hole refusal', mount,
+    '      if (nonOpaque) {\n        throw plateCoverageError(backdrop, next, `${nonOpaque}',
+    '      if (false) {\n        throw plateCoverageError(backdrop, next, `${nonOpaque}'),
+  code('named-backdrop-edge-ignored', 9, 'refuses the named backdrop left-edge', 'named backdrop left-edge detail', mount,
+    "distances[i](x, y) * winding < -tolerance)));\n    if (uncovered.length) throw fail(`uncovered geometric edges ${uncovered.join(', ')}`);",
+    "distances[i](x, y) * winding < -tolerance)));\n    void uncovered;"),
+  code('named-skips-center', 10, handoff, ['enter blends the live backdrop toward center', 'center rendered before applying the pointer'], compositor,
+    "enter() { retarget('acquiring'); }", "enter() { phase = 'tracking'; weight = 1; }"),
+  code('named-never-returns-to-baked', 10, handoff, ['leave blends toward the advancing backdrop', 'leave reaches the current baked phase'], mount,
+    "      if (mode === 'parallax') handoff.leave();\n", ''),
+  code('named-handoff-pauses-figure', 10, handoff, 'live source clock', mount,
+    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      poser.advance(rigElapsed);',
+    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      if (!named || handoff.weight === 0) poser.advance(rigElapsed);'),
+  code('named-touch-takes-camera', 11, sweep, 'touch stays automatic', mount,
+    "event.pointerType === 'touch' || (event.type === 'pointerenter' && !boundaryEvent(event))", "(event.type === 'pointerenter' && !boundaryEvent(event))"),
 ];
 
 const worktree = resolve(dirname(fileURLToPath(import.meta.url)), '..');
