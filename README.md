@@ -139,20 +139,20 @@ package built from this tree.
   In the reference, by task:
   - Blow wind on the rig's physics, change gravity, or tell it the page dragged
     it: `environment()` and `moved()`, in
-    [Wind, gravity and dragging the rig](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#wind-gravity-and-dragging-the-rig).
+    [Wind, gravity and dragging the rig](docs/REFERENCE.md#wind-gravity-and-dragging-the-rig).
   - Jump to a time, with the wind and gravity that led up to it:
     `seek(time, environmentAt)`, in the same section.
   - Switch an outfit, an expression or a mouth shape by name: `setSet(name)`, in
-    [Attachment sets](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#attachment-sets-setsjson).
+    [Attachment sets](docs/REFERENCE.md#attachment-sets-setsjson).
   - Layer one animation over another, with a weight or additively: tracks, in
-    [Several tracks](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#several-tracks).
+    [Several tracks](docs/REFERENCE.md#several-tracks).
   - Drive a bone yourself while an animation plays:
-    [Adjusting bones](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#adjusting-bones).
+    [Adjusting bones](docs/REFERENCE.md#adjusting-bones).
   - Find out why a renderer is not drawing through WebGL:
     `backendFallbackReason`, in
-    [Runtime knobs and what they cost](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#runtime-knobs-and-what-they-cost).
+    [Runtime knobs and what they cost](docs/REFERENCE.md#runtime-knobs-and-what-they-cost).
   - Let the pointer move the camera over a composed take: `camera: 'parallax'`, in
-    [Pointer camera for a composed take](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#pointer-camera-for-a-composed-take).
+    [Pointer camera for a composed take](docs/REFERENCE.md#pointer-camera-for-a-composed-take).
 - [docs/MIGRATION.md](https://github.com/rig-c/play/blob/main/docs/MIGRATION.md) — adding live-frame consumers, coming
   from 1.8 (meshes draw through WebGL by default since 1.9) and from `spine-html`
   0.8 (the 0.8 → 1.0 table, what has no counterpart, before and after).
