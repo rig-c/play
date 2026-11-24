@@ -64,6 +64,9 @@
     "dist/liveFrameSource.d.ts.map",
     "dist/turnDials.d.ts",
     "dist/turnDials.d.ts.map",
+    "docs/MIGRATION.md",
+    "docs/REFERENCE.md",
+    "docs/STABILITY.md",
     "skills"
   ],
   "sideEffects": false,

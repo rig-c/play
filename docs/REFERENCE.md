@@ -26,8 +26,8 @@ same heading in the file this table names:
 | `#runtime-knobs-and-what-they-cost` | [Runtime knobs and what they cost](#runtime-knobs-and-what-they-cost), below |
 | `#coming-from-18-meshes-draw-through-webgl-by-default` | [MIGRATION.md](MIGRATION.md#coming-from-18-meshes-draw-through-webgl-by-default) |
 | `#coming-from-spine-html-08`, `#08--10`, `#no-counterpart-in-100`, `#before-and-after` | [MIGRATION.md](MIGRATION.md#coming-from-spine-html-08) |
-| `#tests`, `#independent-official-raster-oracle` | [TESTING.md](TESTING.md) |
-| `#benchmark-dom-canvas-and-official-webgl` | [BENCHMARK.md](BENCHMARK.md#benchmark-dom-canvas-and-official-webgl) |
+| `#tests`, `#independent-official-raster-oracle` | [TESTING.md](https://github.com/rig-c/play/blob/main/docs/TESTING.md) |
+| `#benchmark-dom-canvas-and-official-webgl` | [BENCHMARK.md](https://github.com/rig-c/play/blob/main/docs/BENCHMARK.md#benchmark-dom-canvas-and-official-webgl) |
 
 *Measured*, *Install*, *A minimal page*, *Demo (this repository)*, *How it
 works* and *License* stay in the [README](../README.md).
@@ -482,7 +482,7 @@ pointer control, then leave to return to the automatic motion. The demo uses a
 the sweep's phase. The original plate has zero overscan, so use the overscan
 fixture for the moving camera.
 
-For another take, import [`mountComposedTake`](../samples/composed-take.ts) from the
+For another take, import [`mountComposedTake`](https://github.com/rig-c/play/blob/main/samples/composed-take.ts) from the
 repository sample and serve the take's `skeleton.model.json` with its named page
 images. Give the root a CSS width and height for the stage. Use the take's
 animation name and exact compiled slot names:
@@ -580,7 +580,7 @@ horizontal baked track can infer its gain by multiplying the backdrop's
 resolved gain by the ratio of the overlay's travel amplitude to the backdrop's.
 Choose `autoSweep` for a take whose plates use a camera-only sweep.
 
-Import `mountComposedParallax` from [`samples/composed-parallax.ts`](../samples/composed-parallax.ts)
+Import `mountComposedParallax` from [`samples/composed-parallax.ts`](https://github.com/rig-c/play/blob/main/samples/composed-parallax.ts)
 to reuse the demo controls with another take. Pass its `take` options and
 `poseDuration`, and optionally pass `planeLabels` and `inferredGains` for the
 readouts. The page supplies the stage, camera control and readouts. The caller
@@ -597,7 +597,7 @@ supplies the fixture selector and model URLs.
 | `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
 | `COMPOSED_PLATE_TRACK` | Named plane has an unsupported plate track or gain binding |
 
-See the [public fixture and its producer receipts](../tests/fixtures/composed-direction/README.md).
+See the [public fixture and its producer receipts](https://github.com/rig-c/play/blob/main/tests/fixtures/composed-direction/README.md).
 
 ### Drawing some slots only
 

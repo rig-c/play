@@ -463,6 +463,70 @@ test('library source keeps the official oracle outside the shipped import graph'
  */
 const ALIASES = ['rig-play', 'spine-html'];
 const aliasScript = resolve(repoRoot, 'scripts', 'alias-tarball.mjs');
+const SHIPPED_DOCS = ['docs/MIGRATION.md', 'docs/REFERENCE.md', 'docs/STABILITY.md'];
+const NPM_ALWAYS_SHIPS = ['LICENSE', 'README.md', 'package.json'];
+
+interface DocLink {
+  doc: string;
+  line: number;
+  target: string;
+  resolved: string | null;
+}
+
+function trackedFiles(root: string): string[] {
+  const r = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
+  expect(r.status, `git ls-files: ${r.stderr}`).toBe(0);
+  return r.stdout
+    .split('\0')
+    .filter(Boolean)
+    .map((file) => file.replaceAll('\\', '/'))
+    .sort();
+}
+
+function relativeLinksInText(root: string, doc: string, text: string): DocLink[] {
+  const found: DocLink[] = [];
+  let fence: { char: string; length: number } | null = null;
+  for (const [index, line] of text.split(/\r?\n/u).entries()) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (marker) {
+      if (fence === null) fence = { char: marker[0] as string, length: marker.length };
+      else if (marker[0] === fence.char && marker.length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence !== null) continue;
+    const targets = [
+      ...[...line.matchAll(/!?\[(?:[^\]\\]|\\.)*\]\(\s*(<[^>]*>|[^()\s]*)/gu)].map((m) => m[1] as string),
+      ...[...line.matchAll(/^ {0,3}\[(?:[^\]\\]|\\.)+\]:\s*(<[^>]*>|\S+)/gu)].map((m) => m[1] as string),
+      ...[...line.matchAll(/\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)].map((m) => (m[1] ?? m[2]) as string),
+    ];
+    for (const raw of targets) {
+      const target = raw.startsWith('<') ? raw.slice(1, -1) : raw;
+      if (target === '' || target.startsWith('#') || target.startsWith('//') || /^[a-z][a-z\d+.-]*:/iu.test(target)) {
+        continue;
+      }
+      let path: string;
+      try {
+        path = decodeURIComponent(target.split('#')[0]!.split('?')[0]!);
+      } catch {
+        path = target.split('#')[0]!.split('?')[0]!;
+      }
+      if (path === '') continue;
+      const rel = relative(root, resolve(root, dirname(doc), path)).replaceAll('\\', '/').replace(/\/$/u, '');
+      found.push({ doc, line: index + 1, target, resolved: rel === '' || rel.startsWith('..') ? null : rel });
+    }
+  }
+  return found;
+}
+
+function deadShippedDocLinks(
+  links: readonly DocLink[],
+  ships: (path: string) => boolean,
+  inRepository: (path: string) => boolean,
+): DocLink[] {
+  return links.filter(
+    (link) => link.resolved === null || !(link.doc === 'README.md' ? inRepository(link.resolved) : ships(link.resolved)),
+  );
+}
 
 /** What `tar -xzf` puts in `into`, as sorted relative file paths. */
 function unpack(tgz: string, into: string): string[] {
@@ -475,21 +539,29 @@ function unpack(tgz: string, into: string): string[] {
     .sort();
 }
 
-test('the real tarball includes every library output but excludes planted dev assets in dist', () => {
+test('the real tarball includes every library output and shipped reference doc, excludes planted dev assets, and has no dead relative links', () => {
   const source = resolve(sandbox, 'contaminated-package');
   mkdirSync(source, { recursive: true });
   cpSync(pkgDist, resolve(source, 'dist'), { recursive: true });
   cpSync(resolve(repoRoot, 'skills'), resolve(source, 'skills'), { recursive: true });
-  for (const file of ['package.json', 'NOTICE.md', 'README.md', 'LICENSE']) cpSync(resolve(repoRoot, file), resolve(source, file));
+  for (const file of [...NPM_ALWAYS_SHIPS, 'NOTICE.md', ...SHIPPED_DOCS]) {
+    const dest = resolve(source, file);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(resolve(repoRoot, file), dest);
+  }
   // A clean build alone cannot hold the npm allowlist: the checkout can have
   // a Vite demo build, whose official oracle bundle must never be published.
-  // Plant both bundled JS and declarations outside the library's exact set.
+  // Plant both bundled JS and declarations outside the library's exact set,
+  // plus repository-only docs that must stay out of the tarball.
   for (const [file, content] of [
     ['dist/assets/official-runtime.js', "export class SkeletonJson {} // dev oracle sentinel\n"],
     ['dist/officialOracle.d.ts', "export { SkeletonJson } from '@esotericsoftware/spine-webgl';\n"],
     ['dist/main.d.ts', 'export declare const demo: true;\n'],
     ['dist/oracle.html', '<script src="assets/official-runtime.js"></script>\n'],
     ['dist/rigs/fixture/skeleton.json', '{"skeleton":{"spine":"4.3.13"}}\n'],
+    ['docs/TESTING.md', '# Testing\n'],
+    ['docs/BENCHMARK.md', '# Benchmark\n'],
+    ['RELEASING.md', '# Releasing\n'],
   ]) {
     const path = resolve(source, file);
     mkdirSync(dirname(path), { recursive: true });
@@ -499,10 +571,69 @@ test('the real tarball includes every library output but excludes planted dev as
   const packed = node([resolve(repoRoot, 'scripts/pack-release.mjs'), destination, source], sandbox);
   expect(packed.status, `${packed.stdout}${packed.stderr}`).toBe(0);
   const libraryFiles = readdirSync(pkgDist).map(String).sort();
-  const expected = ['LICENSE', 'NOTICE.md', 'README.md', 'package.json', 'skills/rig-play/SKILL.md', ...libraryFiles.map((file) => `dist/${file}`)].sort();
+  const expected = [
+    ...NPM_ALWAYS_SHIPS,
+    'NOTICE.md',
+    ...SHIPPED_DOCS,
+    'skills/rig-play/SKILL.md',
+    ...libraryFiles.map((file) => `dist/${file}`),
+  ].sort();
   const extracted = resolve(sandbox, 'contaminated-read');
   const actual = unpack(packed.stdout.trim(), extracted);
   expect(actual).toEqual(expected.map((file) => `package/${file}`));
+
+  // Relative link control across every packed markdown document (PKG02 / PKG03).
+  // README.md is rendered against the repository on the package page, so its
+  // relative links are checked against tracked repository files; every other
+  // shipped doc is read from an installed copy and must target a packed file
+  // or use an absolute URL.
+  const packedSet = new Set(actual.map((file) => file.replace(/^package\//u, '')));
+  const trackedSet = new Set(trackedFiles(repoRoot));
+  const shipsInTarball = (path: string) =>
+    packedSet.has(path) || [...packedSet].some((file) => file.startsWith(`${path}/`));
+  const inRepository = (path: string) =>
+    trackedSet.has(path) || [...trackedSet].some((file) => file.startsWith(`${path}/`));
+
+  const packedDocs = [...packedSet].filter((file) => file.endsWith('.md')).sort();
+  expect(packedDocs).toEqual(['NOTICE.md', 'README.md', ...SHIPPED_DOCS, 'skills/rig-play/SKILL.md'].sort());
+  const links = packedDocs.flatMap((doc) =>
+    relativeLinksInText(repoRoot, doc, readFileSync(resolve(extracted, 'package', doc), 'utf8')),
+  );
+  expect(links.length).toBeGreaterThan(0);
+  expect(links.some((link) => link.doc === 'README.md' && !shipsInTarball(link.resolved ?? ''))).toBe(true);
+  expect(links.some((link) => link.doc !== 'README.md' && shipsInTarball(link.resolved ?? ''))).toBe(true);
+  const dead = deadShippedDocLinks(links, shipsInTarball, inRepository);
+  expect(
+    dead.map((link) => `${link.doc}:${link.line} ${link.target} -> ${String(link.resolved)}`),
+  ).toEqual([]);
+
+  // Planted red controls for each rule:
+  // 1. README.md relative link to an unshipped but tracked file passes; an untracked path or escape turns red.
+  // 2. Any other shipped doc relative link to a tracked-but-unshipped file or escape turns red.
+  const plantedLinks = [
+    ...relativeLinksInText(
+      repoRoot,
+      'README.md',
+      '[shipped](docs/REFERENCE.md) [tracked-only](docs/BENCHMARK.md#measured) [untracked](docs/NO_SUCH_DOC.md) [escape](../outside.md)',
+    ),
+    ...relativeLinksInText(
+      repoRoot,
+      'docs/REFERENCE.md',
+      '[shipped](STABILITY.md#turn-dials) [unshipped](TESTING.md) [sample](../samples/composed-take.ts) [escape](../../outside.md)',
+    ),
+  ];
+  expect(
+    deadShippedDocLinks(plantedLinks, shipsInTarball, inRepository).map(
+      (link) => `${link.doc} -> ${link.target} (${String(link.resolved)})`,
+    ),
+  ).toEqual([
+    'README.md -> docs/NO_SUCH_DOC.md (docs/NO_SUCH_DOC.md)',
+    'README.md -> ../outside.md (null)',
+    'docs/REFERENCE.md -> TESTING.md (docs/TESTING.md)',
+    'docs/REFERENCE.md -> ../samples/composed-take.ts (samples/composed-take.ts)',
+    'docs/REFERENCE.md -> ../../outside.md (null)',
+  ]);
+
   const checkoutManifest = JSON.parse(readFileSync(resolve(source, 'package.json'), 'utf8'));
   const releaseManifest = JSON.parse(readFileSync(resolve(extracted, 'package/package.json'), 'utf8'));
   expect(checkoutManifest.exports['.']['@rig-c/source']).toBe('./src/index.ts');
@@ -521,8 +652,10 @@ for (const ALIAS of ALIASES) test(`the ${ALIAS} tarball is the package tarball u
   mkdirSync(src, { recursive: true });
   cpSync(pkgDist, resolve(src, 'dist'), { recursive: true });
   cpSync(resolve(repoRoot, 'skills'), resolve(src, 'skills'), { recursive: true });
-  for (const file of ['package.json', 'NOTICE.md', 'README.md', 'LICENSE']) {
-    cpSync(resolve(repoRoot, file), resolve(src, file));
+  for (const file of [...NPM_ALWAYS_SHIPS, 'NOTICE.md', ...SHIPPED_DOCS]) {
+    const dest = resolve(src, file);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(resolve(repoRoot, file), dest);
   }
   const primaryDir = resolve(sandbox, `alias-primary-${ALIAS}`);
   const packed = node([resolve(repoRoot, 'scripts/pack-release.mjs'), primaryDir, src], sandbox);

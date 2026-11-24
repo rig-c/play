@@ -49,8 +49,10 @@ function ensureSandbox(): void {
   });
   assert.equal(built.status, 0, `scripts/build-lib.mjs failed:\n${built.stdout}${built.stderr}`);
 
-  for (const file of ['package.json', 'LICENSE', 'NOTICE.md', 'README.md', 'skills']) {
-    cpSync(resolve(repoRoot, file), resolve(pkgRoot, file), { recursive: true });
+  for (const file of ['package.json', 'LICENSE', 'NOTICE.md', 'README.md', 'docs/MIGRATION.md', 'docs/REFERENCE.md', 'docs/STABILITY.md', 'skills']) {
+    const dest = resolve(pkgRoot, file);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(resolve(repoRoot, file), dest, { recursive: true });
   }
   const packed = spawnSync('node', [resolve(repoRoot, 'scripts', 'pack-release.mjs'), resolve(sandbox, 'tarballs'), pkgRoot], {
     cwd: repoRoot,
