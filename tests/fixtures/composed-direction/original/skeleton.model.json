@@ -1,0 +1,1268 @@
+{
+  "spec": "rigc-compiled/3",
+  "referenceScale": 100,
+  "stage": {
+    "x": -64,
+    "y": 0,
+    "width": 128,
+    "height": 128
+  },
+  "bones": [
+    {
+      "name": "root",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "backdrop",
+      "parent": "root",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "foreground",
+      "parent": "root",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "actor:body_ctl",
+      "parent": "root",
+      "x": 0,
+      "y": 64
+    },
+    {
+      "name": "actor:body",
+      "parent": "actor:body_ctl",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "name": "actor:body_yaw_dial",
+      "parent": "root",
+      "x": -64,
+      "y": 128
+    }
+  ],
+  "slots": [
+    {
+      "name": "backdrop",
+      "bone": "backdrop",
+      "setup": "backdrop"
+    },
+    {
+      "name": "actor:background",
+      "bone": "actor:body",
+      "setup": "actor:background"
+    },
+    {
+      "name": "actor:torso",
+      "bone": "actor:body",
+      "setup": "actor:torso"
+    },
+    {
+      "name": "actor:lantern",
+      "bone": "actor:body",
+      "setup": "actor:lantern"
+    },
+    {
+      "name": "actor:face",
+      "bone": "actor:body",
+      "setup": "actor:face"
+    },
+    {
+      "name": "actor:eye_r",
+      "bone": "actor:body",
+      "setup": "actor:eye_r"
+    },
+    {
+      "name": "actor:eye_l",
+      "bone": "actor:body",
+      "setup": "actor:eye_l"
+    },
+    {
+      "name": "foreground",
+      "bone": "foreground",
+      "setup": "foreground"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "bones": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": {
+        "backdrop": {
+          "backdrop": {
+            "kind": "region",
+            "path": "scene-plate.0",
+            "x": 0,
+            "y": 64,
+            "width": 128,
+            "height": 128,
+            "atlas": {
+              "width": 128,
+              "height": 128,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 128,
+              "originalHeight": 128
+            }
+          }
+        },
+        "actor:background": {
+          "actor:background": {
+            "kind": "region",
+            "path": "actor.background",
+            "x": 0,
+            "y": 0,
+            "width": 136,
+            "height": 136,
+            "atlas": {
+              "width": 136,
+              "height": 136,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 136,
+              "originalHeight": 136
+            }
+          }
+        },
+        "actor:torso": {
+          "actor:torso": {
+            "kind": "mesh",
+            "path": "actor.torso",
+            "uvs": [
+              0,
+              0,
+              0.285714,
+              0,
+              0.571429,
+              0,
+              0.857143,
+              0,
+              1,
+              0,
+              1,
+              0.222222,
+              1,
+              0.444444,
+              1,
+              0.666667,
+              1,
+              0.888889,
+              1,
+              1,
+              0.857143,
+              1,
+              0.571429,
+              1,
+              0.285714,
+              1,
+              0,
+              1,
+              0,
+              0.888889,
+              0,
+              0.666667,
+              0,
+              0.444444,
+              0,
+              0.222222,
+              0.285714,
+              0.222222,
+              0.571429,
+              0.222222,
+              0.857143,
+              0.222222,
+              0.285714,
+              0.444444,
+              0.571429,
+              0.444444,
+              0.857143,
+              0.444444,
+              0.285714,
+              0.666667,
+              0.571429,
+              0.666667,
+              0.857143,
+              0.666667,
+              0.285714,
+              0.888889,
+              0.571429,
+              0.888889,
+              0.857143,
+              0.888889
+            ],
+            "triangles": [
+              0,
+              18,
+              1,
+              0,
+              17,
+              18,
+              1,
+              18,
+              2,
+              2,
+              18,
+              19,
+              2,
+              20,
+              3,
+              2,
+              19,
+              20,
+              3,
+              20,
+              4,
+              4,
+              20,
+              5,
+              17,
+              16,
+              18,
+              18,
+              16,
+              21,
+              18,
+              22,
+              19,
+              18,
+              21,
+              22,
+              19,
+              22,
+              20,
+              20,
+              22,
+              23,
+              20,
+              6,
+              5,
+              20,
+              23,
+              6,
+              16,
+              24,
+              21,
+              16,
+              15,
+              24,
+              21,
+              24,
+              22,
+              22,
+              24,
+              25,
+              22,
+              26,
+              23,
+              22,
+              25,
+              26,
+              23,
+              26,
+              6,
+              6,
+              26,
+              7,
+              15,
+              14,
+              24,
+              24,
+              14,
+              27,
+              24,
+              28,
+              25,
+              24,
+              27,
+              28,
+              25,
+              28,
+              26,
+              26,
+              28,
+              29,
+              26,
+              8,
+              7,
+              26,
+              29,
+              8,
+              14,
+              12,
+              27,
+              14,
+              13,
+              12,
+              27,
+              12,
+              28,
+              28,
+              12,
+              11,
+              28,
+              10,
+              29,
+              28,
+              11,
+              10,
+              29,
+              10,
+              8,
+              8,
+              10,
+              9
+            ],
+            "vertices": {
+              "weighted": true,
+              "bindings": [
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": 12,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": 12,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": 12,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": 12,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": 12,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": -4,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": -20,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": -36,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": -52,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 28,
+                    "y": -60,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": -60,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": -60,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": -60,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": -60,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": -52,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": -36,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": -20,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -28,
+                    "y": -4,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": -4,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": -4,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": -4,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": -20,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": -20,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": -20,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": -36,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": -36,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": -36,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": -12,
+                    "y": -52,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 4,
+                    "y": -52,
+                    "weight": 1
+                  }
+                ],
+                [
+                  {
+                    "bone": "actor:body",
+                    "x": 20,
+                    "y": -52,
+                    "weight": 1
+                  }
+                ]
+              ]
+            },
+            "hull": 18,
+            "edges": [
+              0,
+              2,
+              2,
+              4,
+              4,
+              6,
+              6,
+              8,
+              8,
+              10,
+              10,
+              12,
+              12,
+              14,
+              14,
+              16,
+              16,
+              18,
+              18,
+              20,
+              20,
+              22,
+              22,
+              24,
+              24,
+              26,
+              26,
+              28,
+              28,
+              30,
+              30,
+              32,
+              32,
+              34,
+              34,
+              0,
+              0,
+              36,
+              2,
+              36,
+              4,
+              36,
+              4,
+              38,
+              4,
+              40,
+              6,
+              40,
+              8,
+              40,
+              10,
+              40,
+              12,
+              40,
+              12,
+              46,
+              12,
+              52,
+              14,
+              52,
+              16,
+              20,
+              16,
+              52,
+              16,
+              58,
+              20,
+              56,
+              20,
+              58,
+              22,
+              56,
+              24,
+              28,
+              24,
+              54,
+              24,
+              56,
+              28,
+              48,
+              28,
+              54,
+              30,
+              48,
+              32,
+              36,
+              32,
+              42,
+              32,
+              48,
+              34,
+              36,
+              36,
+              38,
+              36,
+              42,
+              36,
+              44,
+              38,
+              40,
+              38,
+              44,
+              40,
+              44,
+              40,
+              46,
+              42,
+              44,
+              42,
+              48,
+              44,
+              46,
+              44,
+              48,
+              44,
+              50,
+              44,
+              52,
+              46,
+              52,
+              48,
+              50,
+              48,
+              54,
+              48,
+              56,
+              50,
+              52,
+              50,
+              56,
+              52,
+              56,
+              52,
+              58,
+              54,
+              56,
+              56,
+              58
+            ],
+            "width": 56,
+            "height": 72
+          }
+        },
+        "actor:lantern": {
+          "actor:lantern": {
+            "kind": "region",
+            "path": "actor.lantern",
+            "x": 40,
+            "y": -20,
+            "width": 24,
+            "height": 32,
+            "atlas": {
+              "width": 24,
+              "height": 32,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 24,
+              "originalHeight": 32
+            }
+          }
+        },
+        "actor:face": {
+          "actor:face": {
+            "kind": "region",
+            "path": "actor.face",
+            "x": 0,
+            "y": 32,
+            "width": 48,
+            "height": 40,
+            "atlas": {
+              "width": 48,
+              "height": 40,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 48,
+              "originalHeight": 40
+            }
+          }
+        },
+        "actor:eye_r": {
+          "actor:eye_r": {
+            "kind": "region",
+            "path": "actor.eye_r",
+            "x": -10,
+            "y": 32,
+            "width": 16,
+            "height": 16,
+            "atlas": {
+              "width": 16,
+              "height": 16,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 16,
+              "originalHeight": 16
+            }
+          }
+        },
+        "actor:eye_l": {
+          "actor:eye_l": {
+            "kind": "region",
+            "path": "actor.eye_l",
+            "x": 10,
+            "y": 32,
+            "width": 16,
+            "height": 16,
+            "atlas": {
+              "width": 16,
+              "height": 16,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 16,
+              "originalHeight": 16
+            }
+          }
+        },
+        "foreground": {
+          "foreground": {
+            "kind": "region",
+            "path": "scene-plate.1",
+            "x": -40,
+            "y": 30,
+            "width": 20,
+            "height": 20,
+            "atlas": {
+              "width": 20,
+              "height": 20,
+              "offsetX": 0,
+              "offsetY": 0,
+              "originalWidth": 20,
+              "originalHeight": 20
+            }
+          }
+        }
+      }
+    }
+  ],
+  "constraints": [
+    {
+      "kind": "slider",
+      "name": "actor:body_turn",
+      "declaredIn": "rig",
+      "animation": "actor:body_turn",
+      "loop": false,
+      "bone": "actor:body_yaw_dial",
+      "property": "rotate",
+      "from": -12,
+      "to": 0,
+      "scale": 0.125,
+      "max": 12,
+      "local": true
+    }
+  ],
+  "events": [],
+  "animations": [
+    {
+      "name": "idle",
+      "duration": 4,
+      "bones": [
+        {
+          "name": "actor:body_ctl",
+          "timelines": [
+            {
+              "name": "translatey",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": 0,
+                  "curve": [
+                    0.166667,
+                    0.2356,
+                    0.333333,
+                    0.4698
+                  ]
+                },
+                {
+                  "time": 0.5,
+                  "value": 0.6364,
+                  "curve": [
+                    0.666667,
+                    0.803,
+                    0.833333,
+                    0.9
+                  ]
+                },
+                {
+                  "time": 1,
+                  "value": 0.9,
+                  "curve": [
+                    1.166667,
+                    0.9,
+                    1.333333,
+                    0.803
+                  ]
+                },
+                {
+                  "time": 1.5,
+                  "value": 0.6364,
+                  "curve": [
+                    1.666667,
+                    0.4698,
+                    1.833333,
+                    0.2356
+                  ]
+                },
+                {
+                  "time": 2,
+                  "value": 0,
+                  "curve": [
+                    2.166667,
+                    -0.2356,
+                    2.333333,
+                    -0.4698
+                  ]
+                },
+                {
+                  "time": 2.5,
+                  "value": -0.6364,
+                  "curve": [
+                    2.666667,
+                    -0.803,
+                    2.833333,
+                    -0.9
+                  ]
+                },
+                {
+                  "time": 3,
+                  "value": -0.9,
+                  "curve": [
+                    3.166667,
+                    -0.9,
+                    3.333333,
+                    -0.803
+                  ]
+                },
+                {
+                  "time": 3.5,
+                  "value": -0.6364,
+                  "curve": [
+                    3.666667,
+                    -0.4698,
+                    3.833333,
+                    -0.2356
+                  ]
+                },
+                {
+                  "time": 4,
+                  "value": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "foreground",
+          "timelines": [
+            {
+              "name": "translate",
+              "keys": [
+                {
+                  "time": 0,
+                  "x": 0,
+                  "y": 0
+                },
+                {
+                  "time": 2,
+                  "x": 3,
+                  "y": 0
+                },
+                {
+                  "time": 4,
+                  "x": 0,
+                  "y": 0
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    },
+    {
+      "name": "actor:body_turn",
+      "duration": 3,
+      "bones": [
+        {
+          "name": "actor:body",
+          "timelines": [
+            {
+              "name": "rotate",
+              "keys": [
+                {
+                  "time": 0,
+                  "value": -3
+                },
+                {
+                  "time": 1.5,
+                  "value": 0
+                },
+                {
+                  "time": 3,
+                  "value": 3
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "slots": [],
+      "constraints": {
+        "ik": [],
+        "transform": [],
+        "path": [],
+        "physics": [],
+        "slider": []
+      },
+      "attachments": [],
+      "drawOrder": [],
+      "events": []
+    }
+  ],
+  "editorOrder": {
+    "skins": [
+      {
+        "name": "default",
+        "slots": [
+          "actor:background",
+          "actor:eye_l",
+          "actor:eye_r",
+          "actor:face",
+          "actor:lantern",
+          "actor:torso",
+          "backdrop",
+          "foreground"
+        ]
+      }
+    ],
+    "animations": [
+      "actor:body_turn",
+      "idle"
+    ]
+  },
+  "images": [
+    {
+      "region": "scene-plate.0",
+      "page": "../../rig/images/scene-plate.0.png",
+      "width": 128,
+      "height": 128,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "scene-plate.1",
+      "page": "../../rig/images/scene-plate.1.png",
+      "width": 20,
+      "height": 20,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.background",
+      "page": "../../rig/images/actor.background.png",
+      "width": 136,
+      "height": 136,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.torso",
+      "page": "../../rig/images/actor.torso.png",
+      "width": 56,
+      "height": 72,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.lantern",
+      "page": "../../rig/images/actor.lantern.png",
+      "width": 24,
+      "height": 32,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.face",
+      "page": "../../rig/images/actor.face.png",
+      "width": 48,
+      "height": 40,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.eye_r",
+      "page": "../../rig/images/actor.eye_r.png",
+      "width": 16,
+      "height": 16,
+      "hasAlpha": true,
+      "isBase": false
+    },
+    {
+      "region": "actor.eye_l",
+      "page": "../../rig/images/actor.eye_l.png",
+      "width": 16,
+      "height": 16,
+      "hasAlpha": true,
+      "isBase": false
+    }
+  ],
+  "pageGrids": [],
+  "droppedStates": [],
+  "absentParts": [],
+  "meshBones": [
+    "actor:body"
+  ],
+  "meshes": [
+    {
+      "slot": "actor:torso",
+      "kind": "authored",
+      "attachments": [
+        "actor:torso"
+      ],
+      "vertices": 30,
+      "triangles": 40,
+      "bones": [
+        "actor:body"
+      ],
+      "coverage": 1,
+      "overshoot": 5.656854
+    }
+  ],
+  "physics": [],
+  "deformTransforms": [],
+  "trackDerivations": [],
+  "rig": {
+    "archetype": "actor",
+    "axisBone": null,
+    "axisSubtree": [],
+    "detached": [],
+    "slotOrder": [
+      "backdrop",
+      "actor:background",
+      "actor:torso",
+      "actor:lantern",
+      "actor:face",
+      "actor:eye_r",
+      "actor:eye_l",
+      "foreground"
+    ],
+    "meshKinds": {
+      "actor:torso": "authored"
+    },
+    "meshDeclaredBones": {
+      "actor:torso": [
+        "actor:body"
+      ]
+    },
+    "meshSoftBones": {},
+    "deformMayFold": [],
+    "consumerDrivenMix": [],
+    "idleDrivesMeshes": null,
+    "axes": [],
+    "basePlates": [],
+    "meshSlotBudget": null,
+    "meshTriangleBudget": null,
+    "contactDepth": null,
+    "capContainmentCeiling": null,
+    "massBone": null,
+    "inwardUnit": null
+  },
+  "pages": [
+    {
+      "name": "skeleton.png",
+      "width": 140,
+      "height": 348,
+      "pma": false,
+      "scale": null,
+      "regions": [
+        {
+          "name": "actor.background",
+          "x": 2,
+          "y": 2,
+          "width": 136,
+          "height": 136,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 136,
+          "originalHeight": 136,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "actor.eye_l",
+          "x": 62,
+          "y": 318,
+          "width": 16,
+          "height": 16,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 16,
+          "originalHeight": 16,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "actor.eye_r",
+          "x": 82,
+          "y": 318,
+          "width": 16,
+          "height": 16,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 16,
+          "originalHeight": 16,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "actor.face",
+          "x": 62,
+          "y": 274,
+          "width": 48,
+          "height": 40,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 48,
+          "originalHeight": 40,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "actor.lantern",
+          "x": 114,
+          "y": 274,
+          "width": 24,
+          "height": 32,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 24,
+          "originalHeight": 32,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "actor.torso",
+          "x": 2,
+          "y": 274,
+          "width": 56,
+          "height": 72,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 56,
+          "originalHeight": 72,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "scene-plate.0",
+          "x": 2,
+          "y": 142,
+          "width": 128,
+          "height": 128,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 128,
+          "originalHeight": 128,
+          "degrees": 0,
+          "index": 0
+        },
+        {
+          "name": "scene-plate.1",
+          "x": 114,
+          "y": 310,
+          "width": 20,
+          "height": 20,
+          "offsetX": 0,
+          "offsetY": 0,
+          "originalWidth": 20,
+          "originalHeight": 20,
+          "degrees": 0,
+          "index": 0
+        }
+      ]
+    }
+  ],
+  "spine": {
+    "sha256": "5391b116b3c691c5dfac8ba40b532443b255963515a975ea3720668a236ffa3f"
+  }
+}

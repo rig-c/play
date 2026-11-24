@@ -1,0 +1,36 @@
+skeleton.png
+size: 362, 164
+filter: Linear, Linear
+pma: false
+actor.background
+bounds: 164, 2, 136, 136
+offsets: 0, 0, 136, 136
+rotate: 0
+actor.eye_l
+bounds: 332, 146, 16, 16
+offsets: 0, 0, 16, 16
+rotate: 0
+actor.eye_r
+bounds: 164, 142, 16, 16
+offsets: 0, 0, 16, 16
+rotate: 0
+actor.face
+bounds: 304, 78, 48, 40
+offsets: 0, 0, 48, 40
+rotate: 0
+actor.lantern
+bounds: 304, 122, 24, 32
+offsets: 0, 0, 24, 32
+rotate: 0
+actor.torso
+bounds: 304, 2, 56, 72
+offsets: 0, 0, 56, 72
+rotate: 0
+scene-plate.0
+bounds: 2, 2, 158, 158
+offsets: 0, 0, 158, 158
+rotate: 0
+scene-plate.1
+bounds: 332, 122, 20, 20
+offsets: 0, 0, 20, 20
+rotate: 0

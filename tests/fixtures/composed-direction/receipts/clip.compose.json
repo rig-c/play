@@ -1,0 +1,83 @@
+{
+ "spec": "rig-compose-run/1",
+ "scene": {
+  "path": "clip.scene.json",
+  "sha256": "fe44e188351996e7212b2d02392beee3dc5e69cc2878828b31a6a03080f08aa5"
+ },
+ "characters": [
+  {
+   "id": "actor",
+   "build": "evidence/compose-character",
+   "files": [
+    {
+     "path": "check/check.json",
+     "sha256": "90aaf49f211b50e85cf61ab457af9e1b33f42a26750bdecd7520b6064ec91049"
+    },
+    {
+     "path": "parts.json",
+     "sha256": "d93e07d90bb34132c296265585160cb37009cfac3c4eda0c19114636ddb41dca"
+    },
+    {
+     "path": "rig/images/background.png",
+     "sha256": "24eb570320b9e27ce6449b54e82abd811043b9a63f48387f13cbba2dbed5c5f8"
+    },
+    {
+     "path": "rig/images/eye_l.png",
+     "sha256": "97da226ecba85a1af18173df4eb28d72b0828cda8c171f8d4a2995a3da9cc733"
+    },
+    {
+     "path": "rig/images/eye_r.png",
+     "sha256": "97da226ecba85a1af18173df4eb28d72b0828cda8c171f8d4a2995a3da9cc733"
+    },
+    {
+     "path": "rig/images/face.png",
+     "sha256": "e2bd0d0736b3ecda20d6a08840468a2d46738c226631fd73e280dab3719c9e4c"
+    },
+    {
+     "path": "rig/images/lantern.png",
+     "sha256": "733d1cc36c0d1a01f1d330085316f8bcccb8d4331e2f20b9a3dfe2a3407a7041"
+    },
+    {
+     "path": "rig/images/torso.png",
+     "sha256": "356a2a89f530ef7ab5719eefa2cfbff37f8f39a274f41689f13a9c7a2d76adf5"
+    },
+    {
+     "path": "rig/motion.json",
+     "sha256": "2fbf64b1db154959fe110d6213ea87f60448bf56a66f4ac8be955320bc06c695"
+    },
+    {
+     "path": "rig/rig.json",
+     "sha256": "d06b89064ad793f12af4077acf343d87471f89f707e0289b4d6c4606489b774d"
+    }
+   ],
+   "placement": {
+    "canvas_clip": true,
+    "bounds": [
+     -8,
+     0,
+     120,
+     128
+    ],
+    "clipped_bounds": [
+     0,
+     0,
+     120,
+     128
+    ]
+   }
+  }
+ ],
+ "plate": null,
+ "plates": [
+  {
+   "name": "backdrop",
+   "path": "inputs/background-overscan.png",
+   "sha256": "e62ccfb9c31d10103cbd282d366cf759bcad9e85869788ae9eeffeae2d34cc06"
+  },
+  {
+   "name": "foreground",
+   "path": "inputs/foreground.png",
+   "sha256": "551c7620d6dbc565f87af7c56be7bd2620075ee8ae205394b065a4190c5068a8"
+  }
+ ]
+}

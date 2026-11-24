@@ -465,6 +465,73 @@ not correct or round it. Stored-only formula comparisons therefore have a
 different domain from selected geometry with setup deform. See
 [core AUTHORING §14, including S1538_09](https://github.com/rig-c/core/blob/v2.66.0/docs/AUTHORING.md#14-read-a-named-mesh-at-setup).
 
+### Pointer camera for a composed take
+
+Open `composed-parallax.html` in the demo to inspect the public Create rehearsal.
+The page starts in Fixed. Use `?camera=parallax` or `?camera=pan` to opt in, and
+`?fixture=original|overscan|clip` to choose the source variant. The default is
+`overscan`. Use `?time=2` to hold the pose at two seconds while keeping the camera
+interactive. The readouts separate camera excursion from each plane's shift
+and show the requested maximum even when a mode is refused.
+
+For another take, import [`mountComposedTake`](../samples/composed-take.ts) from the
+repository sample and serve the take's `skeleton.model.json` with its named page
+images. Give the root a CSS width and height for the stage. Use the take's
+animation name and exact compiled slot names:
+
+```ts
+import { mountComposedTake } from './samples/composed-take.js';
+
+const take = await mountComposedTake(viewport, {
+  modelUrl: '/take/skeleton.model.json',
+  animation: 'idle',
+  loop: true,
+  slots: { background: ['backdrop'], figure: ['actor:body'], foreground: ['foreground'] },
+  camera: 'fixed',
+});
+
+// Call take.setCamera('parallax') to opt in, or take.dispose() when unmounting.
+```
+
+Assign every drawable slot once and omit `foreground` if the take has none.
+Classify slots by their role in this composition. The example's
+`actor:background` moves with the figure. The mount uses one player's current
+pose and original draw order, translates geometry and clips with their plane,
+and crops once at the model's fixed stage. The loop runs on its own clock.
+The returned `canvas`, `player`, `mode` and `offsets` expose the rendered take.
+`offsets` are signed CSS pixels with +Y down. `cameraExcursion` gives the
+configured maximum before gains. `backend` can select `canvas2d` or `webgl`.
+
+Parallax applies gains −0.55, 0 and +0.55 to background, figure and foreground.
+Pan uses gain 1 on every plane. A positive gain moves art opposite the camera.
+The default camera excursion is 10% of each CSS stage axis, capped at 64 px X
+and 40 px Y before applying the gains. At those caps the outer planes move up
+to 35.2 px X and 22 px Y in Parallax. In Pan every plane moves up to 64 px X and
+40 px Y. Moving modes need an opaque backdrop covering all edges over the full
+selected envelope at the current layout.
+
+`maxDisplacement: { x, y }` supplies a symmetric camera excursion in CSS pixels
+before gain, with zero disabling that axis. The override is applied as supplied.
+For example, with 88 CSS pixels of opaque margin on each horizontal edge and
+zero vertical margin at the current layout, `{ x: 160, y: 0 }` in Parallax and
+`{ x: 88, y: 0 }` in Pan each move the backdrop by up to 88 px on X and 0 on Y.
+Select Fixed for a take with zero overscan or supply a plate authored with the
+needed margins. The mount and `setCamera` report these conditions by code.
+A layout or backdrop change that invalidates a moving mode draws Fixed and
+exposes the reason on `take.refusal`.
+
+| Code | Condition |
+| --- | --- |
+| `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
+| `COMPOSED_LOOP_REQUIRED` | Missing positive-duration animation or `loop: true` |
+| `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
+| `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
+| `COMPOSED_BACKDROP_COVERAGE` | Inadequate opaque backdrop coverage for a moving mode |
+| `COMPOSED_INVALID_DISPLACEMENT` | An excursion axis is negative or non-finite |
+| `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
+
+See the [public fixture and its producer receipts](../tests/fixtures/composed-direction/README.md).
+
 ### Drawing some slots only
 
 `slots` is a draw filter — an allow list of slot names or a predicate — settable up

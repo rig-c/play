@@ -1,0 +1,91 @@
+{
+  "createCommit": "ed949ef5a44e443a89f640ab0d6b8f8fac0ca1ae",
+  "parts": "2.54.0",
+  "producerCore": "3.8.1",
+  "originalFiles": {
+    "scene.json": "b06a18c7110c7201f4a129d2fb3c9dffa9d9f70640f9b31c6d010a4406a88093",
+    "plates/background.png": "c180182b6666fb4d90d4f91e210bda103a4081f1ad7c45006db392fa6c4eaf36",
+    "plates/foreground.png": "551c7620d6dbc565f87af7c56be7bd2620075ee8ae205394b065a4190c5068a8"
+  },
+  "overscan": {
+    "at": [
+      -15,
+      -15
+    ],
+    "width": 158,
+    "height": 158,
+    "nonOpaque": 0,
+    "centerChangedRgbaPixels": 0,
+    "partPngSha256": "e62ccfb9c31d10103cbd282d366cf759bcad9e85869788ae9eeffeae2d34cc06"
+  },
+  "clip": {
+    "canvas_clip": true,
+    "bounds": [
+      -8,
+      0,
+      120,
+      128
+    ],
+    "clipped_bounds": [
+      0,
+      0,
+      120,
+      128
+    ]
+  },
+  "actorPngs": [
+    {
+      "name": "actor.lantern.png",
+      "sha256": "733d1cc36c0d1a01f1d330085316f8bcccb8d4331e2f20b9a3dfe2a3407a7041"
+    },
+    {
+      "name": "actor.background.png",
+      "sha256": "24eb570320b9e27ce6449b54e82abd811043b9a63f48387f13cbba2dbed5c5f8"
+    },
+    {
+      "name": "actor.eye_l.png",
+      "sha256": "97da226ecba85a1af18173df4eb28d72b0828cda8c171f8d4a2995a3da9cc733"
+    },
+    {
+      "name": "actor.eye_r.png",
+      "sha256": "97da226ecba85a1af18173df4eb28d72b0828cda8c171f8d4a2995a3da9cc733"
+    },
+    {
+      "name": "actor.torso.png",
+      "sha256": "356a2a89f530ef7ab5719eefa2cfbff37f8f39a274f41689f13a9c7a2d76adf5"
+    },
+    {
+      "name": "actor.face.png",
+      "sha256": "e2bd0d0736b3ecda20d6a08840468a2d46738c226631fd73e280dab3719c9e4c"
+    }
+  ],
+  "models": [
+    {
+      "name": "original",
+      "scene": "compose.scene.json",
+      "sceneSha256": "b06a18c7110c7201f4a129d2fb3c9dffa9d9f70640f9b31c6d010a4406a88093",
+      "runSha256": "5314198e245aa299361ad68ccf9dda7d0a942fe45d6cff052825b1e5049a958b",
+      "path": "original/check/build/skeleton.model.json",
+      "modelSha256": "b5f1bc5de634d763fe5737977b0237725a07b49cf20746cae66cae13c6668fe9",
+      "atlasSha256": "81f1c74c4226afd9ab38af336df918cfafaec0d6c6aee6ea238a65898a5f5ba9"
+    },
+    {
+      "name": "overscan",
+      "scene": "overscan.scene.json",
+      "sceneSha256": "c2bd267852d0ceacaf988cd82d8fe273d82947fe433e1be641cbced4f3410625",
+      "runSha256": "9ec19e272798f3b3d6a316e5f471b54f0184de93d76b9d347caf3c46f6332a40",
+      "path": "overscan/check/build/skeleton.model.json",
+      "modelSha256": "01cf0c46b8f028fca3f90657ddec668e9e8bff6aa7c1fcf01e65300403e15a23",
+      "atlasSha256": "a5a276bc7a678c87e5df3b3062215a432809cbf7ed641ed2fd2977011c66dd58"
+    },
+    {
+      "name": "clip",
+      "scene": "clip.scene.json",
+      "sceneSha256": "fe44e188351996e7212b2d02392beee3dc5e69cc2878828b31a6a03080f08aa5",
+      "runSha256": "e1a16bc508497cdefab4f74a99b41b96e6829abdfb95a8a6807568811ec7f03e",
+      "path": "clip/check/build/skeleton.model.json",
+      "modelSha256": "eb1ef9b0094be5e61198353c99af9b4b907d2062c34757b987eb940ecff84892",
+      "atlasSha256": "a5a276bc7a678c87e5df3b3062215a432809cbf7ed641ed2fd2977011c66dd58"
+    }
+  ]
+}

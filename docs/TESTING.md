@@ -54,6 +54,22 @@ resolving, so blob ownership — every unpacked URL freed, nothing the caller
 owns touched, nothing stranded by a failed load — is asserted rather than
 assumed.
 
+### Composed direction fixtures
+
+The review page and composed-take tests share the same compiled public
+`original`, `overscan` and `clip` variants under `tests/fixtures/composed-direction/`.
+Vite dev and the built preview serve each model, PNG and atlas together at
+`tests/fixtures/composed-direction/<variant>/skeleton.*` under the site's base.
+The assets are separate from the generated gallery under `public/rigs/`.
+Verify their SHA-256 manifest and find the pinned producer commands and receipts
+in the [fixture directory](../tests/fixtures/composed-direction/README.md).
+
+To drive a composed sample at known times, mount with `autoStart: false`, call
+`take.advance(rigElapsed, cameraElapsed)` to step the two clocks in seconds,
+then call `take.render()`. The ordinary sample mounts with the animation frame
+clock. For a focused typecheck, extend the repository `tsconfig.json` from a
+scratch config and list `samples/composed-parallax.ts` in `files` explicitly.
+
 ### Independent official raster oracle
 
 `tests/oracle.spec.ts` compares real DOM WebGL, DOM canvas2d and whole-canvas
