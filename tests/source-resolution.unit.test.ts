@@ -21,6 +21,18 @@ import { build as viteBuild, defaultClientConditions } from 'vite';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const tscBin = resolve(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+const ROOT_EXPORTS = [
+  'CanvasRenderer',
+  'DomRenderer',
+  'RigPlayer',
+  'createAtlasRegions',
+  'discoverTurnDials',
+  'loadModel',
+  'normalizedDial',
+  'readSetupMesh',
+  'revokeRegions',
+  'unpackRegions',
+];
 
 let sandbox = '';
 
@@ -232,10 +244,7 @@ test(
         assert.equal(result.status, 0, result.stderr);
         const data = JSON.parse(result.stdout) as { resolved: string; keys: string[] };
         assert.match(data.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
-        assert.deepEqual(data.keys, [
-          'CanvasRenderer', 'DomRenderer', 'RigPlayer', 'createAtlasRegions',
-          'discoverTurnDials', 'loadModel', 'normalizedDial', 'readSetupMesh', 'revokeRegions', 'unpackRegions',
-        ]);
+        assert.deepEqual(data.keys, ROOT_EXPORTS);
       }
 
       for (const [moduleResolution, module] of [['bundler', 'ESNext'], ['nodenext', 'NodeNext']] as const) {
@@ -330,16 +339,7 @@ test(
     assert.equal(bunLinked.status, 0, bunLinked.stderr);
     const bunInfo = JSON.parse(bunLinked.stdout) as { resolved: string; keys: string[] };
     assert.match(bunInfo.resolved.replaceAll('\\', '/'), /\/play-checkout\/src\/index\.ts$/);
-    assert.deepEqual(bunInfo.keys, [
-      'CanvasRenderer',
-      'DomRenderer',
-      'RigPlayer',
-      'createAtlasRegions',
-      'loadModel',
-      'readSetupMesh',
-      'revokeRegions',
-      'unpackRegions',
-    ]);
+    assert.deepEqual(bunInfo.keys, ROOT_EXPORTS);
 
     // Synthetic source-edit observation in the temp copy (no dist/, no build, no pack, real src/ untouched).
     const tempIndex = resolve(linkedPlay, 'src', 'index.ts');
