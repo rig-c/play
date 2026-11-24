@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.26.0
+
+### Features
+
+* **turn dials:** export `discoverTurnDials(model, durations?)`, `normalizedDial(value, range)` and the `TurnAxis` and `TurnDial` types, which find a rig's compiled yaw, pitch and body turn dials and map normalized input onto their slider ranges ([#283](https://github.com/rig-c/play/pull/283), refs [#282](https://github.com/rig-c/play/issues/282)).
+* **sample:** the composed-take sample hands the camera between automatic baked travel and the pointer, binds each named plate with its own gain, checks coverage per plate and on the composed backdrop, and drives the rig's turn dials from the pointer ([#276](https://github.com/rig-c/play/pull/276), [#278](https://github.com/rig-c/play/pull/278), [#283](https://github.com/rig-c/play/pull/283)).
+
+### Documentation
+
+* use the `@rig-c/core` module names and the manual release wording ([#273](https://github.com/rig-c/play/pull/273)).
+* add a stability inventory, `docs/STABILITY.md` ([#283](https://github.com/rig-c/play/pull/283)).
+
+### CI
+
+* pin the Ubuntu archive mirror for Playwright system dependencies ([#275](https://github.com/rig-c/play/pull/275)).
+
 ## 1.25.0
 
 ### Features
