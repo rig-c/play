@@ -273,6 +273,29 @@ function fixedReference(time: number) {
   };
 }
 
+function stockClipReference(time: number, figure: readonly string[]) {
+  if (!ordinary) throw new Error('Open the reference first');
+  const { player, renderer: stock } = ordinary;
+  const composed = take().player.renderer as CanvasRenderer;
+  player.seek(time);
+  const source = player.posedFrame();
+  // Draw the figure first so both it and the subsequent whole scene miss the
+  // renderer's frame cache and exercise clipping on each canvas.
+  return ([['figure', figure], ['scene', undefined]] as const).map(([view, slots]) => {
+    stock.render(slots ? subset(source, slots) : source);
+    const actual = rendered(0, slots);
+    const expected = pixels(stock.canvas);
+    return {
+      view, viewport: actual.viewport,
+      backends: [actual.backend, stock.backendActive],
+      clipCounts: [actual.clipCount, stock.clipCount],
+      reused: [composed.framesReused, stock.framesReused],
+      ...compare(actual.pixels, expected),
+      ...alpha(expected),
+    };
+  });
+}
+
 function livePose(bones: readonly string[], player = take().player) {
   return {
     trackTime: player.time, animationTime: player.entry(0)?.animationTime,
@@ -403,7 +426,7 @@ Object.assign(window, {
   composedTest: {
     mount, dispose, point, reset, tick, camera, layout, state, poseBytes, freeze,
     sourceGeometry, draw, backdrop, openReference, referenceGeometry, dialLocals, dialReference, turnReadouts,
-    fixedReference, livePose, liveReference, storeFigure, renderedPixels,
+    fixedReference, stockClipReference, livePose, liveReference, storeFigure, renderedPixels,
     compareFigure, cropReference, planeReferences, layerPixels, compareWithout, showReading,
   },
 });
@@ -416,7 +439,8 @@ export type ComposedHarnessWindow = typeof window & {
     draw: typeof draw; backdrop: typeof backdrop; openReference: typeof openReference;
     referenceGeometry: typeof referenceGeometry;
     dialLocals: typeof dialLocals; dialReference: typeof dialReference; turnReadouts: typeof turnReadouts;
-    fixedReference: typeof fixedReference; livePose: typeof livePose; liveReference: typeof liveReference;
+    fixedReference: typeof fixedReference; stockClipReference: typeof stockClipReference;
+    livePose: typeof livePose; liveReference: typeof liveReference;
     renderedPixels: typeof renderedPixels;
     storeFigure: typeof storeFigure; compareFigure: typeof compareFigure;
     cropReference: typeof cropReference; planeReferences: typeof planeReferences; layerPixels: typeof layerPixels;

@@ -34,6 +34,7 @@ const cover = 'backdrop remains opaque';
 const crop = 'crops full authored geometry';
 const clipRaster = 'renders the displaced attachment clip';
 const clipAssertions = ['attachment clip scene RGBA', 'attachment clip isolated figure RGBA'];
+const nativeFrameTransform = '        positioned = transformFrame(frame, shiftFor, { centered, clipInStockSpace: true });';
 const refuse = (name) => `refuses ${name}`;
 const named = (name) => `named refusal for ${name}`;
 const namedOrder = 'accepts a small tables overlay';
@@ -106,22 +107,39 @@ const plants = [
       writeFileSync(path, JSON.stringify(doc));
     })),
   raster('early-stage-crop', crop, ['stage crop RGBA', 'isolated full-geometry crop RGBA'],
-    '? frame : transformFrame(frame, shiftFor));',
-    `? frame : transformFrame({ order: frame.order.map(slot => slot.slot.startsWith('actor:') ? {
-          ...slot, clip: { convex: true, inverse: false, polygon: [-64, 0, 64, 0, 64, 128, -64, 128] },
-        } : slot) }, shiftFor));`),
+    nativeFrameTransform,
+    `        const clip: PosedClip = { convex: true, inverse: false, polygon: [-64, 0, 64, 0, 64, 128, -64, 128] };
+        const cropped = { ...frame, order: frame.order.map(slot => slot.slot.startsWith('actor:') ? { ...slot, clip } : slot) };
+        positioned = transformFrame(cropped, shiftFor, { centered, clipInStockSpace: true });`),
   code('viewport-is-clipped-bounds', 7, crop, 'viewport is original stage', mount,
     'renderer.viewport = native ? stage :', 'renderer.viewport = native ? { ...stage, width: 120 } :'),
   code('fixed-polygon', 7, 'moves an authored attachment polygon', 'polygon and figure move together', mount,
     'polygon: transform(clip.polygon)', 'polygon: clip.polygon'),
-  raster('clip-offset-one-css-pixel', clipRaster, clipAssertions,
-    'polygon: transform(clip.polygon)',
-    'polygon: transform(clip.polygon.map((value, i) => i % 2 === 0 ? value + 1 : value))'),
+  {
+    ...mutation('clip-offset-one-css-pixel', 7, clipRaster, clipAssertions, directory => {
+      const clipCache = '  const clips = new Map<PosedClip, PosedClip>();';
+      replace(directory, mount, clipCache, `${clipCache}\n  const offsetClips = new Map<PosedClip, PosedClip>();`);
+      const transform = '    const transform = (xy: number[], delta = shift) => xy.map((value, i) => i % 2 === 0';
+      // Shift each input clip once before it feeds both the presented and stock coordinates.
+      replace(directory, mount, transform, `    if (slot.clip) {
+      const original = slot.clip;
+      const offset = offsetClips.get(original) ?? {
+        ...original, polygon: original.polygon.map((value, i) => i % 2 === 0 ? value + 1 : value),
+      };
+      offsetClips.set(original, offset);
+      slot = { ...slot, clip: offset };
+    }
+${transform}`);
+    }),
+    checkRaster: true,
+  },
   raster('clip-on-wrong-plane', clipRaster, clipAssertions,
-    '? frame : transformFrame(frame, shiftFor));',
-    `? frame : transformFrame({ order: frame.order.map(slot => ({
-          ...slot, clip: slot.slot === 'backdrop' ? frame.order.find(candidate => candidate.clip)?.clip : undefined,
-        })) }, shiftFor));`),
+    nativeFrameTransform,
+    `        const clip = frame.order.find(slot => slot.clip)?.clip;
+        const wrongPlane = { ...frame, order: frame.order.map(slot => slot.slot === 'backdrop' || slot.clip
+          ? { ...slot, clip: slot.slot === 'backdrop' ? clip : undefined }
+          : slot) };
+        positioned = transformFrame(wrongPlane, shiftFor, { centered, clipInStockSpace: true });`),
   raster('figure-offset-one-css-pixel', clipRaster, clipAssertions,
     'return { x: x * stage.width / layout.cssWidth, y: y * stage.height / layout.cssHeight };',
     `const figureOffset = planes.get(slot.slot) === 'figure' ? 1 : 0;
