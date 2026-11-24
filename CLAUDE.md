@@ -108,8 +108,9 @@ do not recalculate it on each feature PR.
 - **The poser is `@rig-c/core`, pinned to an exact version, and a pose doubt is a
   rigc issue.** `devDependencies["@rig-c/core"]` is a bare version (no range;
   `tests/package.spec.ts` asserts it), the build bundles that version's
-  `./core` and `./runtime` into `index.js`, and `scripts/fetch-assets.sh` builds
-  every fixture with the same version's `rigc build` from the same tag. The
+  `./core` and `./runtime` into the package's shared JavaScript chunk, and
+  `scripts/fetch-assets.sh` builds every fixture with the same version's
+  `rigc build` from the same tag. The
   oracle pose is what rig-c's own CI holds to spine-core 4.3.13 at tolerance 0
   (`core_gate`, `--raw`; rigc
   `docs/SECOND_ORACLE.md` §4–§5, and §7 on this player posing through
@@ -258,26 +259,24 @@ do not recalculate it on each feature PR.
 - **Relative imports in `src/` carry `.js`** — `from './DomTexture.js'`, never
   `from './DomTexture'`. TypeScript resolves the `.js` specifier back to the
   `.ts` file under `moduleResolution: "bundler"`, and vite does the same, so
-  nothing in development notices either way. The shipped JavaScript is one
-  bundle now, so node's resolver never meets these specifiers in `index.js`;
-  it still meets them in the **declarations**, which `tsc` emits one per module
-  with the specifier unchanged, and a `nodenext` consumer rejects an
-  extensionless one with TS2835 (#16 was the same defect in the `.js`). The
-  guard is `tests/package.spec.ts`'s nodenext consumer typecheck.
-- **The package is one self-contained bundle** (`scripts/build-lib.mjs`):
-  vite library mode bundles `src/index.ts` with `@rig-c/core` **not** external — its
-  `./core` and `./runtime` entries are TypeScript source in a devDependency,
-  which no consumer has and no node loads from `node_modules` — and
-  `tsc --emitDeclarationOnly` writes the types, with `stripInternal` dropping
-  every `@internal` declaration
-  (the adapter's and the loader's helpers, the only ones whose signatures name
-  a rig-c type), so the shipped `.d.ts` name nothing a consumer lacks.
-  `tests/package.spec.ts` installs the built package with nothing beside it,
-  imports and typechecks it by name, and asserts the bundle imports nothing,
-  reaches no `node:` module and contains `openTrack`. Measured: `index.js`
-  290 KB unminified (the demo's minified chunk for the player and the core,
-  139 KB / 46 KB gzip). Anything marked `@internal` must stay out of the public
-  types' reach, or the consumer typecheck goes red on `@rig-c/core/core`.
+  nothing in development notices either way. Vite writes the JavaScript entry
+  and chunk imports. The **declarations** keep the source specifiers, and a
+  `nodenext` consumer rejects an extensionless one with TS2835 (#16 was the
+  same defect in the `.js`). The guard is `tests/package.spec.ts`'s nodenext
+  consumer typecheck.
+- **The package is self-contained** (`scripts/build-lib.mjs`). Vite library
+  mode builds `src/index.ts` and `src/composed-take.ts` as ESM entries. Both
+  entries use the same bundled player and renderer code. The build includes the
+  pinned `@rig-c/core` TypeScript sources in the shared JavaScript chunk. Runtime
+  imports resolve within the package.
+  `tsc --emitDeclarationOnly` writes the declarations and `stripInternal` drops
+  helpers marked `@internal`. Keep those helpers and core types out of public
+  signatures. The composed entry extends the package through
+  `@rig-c/play/composed-take`. Preserve the root export list and the twelve
+  existing declaration files byte for byte. The JavaScript entry files may
+  change as shared code moves into a chunk. The checkout resolves both entries
+  through `@rig-c/source` when enabled. The release packer strips that condition
+  from both entries.
 - **One shared WebGL context** at module level — browsers cap WebGL contexts at
   ~16; never create one per renderer/mesh. Because it outlives every renderer,
   its page textures are reference-counted per page (retained as a mesh job is
@@ -429,9 +428,9 @@ do not recalculate it on each feature PR.
   the repository's own `dist/`: during a run `vite preview` is serving the demo
   out of `dist/` and `build:lib` opens with `rm -rf dist`, so a lib build there
   would pull the ground out from under every other spec in the same run. It
-  also pins the exact set of files that build emits (`index.js` + map, and a
-  `.d.ts` + map per module), because an unreachable file has no other
-  signature: `dist/main.*` shipped in 0.4.1 and 0.5.0 without any resolver,
+  also checks the exact emitted file set, including both JavaScript entries,
+  the shared chunk, declarations and their maps. `dist/main.*` shipped as an
+  unreachable file in 0.4.1 and 0.5.0 without any resolver,
   import walk or consumer ever noticing (#24).
 - **The package has three registry names and one set of files** (#65, #98). It is
   published as `@rig-c/play`, the `name` in `package.json`, and every version is

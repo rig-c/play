@@ -15,15 +15,21 @@ function packRelease(source, destination) {
   const list = JSON.parse(npmPack(source, '--dry-run', '--json'));
   // npm 10 emits an array. npm 12 keys the result by package name.
   const [pack] = Object.values(list);
-  const paths = pack.files.map(({ path }) => path);
+  const paths = new Set(pack.files.map(({ path }) => path));
   const manifest = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
-  const root = manifest.exports['.'];
-  for (const condition of ['import', 'types']) {
-    if (!paths.includes(root[condition].slice(2))) {
-      throw new Error(`Missing release entry ${root[condition]}. Run npm run build:lib first.`);
+  for (const subpath of ['.', './composed-take']) {
+    for (const condition of ['import', 'types']) {
+      const target = manifest.exports?.[subpath]?.[condition];
+      if (typeof target !== 'string' || !target.startsWith('./dist/') || !paths.has(target.slice(2))) {
+        throw new Error(`Missing release entry ${target ?? `${subpath} (${condition})`}. Run npm run build:lib first.`);
+      }
     }
   }
-  delete root['@rig-c/source'];
+  const libraryFiles = new Set(['dist/_play-runtime.js', ...manifest.files.filter(path => path.startsWith('dist/'))]);
+  for (const path of libraryFiles) {
+    if (!paths.has(path)) throw new Error(`Missing release file ${path}. Run npm run build:lib first.`);
+  }
+  for (const entry of Object.values(manifest.exports)) delete entry['@rig-c/source'];
 
   const stage = mkdtempSync(join(tmpdir(), 'play-release-pack-'));
   try {

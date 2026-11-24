@@ -34,7 +34,7 @@ function harness(shortDialTravel: boolean) {
         plugins: shortDialTravel ? [{
           name: 'test-dial-travel', enforce: 'pre',
           transform(source, id) {
-            if (id !== resolve('samples/composed-take.ts')) return;
+            if (id !== resolve('src/composed-take.ts')) return;
             const setting = 'TURN_FULL_RANGE_AT_STAGE_EDGE = 1;';
             if (!source.includes(setting)) throw new Error('Missing default dial travel setting');
             return source.replace(setting, 'TURN_FULL_RANGE_AT_STAGE_EDGE = 0.5;');

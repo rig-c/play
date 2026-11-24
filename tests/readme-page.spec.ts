@@ -3,14 +3,13 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 /**
  * The README's *A minimal page* (#118), run as written. The block is read out
- * of README.md, so the page a reader copies is the page under test. Two
- * requests are answered here instead of by the network: the page itself, at a
- * path on the test server (so `rigs/look/…` resolves to the fixture), and the
- * CDN import, with the package built from this tree by the same script the
+ * of README.md, so the page a reader copies is the page under test. The page
+ * uses a path on the test server (so `rigs/look/…` resolves to the fixture).
+ * The CDN requests use the package built from this tree by the same script the
  * publish runs (`scripts/build-lib.mjs`, into a temp directory — never `dist/`,
  * which the test server is serving).
  *
@@ -28,6 +27,14 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 let libDir = '';
 let page$html = '';
 
+async function routeLibrary(page: Page): Promise<void> {
+  const cdn = 'https://cdn.jsdelivr.net/npm/@rig-c/play@1/dist/';
+  for (const file of ['index.js', '_play-runtime.js']) {
+    await page.route(cdn + file, (route) =>
+      route.fulfill({ contentType: 'text/javascript', path: resolve(libDir, file) }));
+  }
+}
+
 test.beforeAll(() => {
   const readme = readFileSync(resolve(repoRoot, 'README.md'), 'utf8');
   const section = readme.slice(readme.indexOf('### A minimal page'));
@@ -44,10 +51,8 @@ test.afterAll(() => {
 });
 
 test('the README minimal page loads, fits, rasters at screen size and plays', async ({ page }) => {
-  const cdn = /^https:\/\/cdn\.jsdelivr\.net\/npm\/@rig-c\/play@1\/dist\/index\.js$/;
   expect(page$html).toMatch(/cdn\.jsdelivr\.net\/npm\/@rig-c\/play@1\/dist\/index\.js/);
-  await page.route(cdn, (route) =>
-    route.fulfill({ contentType: 'text/javascript', body: readFileSync(resolve(libDir, 'index.js'), 'utf8') }));
+  await routeLibrary(page);
   await page.route('**/readme-minimal.html', (route) => route.fulfill({ contentType: 'text/html', body: page$html }));
   await page.goto('/readme-minimal.html');
 
@@ -109,9 +114,7 @@ test('the reference wind slider pushes the chain, and dragging moves the rig', a
     .replace('rigs/look/skeleton.model.json', 'rigs/cloth/skeleton.model.json')
     .replace('</script>', `${snippet}\n</script>`);
   expect(html).toContain('rigs/cloth/skeleton.model.json');
-  const cdn = /^https:\/\/cdn\.jsdelivr\.net\/npm\/@rig-c\/play@1\/dist\/index\.js$/;
-  await page.route(cdn, (route) =>
-    route.fulfill({ contentType: 'text/javascript', body: readFileSync(resolve(libDir, 'index.js'), 'utf8') }));
+  await routeLibrary(page);
   await page.route('**/readme-wind.html', (route) => route.fulfill({ contentType: 'text/html', body: html }));
   await page.goto('/readme-wind.html');
   await expect(page.locator('#stage input[type=range]')).toBeAttached();

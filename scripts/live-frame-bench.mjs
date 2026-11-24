@@ -10,11 +10,20 @@ const skeletons = process.argv.includes('--raptor-only') ? ['raptor'] : ['spineb
 const host = resolve('node_modules/.cache/adapters-host');
 const out = resolve('test-results/runtime-bench');
 mkdirSync(out, { recursive: true });
-const productBundle = readFileSync('dist/index.js', 'utf8');
-const productBundleSha256 = createHash('sha256').update(productBundle).digest('hex');
-// The default-product comparison serves the canonical package bytes unchanged.
-writeFileSync(resolve(host, 'public/play-candidate.js'), productBundle);
-const bundleSha256 = productBundleSha256;
+// These are the root entry and its complete JS graph, as pinned by package.spec.ts.
+const bundleFiles = ['index.js', '_play-runtime.js'];
+const candidateDir = resolve(host, 'public/play-candidate');
+mkdirSync(candidateDir, { recursive: true });
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const productHashes = bundleFiles.map(file => {
+  const bytes = readFileSync(resolve('dist', file));
+  writeFileSync(resolve(candidateDir, file), bytes);
+  return [file, sha256(bytes)];
+});
+const productBundleSha256 = sha256(JSON.stringify(productHashes));
+const servedHashes = bundleFiles.map(file => [file, sha256(readFileSync(resolve(candidateDir, file)))]);
+const bundleSha256 = sha256(JSON.stringify(servedHashes));
+if (bundleSha256 !== productBundleSha256) throw Error('BENCH_PRODUCT_COPY: staged package bytes differ');
 const server = spawn('bunx', ['--no-install', 'vite', '--host', '127.0.0.1', '--port', '4351', '--strictPort'], { cwd: host, env: { ...process.env, RIG_BENCH: '1' }, stdio: 'inherit' });
 const url = 'http://127.0.0.1:4351/bench/index.html';
 // Pool exclusion does not prove that Windows or queue-external GPU work is idle.
@@ -55,7 +64,7 @@ try {
   await page.goto(url);
   await page.waitForFunction(() => Boolean(window.__rigBench));
   await page.evaluate(async () => {
-    const play = await import('/play-candidate.js');
+    const play = await import('/play-candidate/index.js');
     const adapter = await import('/packages/pixi/src/index.ts');
     globalThis.__NewPlay = play;
     globalThis.__PlayCandidateMode = 'oracle';
@@ -127,7 +136,7 @@ try {
       }
     }
   }
-  const report = { protocol: 'play-runtime-default-same-frame-v1', adapterHost: '0880a6404e62ec03fba158124eb7b5abdc5f013e', bundleSha256, productBundleSha256, eventPolicy: 'default delivery, no ignore or model injection', machineObservation, coverage, probeOnly, timingStatus: rows.length ? 'measured covered inputs' : 'not measurable', boundary: 'same play code and legacy Pixi adapter; oracle vs runtime, both using posedFrame snapshots; not the adapters#56 direct-buffer path', rows };
+  const report = { protocol: 'play-runtime-default-same-frame-v1', adapterHost: '0880a6404e62ec03fba158124eb7b5abdc5f013e', bundleSha256, productBundleSha256, bundleFiles: Object.fromEntries(productHashes), eventPolicy: 'default delivery, no ignore or model injection', machineObservation, coverage, probeOnly, timingStatus: rows.length ? 'measured covered inputs' : 'not measurable', boundary: 'same play code and legacy Pixi adapter; oracle vs runtime, both using posedFrame snapshots; not the adapters#56 direct-buffer path', rows };
   writeFileSync(resolve(out, 'report.json'), JSON.stringify(report, null, 2));
   console.log('RUNTIME_BENCH_REPORT', JSON.stringify(report));
   if (!probeOnly && rows.length === 0) throw Error('BENCH_NOT_MEASURABLE: no input selected the runtime');

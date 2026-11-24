@@ -2,13 +2,10 @@
 //
 // Two steps, because the package has to be self-contained and typed:
 //
-// 1. **The module** — vite in library mode bundles `src/index.ts` into one
-//    `index.js` (+ map). `rig-c` is deliberately NOT external: its `./core`
-//    entry points at TypeScript sources, which no consumer's node or bundler
-//    is promised to read, and the package must import with nothing but itself
-//    installed. So the core's closure (pure modules, no `node:` import — rig-c
-//    holds that by name) is compiled into the bundle. Nothing else is
-//    imported at all.
+// 1. **The modules** — Vite builds both entry points together. The private
+//    runtime chunk keeps the same renderer constructors and module state for
+//    both imports. It includes the rig-c core and runtime, whose TypeScript
+//    entries are only available in the development install.
 // 2. **The types** — `tsc -p tsconfig.build.json --emitDeclarationOnly`, one
 //    `.d.ts` (+ map) per source module. `stripInternal` drops every
 //    declaration marked `@internal` — the adapter's and the loader's helpers,
@@ -29,6 +26,7 @@ if (!outArg) {
   process.exit(2);
 }
 const outDir = resolve(process.cwd(), outArg);
+const index = resolve(root, 'src/index.ts');
 
 await build({
   root,
@@ -43,12 +41,20 @@ await build({
     minify: false,
     target: 'es2022',
     lib: {
-      entry: resolve(root, 'src/index.ts'),
+      entry: {
+        index,
+        'composed-take': resolve(root, 'src/composed-take.ts'),
+      },
       formats: ['es'],
-      fileName: () => 'index.js',
+      fileName: (_format, name) => `${name}.js`,
     },
     rollupOptions: {
-      output: { exports: 'named' },
+      preserveEntrySignatures: 'strict',
+      output: {
+        exports: 'named',
+        chunkFileNames: '[name].js',
+        manualChunks: { '_play-runtime': [index] },
+      },
     },
   },
 });
