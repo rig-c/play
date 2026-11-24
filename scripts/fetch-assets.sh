@@ -176,6 +176,8 @@ else
   printf '%s' "$ORACLE_PMA_STAMP" > "$ORACLE_PMA_OUT/.source"
 fi
 test_rig batch-context batch-context
+# Nine animated mesh slots reuse the two public batch-context PNGs.
+PARTS_FROM="$TEST_RIGS_SRC/batch-context/parts" test_rig step1-control step1-control
 test_rig glow glow
 test_rig glow glow-packed --pack
 rm -rf "$RIGS_DEST/glow-packed/parts"

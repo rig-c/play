@@ -1,0 +1,161 @@
+{
+  "spec": "rigc-rig/1",
+  "name": "step1-control",
+  "images": "parts",
+  "skeleton": {
+    "x": 0,
+    "y": 0,
+    "width": 440,
+    "height": 360
+  },
+  "bones": [
+    {
+      "name": "root"
+    }
+  ],
+  "slots": [
+    {
+      "name": "mesh_1",
+      "bone": "root",
+      "attachment": "pad"
+    },
+    {
+      "name": "mesh_2",
+      "bone": "root",
+      "attachment": "core"
+    },
+    {
+      "name": "mesh_3",
+      "bone": "root",
+      "attachment": "pad"
+    },
+    {
+      "name": "mesh_4",
+      "bone": "root",
+      "attachment": "core"
+    },
+    {
+      "name": "mesh_5",
+      "bone": "root",
+      "attachment": "pad"
+    },
+    {
+      "name": "mesh_6",
+      "bone": "root",
+      "attachment": "core"
+    },
+    {
+      "name": "mesh_7",
+      "bone": "root",
+      "attachment": "pad"
+    },
+    {
+      "name": "mesh_8",
+      "bone": "root",
+      "attachment": "core"
+    },
+    {
+      "name": "mesh_9",
+      "bone": "root",
+      "attachment": "pad"
+    }
+  ],
+  "skins": {
+    "default": {
+      "mesh_1": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 288.25, 384.25, 288.25, 384.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_2": {
+        "core": {
+          "type": "mesh",
+          "image": "core.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 292.25, 388.25, 292.25, 388.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_3": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 296.25, 392.25, 296.25, 392.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_4": {
+        "core": {
+          "type": "mesh",
+          "image": "core.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 300.25, 396.25, 300.25, 396.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_5": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 304.25, 400.25, 304.25, 400.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_6": {
+        "core": {
+          "type": "mesh",
+          "image": "core.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 308.25, 404.25, 308.25, 404.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_7": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 312.25, 408.25, 312.25, 408.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_8": {
+        "core": {
+          "type": "mesh",
+          "image": "core.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 316.25, 412.25, 316.25, 412.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      },
+      "mesh_9": {
+        "pad": {
+          "type": "mesh",
+          "image": "pad.png",
+          "hull": 4,
+          "uvs": [0, 1, 0, 0, 1, 0, 1, 1],
+          "vertices": [16.25, 16.25, 16.25, 320.25, 416.25, 320.25, 416.25, 16.25],
+          "triangles": [0, 1, 2, 0, 2, 3]
+        }
+      }
+    }
+  },
+  "invariants": {
+    "meshSlots": 9,
+    "meshTriangles": 18
+  }
+}

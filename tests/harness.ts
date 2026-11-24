@@ -3,6 +3,7 @@ import { atlasNativeRoundtrip } from './atlasNativeRoundtrip';
 import { runtimeEventsProbe, runtimeSeekEventsProbe, runtimeSkinProbe } from './runtimeStage1Probe';
 import { liveFrameProbe, liveFrameTransitions, liveFrameNullIdentity, runtimeMetadataProbe, runtimePhysicsPolicyProbe, runtimeClipRendererProbe } from './liveFrameProbe';
 import { batchContextInputProbe, batchContextProbe } from './batch-context';
+import { step1ControlProbe } from './step1-control-probe';
 import { liveCoreProbe } from './liveCoreProbe';
 import { capIdentityProbe, zoomBufferProbe } from './zoomBufferProbe';
 import { setEaseB5Probe, setEaseProbe, type B5Hashes, type SetEaseProbeResult } from './setEaseProbe';
@@ -237,6 +238,7 @@ export interface RigPlayHarness {
   liveFrameNullIdentity: typeof liveFrameNullIdentity;
   batchContextInputProbe: typeof batchContextInputProbe;
   batchContextProbe: typeof batchContextProbe;
+  step1ControlProbe: typeof step1ControlProbe;
   liveCoreProbe: typeof liveCoreProbe;
   zoomBufferProbe: typeof zoomBufferProbe;
   capIdentityProbe: typeof capIdentityProbe;
@@ -10327,6 +10329,7 @@ window.rigPlayHarness = {
   liveFrameNullIdentity,
   batchContextInputProbe,
   batchContextProbe,
+  step1ControlProbe,
   liveCoreProbe,
   zoomBufferProbe,
   capIdentityProbe,
