@@ -9,7 +9,7 @@ bun run test   # builds + serves the demo, then runs chromium + webkit
 ```
 
 Playwright drives rigc-built gallery and procedural test rigs through the
-production `RigPlayer`; its pose comes from `rig-c/core`. CI runs the same
+production `RigPlayer`; its pose comes from `@rig-c/core/core`. CI runs the same
 suite on Ubuntu with Chromium and WebKit. Internal parity captures the same
 deterministic pose in two modes/backends within one engine. An independent
 development oracle also reads the paired Spine export through the official
@@ -90,7 +90,7 @@ The reference uses `antialias:false`, `preserveDrawingBuffer:true` and the
 official `pmaAdditiveBatching:false` option to retain additive coverage in
 transparent captures. Initialization finishes model/region extraction before
 official page uploads, avoiding a measured concurrent WebKit initialization
-artifact. Use the required nova-run guard and a unique `TEST_PORT` for a
+artifact. Use the remote job pool and a unique `TEST_PORT` for a
 focused `bun run test tests/oracle.spec.ts --workers=1`; full-suite acceptance
 remains CI. Headless results are raster evidence, never device performance.
 

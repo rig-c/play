@@ -64,7 +64,7 @@ This is not a drop-in upgrade. 0.8 drew a Spine export (`.json` or `.skel`, plus
 `.atlas`) that `@esotericsoftware/spine-core` parsed and posed: the caller built the
 `Skeleton` and the `AnimationState`, advanced them each frame, and handed the skeleton to
 `renderer.render(skeleton)`. 1.0 loads one file, the `skeleton.model.json` that
-`rigc build` writes, poses it through `rig-c/core` (bundled into the package, with no peer
+`rigc build` writes, poses it through `@rig-c/core/core` (bundled into the package, with no peer
 dependency), and `RigPlayer` owns the track, so the caller's frame is `player.frame(dt)`.
 A Spine export is refused by name before anything is fetched: the data has to be a rigc
 build, and this package declares no loader for anything else.
