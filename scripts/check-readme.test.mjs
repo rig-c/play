@@ -18,11 +18,18 @@ for (const [name, plant, diagnostic] of [
   ['read on 20', `${readme}\nStats read on 2026-10-30.\n`, /^dated measurement:/u],
   ['wrapped dated measurement', `${readme}\nMeasured\non 2026-10-30.\n`, /^dated measurement:/u],
   ['date inside table cell', `${readme}\n| date | result |\n| --- | --- |\n| 2026-10-30 | 60 fps |\n`, /^dated table cell:/u],
+  ['absolute link to a file of this repository', `${readme}\n[reference](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#mount)\n`, /^absolute same-repository link:/u],
+  ['absolute image of this repository', `${readme}\n<img src="https://raw.githubusercontent.com/rig-c/play/main/assets/banner.svg" />\n`, /^absolute same-repository link:/u],
 ]) {
   test(`planted failure refused: ${name}`, () => {
     assert.ok(checkReadme(plant).errors.some(error => diagnostic.test(error)), `missing ${diagnostic}`);
   });
 }
+
+test('links to other repositories, issues and other hosts are not refused', () => {
+  const kept = '[core](https://github.com/rig-c/core/blob/main/README.md) [issue](https://github.com/rig-c/play/issues/1) [site](https://rig-c.github.io/)';
+  assert.deepEqual(checkReadme(kept).errors, []);
+});
 
 test('word cap accepts its boundary and refuses the next word', () => {
   assert.deepEqual(checkReadme('word '.repeat(WORD_CAP)).errors, []);
@@ -40,7 +47,7 @@ test('Measured anchor and at most six summary rows survive', () => {
   assert.ok(section, 'README #measured anchor missing');
   const rows = section.split('\n').filter(line => line.startsWith('|'));
   assert.ok(rows.length <= 8, `summary has ${rows.length - 2} data rows`);
-  assert.match(section, /https:\/\/github\.com\/rig-c\/play\/blob\/main\/docs\/BENCHMARK\.md#measured/u);
+  assert.match(section, /\]\(docs\/BENCHMARK\.md#measured\)/u);
 });
 
 test('How it works stays one paragraph and License points to shipped NOTICE', () => {

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/rig-c/play/main/assets/banner.svg" alt="@rig-c/play — Plays rig-c's compiled model as plain DOM elements or one canvas" width="100%" />
+  <img src="assets/banner.svg" alt="@rig-c/play — Plays rig-c's compiled model as plain DOM elements or one canvas" width="100%" />
 </p>
 
 <p align="center">
@@ -41,7 +41,7 @@ links to either earlier name keep working.
 
 ### Measured
 
-The [standing comparison and its conditions](https://github.com/rig-c/play/blob/main/docs/BENCHMARK.md#measured) record these tradeoffs:
+The [standing comparison and its conditions](docs/BENCHMARK.md#measured) record these tradeoffs:
 
 | scene | observation in that comparison |
 | --- | --- |
@@ -130,23 +130,40 @@ package built from this tree.
 
 ## Where to read next
 
-- [docs/REFERENCE.md](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md) — what the player does once it is on
+- [docs/REFERENCE.md](docs/REFERENCE.md) — what the player does once it is on
   the page: what ships and what is measured (*Status*), then every API section
   from wind, gravity and dragging to the runtime knobs and what they cost.
   `physicsMoved(scope, motion)` supplies apparent world movement to named bone,
   subtree or constraint physics; `moved()` continues to report whole-rig motion.
   See the reference for explicit pivots, units and evaluation/history limits.
-- [docs/MIGRATION.md](https://github.com/rig-c/play/blob/main/docs/MIGRATION.md) — adding live-frame consumers, coming
+  In the reference, by task:
+  - Blow wind on the rig's physics, change gravity, or tell it the page dragged
+    it: `environment()` and `moved()`, in
+    [Wind, gravity and dragging the rig](docs/REFERENCE.md#wind-gravity-and-dragging-the-rig).
+  - Jump to a time, with the wind and gravity that led up to it:
+    `seek(time, environmentAt)`, in the same section.
+  - Switch an outfit, an expression or a mouth shape by name: `setSet(name)`, in
+    [Attachment sets](docs/REFERENCE.md#attachment-sets-setsjson).
+  - Layer one animation over another, with a weight or additively: tracks, in
+    [Several tracks](docs/REFERENCE.md#several-tracks).
+  - Drive a bone yourself while an animation plays:
+    [Adjusting bones](docs/REFERENCE.md#adjusting-bones).
+  - Find out why a renderer is not drawing through WebGL:
+    `backendFallbackReason`, in
+    [Runtime knobs and what they cost](docs/REFERENCE.md#runtime-knobs-and-what-they-cost).
+  - Let the pointer move the camera over a composed take: `camera: 'parallax'`, in
+    [Pointer camera for a composed take](docs/REFERENCE.md#pointer-camera-for-a-composed-take).
+- [docs/MIGRATION.md](docs/MIGRATION.md) — adding live-frame consumers, coming
   from 1.8 (meshes draw through WebGL by default since 1.9) and from `spine-html`
   0.8 (the 0.8 → 1.0 table, what has no counterpart, before and after).
-- [docs/TESTING.md](https://github.com/rig-c/play/blob/main/docs/TESTING.md) — how the suite holds the picture: the two
+- [docs/TESTING.md](docs/TESTING.md) — how the suite holds the picture: the two
   render modes' parity, the clipping oracle, the loading harness, and the
   independent official raster oracle.
-- [docs/BENCHMARK.md](https://github.com/rig-c/play/blob/main/docs/BENCHMARK.md) — the readings behind *Measured*, and
+- [docs/BENCHMARK.md](docs/BENCHMARK.md) — the readings behind *Measured*, and
   the bench that produces them: scenes, framing, and what a headless number is
   not evidence of.
-- [CHANGELOG.md](https://github.com/rig-c/play/blob/main/CHANGELOG.md) — what each version changed;
-  [RELEASING.md](https://github.com/rig-c/play/blob/main/RELEASING.md) — how a version is cut.
+- [CHANGELOG.md](CHANGELOG.md) — what each version changed;
+  [RELEASING.md](RELEASING.md) — how a version is cut.
 - [`skills/rig-play/SKILL.md`](skills/rig-play/SKILL.md) — the agent skill that routes a web-page playback or live-frame request to the guides above.
 
 ## Demo (this repository)
@@ -187,7 +204,7 @@ stays CPU-side and renderer-agnostic, advancing one `dt` at a time.
 Both renderers accept a borrowed `LiveFrame` or a detached `PosedFrame`.
 `player.posedFrame()` returns a snapshot that survives later pose mutations;
 a live frame is valid only until the next pose mutation. See
-[Borrowing a live frame](https://github.com/rig-c/play/blob/main/docs/REFERENCE.md#borrowing-a-live-frame) for the
+[Borrowing a live frame](docs/REFERENCE.md#borrowing-a-live-frame) for the
 buffer layout, lifetime and fallback policy.
 At load time each region of the document's `pages` section is cut into its own
 bitmap (rotation restored), one blob URL per region — except regions that

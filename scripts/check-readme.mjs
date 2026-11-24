@@ -10,6 +10,9 @@ export const HEADINGS = new Set([
   'How it works', 'License',
 ]);
 
+const SAME_REPOSITORY_FILE_URL =
+  /https:\/\/(?:github\.com\/rig-c\/play\/(?:blob|tree|raw)\/|raw\.githubusercontent\.com\/rig-c\/play\/)[^\s)"'>]*/gu;
+
 export function wordCount(markdown) {
   return (markdown.match(/\S+/gu) ?? []).length;
 }
@@ -38,6 +41,12 @@ export function checkReadme(markdown) {
     if (line.includes('|') && /\b\d{4}-\d{2}-\d{2}\b/u.test(line)) {
       errors.push(`dated table cell: line ${index + 1}`);
     }
+  }
+  // A link or image to a file of this repository is a relative path: the package
+  // page renders it against the repository field, so the absolute form only adds
+  // a string to keep right. Other repositories, issues and other hosts are not this.
+  for (const match of prose.join('\n').matchAll(SAME_REPOSITORY_FILE_URL)) {
+    errors.push(`absolute same-repository link: "${match[0]}" (write the path relative to the repository root)`);
   }
   for (const match of prose.join('\n').matchAll(/\b(?:measured|read)\s+on\s+20/giu)) {
     errors.push(`dated measurement: "${match[0].replace(/\s+/gu, ' ')}"`);
