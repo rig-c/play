@@ -249,7 +249,7 @@ const COMPOSITE_PLANES = {
 const COMPOSITE_SLOTS = [...SLOTS.background, TABLES_SLOT];
 const NAMED_ALPHA_HOLE = /\b[1-9]\d* stage pixels have alpha below 255/;
 
-type FourPlaneVariant = 'still' | 'live-physics' | 'left-edge' | 'alpha-hole' | 'tables-edge' | 'covered-hole' | 'visible-hole';
+type FourPlaneVariant = 'still' | 'live-physics' | 'left-edge' | 'alpha-hole' | 'tables-edge' | 'covered-hole' | 'visible-hole' | 'opposite-tables-track';
 
 function fourPlaneModel(page: Page, variant?: FourPlaneVariant) {
   const composite = variant === 'covered-hole' || variant === 'visible-hole';
@@ -272,7 +272,7 @@ function fourPlaneModel(page: Page, variant?: FourPlaneVariant) {
     doc.editorOrder.skins.find(skin => skin.name === 'default')!.slots.push(TABLES_SLOT);
     const idle = doc.animations.find(animation => animation.name === 'idle')!;
     if (variant !== 'still' && !composite) {
-      for (const [name, amplitude] of [['backdrop', 24], ['tables', 28]] as const) {
+      for (const [name, amplitude] of [['backdrop', 24], ['tables', variant === 'opposite-tables-track' ? -28 : 28]] as const) {
         idle.bones.push({ name, timelines: [{
           name: 'translate', keys: [0, amplitude, 0, -amplitude, 0].map((x, time) => ({ time, x, y: 0 })),
         }] });
@@ -860,6 +860,15 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
           }
         }
       }
+    });
+
+    test(check(9, 'refuses to infer gain for an opposite tables X track'), async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'opposite-tables-track');
+      const refusal = await mountNamed(page, backend, modelUrl).then(() => '', error => String(error));
+      expect(refusal).toContain('COMPOSED_PLATE_TRACK:');
+      expect(refusal).toContain('plane "tables" needs an explicit gain');
+      expect(refusal).toContain('backdrop plane "backdrop"');
+      await expect(page.locator('#stage canvas')).toHaveCount(0);
     });
 
     test(check(9, 'accepts a covered base hole behind the figure'), async ({ page }) => {

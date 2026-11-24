@@ -74,7 +74,12 @@ const BACKDROP_GAIN = -0.55;
 
 type Range = { minX: number; maxX: number; minY: number; maxY: number };
 const ZERO_RANGE: Range = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-type BakedTrack = { range: Range; amplitudeX: number; horizontalRoot: string | undefined };
+type BakedTrack = {
+  range: Range;
+  amplitudeX: number;
+  horizontalRoot: string | undefined;
+  keys: readonly { time: number; values: readonly number[] }[];
+};
 type Plate = { id: string; role: 'backdrop' | 'overlay'; setup: PosedRegion; baked?: BakedTrack };
 type NamedPlanes = { plates: Plate[]; backdrop: string; figureSlots: ReadonlySet<string>; gains: ReadonlyMap<string, number> };
 
@@ -264,7 +269,7 @@ function namedPlanes(assets: ModelAssets, options: ComposedTakeOptions): NamedPl
       range.maxY = Math.max(range.maxY, dy);
     }
     if (!Object.values(range).every(Number.isFinite)) throw trackError(id, 'has a non-finite world translation envelope');
-    plate.baked = { range, amplitudeX, horizontalRoot: horizontal ? parent.name : undefined };
+    plate.baked = { range, amplitudeX, horizontalRoot: horizontal ? parent.name : undefined, keys };
   }
 
   const backdrop = plates.find(plate => plate.role === 'backdrop')!;
@@ -275,10 +280,16 @@ function namedPlanes(assets: ModelAssets, options: ComposedTakeOptions): NamedPl
   }
   for (const { id, baked } of plates) {
     if (gains.has(id)) continue;
-    const gain = baked && reference && reference.horizontalRoot !== undefined && baked.horizontalRoot === reference.horizontalRoot
+    // Compare X signs only at identical key times across the validated linear loops.
+    const comparable = baked && reference && reference.horizontalRoot !== undefined && baked.horizontalRoot === reference.horizontalRoot
       && reference.amplitudeX > 0 && baked.amplitudeX > 0
-      ? backdropGain * (baked.amplitudeX / reference.amplitudeX) : NaN;
-    if (!Number.isFinite(gain)) throw trackError(id, `needs an explicit gain or a comparable nonzero baked X track against ${JSON.stringify(backdrop.id)}`);
+      && baked.keys.length === reference.keys.length
+      && baked.keys.every((key, i) => key.time === reference.keys[i].time
+        && Math.sign(key.values[0]) === Math.sign(reference.keys[i].values[0]));
+    const gain = comparable ? backdropGain * (baked.amplitudeX / reference.amplitudeX) : NaN;
+    if (!Number.isFinite(gain)) {
+      throw trackError(id, `needs an explicit gain for motion relative to backdrop plane ${JSON.stringify(backdrop.id)}`);
+    }
     gains.set(id, gain);
   }
   return { plates, backdrop: backdrop.id, figureSlots, gains };
