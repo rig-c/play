@@ -69,10 +69,14 @@ async function open(page: Page, shortDialTravel = false): Promise<void> {
   await page.waitForFunction(() => Boolean((window as ComposedHarnessWindow).composedTest), undefined, { polling: 20 });
 }
 
-function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = {}) {
-  return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), {
+function mountOptions(backend: Backend, overrides: Partial<MountOptions> = {}): MountOptions {
+  return {
     modelUrl: model('overscan'), animation: 'idle', loop: true, slots: SLOTS, backend, ...overrides,
-  } as MountOptions);
+  } as MountOptions;
+}
+
+function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = {}) {
+  return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), mountOptions(backend, overrides));
 }
 
 function mountNamed(page: Page, backend: Backend, modelUrl: string, overrides: Partial<NamedMountOptions> = {}) {
@@ -391,6 +395,43 @@ async function expectCropRaster(
     expect(view.maxChannelDelta, view.assertion).toBeLessThanOrEqual(limit);
   }
 }
+
+test(check(1, 'canvas2d draws the first Pan frame in a fresh browser'), async ({ playwright, browserName, baseURL, viewport, deviceScaleFactor }) => {
+  // The worker's browser fixture may have already rendered another test.
+  const browser = await playwright[browserName].launch({ timeout: 15_000 });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const page = await browser.newPage({ baseURL, viewport, deviceScaleFactor });
+    await open(page);
+
+    const first = await Promise.race([
+      page.evaluate(async options => {
+        const { composedTest } = window as ComposedHarnessWindow;
+        await composedTest.mount(options);
+        // Read the mounted canvas before driving the harness clock.
+        return { mode: composedTest.state().mode, rgba: composedTest.renderedPixels() };
+      }, mountOptions('canvas2d', { camera: 'pan' })),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('COMPOSED_COLD_MOUNT_TIMEOUT: Pan mount and first frame readback exceeded 15000 ms')), 15_000);
+      }),
+    ]);
+
+    const rgba = Buffer.from(first.rgba, 'base64');
+    let opaque = 0;
+    let colorVariation = false;
+    for (let i = 0; i < rgba.length; i += 4) {
+      opaque += Number(rgba[i + 3] === 255);
+      colorVariation ||= rgba[i] !== rgba[0] || rgba[i + 1] !== rgba[1] || rgba[i + 2] !== rgba[2];
+    }
+    expect(first.mode).toBe('pan');
+    expect(rgba).toHaveLength(STAGE.width * STAGE.height * 4);
+    expect(opaque, 'opaque first-frame pixels').toBe(STAGE.width * STAGE.height);
+    expect(colorVariation, 'first frame has more than one color').toBe(true);
+  } finally {
+    clearTimeout(timer);
+    await browser.close();
+  }
+});
 
 for (const backend of ['canvas2d', 'webgl'] as const) {
   test.describe(backend, () => {
