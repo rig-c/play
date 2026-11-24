@@ -23,6 +23,7 @@ range calculation and use with `BoneAdjust`.
 | `ComposedTakeOptions` | Supported option names are `modelUrl`, `animation`, `loop`, `planes`, `camera`, `maxDisplacement`, `backend`, `autoStart`, `autoSweep`, `transitionMs` and `pointerTurn`. |
 | `MountedTake` | The mounted canvas and player, camera and turn readouts, refusal state, and camera, frame and disposal methods. |
 
+`dist/composed-camera.d.ts` ships as a type dependency of `@rig-c/play/composed-take`. It has no export-map key and is outside the public import surface.
 The supported refusal codes are listed in the [composed take reference](REFERENCE.md#composed-take-refusals).
 Until the demo page uses this entry, a minor release may retune the handoff
 duration (`transitionMs`), automatic sweep (`autoSweep`) or pointer hover excursion
