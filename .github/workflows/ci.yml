@@ -68,12 +68,23 @@ jobs:
           path: ~/.cache/ms-playwright
           # No partial restore: match the installed CLI, architecture and image.
           key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}-chromium-webkit
+      - name: Cache Playwright system dependency archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/playwright-apt-archives/*.deb
+          # APT checks the size of cached archives, so scope reuse to this image and CLI.
+          key: playwright-apt-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       - name: Install Playwright system dependencies
         timeout-minutes: 10
         run: |
-          # apt logs the requested and newly-installed packages; browser cache
-          # hits do not cache system packages. Do not gate apt on --dry-run:
-          # that diagnostic can exit nonzero when packages are missing.
+          archive_dir="$RUNNER_TEMP/playwright-apt-archives"
+          install -d -m 0755 "$archive_dir"
+          # Playwright invokes apt-get through sudo. Use a temporary config
+          # fragment so the same CLI refreshes the index and installs on every run.
+          apt_config=/etc/apt/apt.conf.d/zz-rig-play-archives
+          trap 'sudo rm -f "$apt_config"' EXIT
+          printf 'Dir::Cache::archives "%s";\nAPT::Keep-Downloaded-Packages "true";\n' "$archive_dir" |
+            sudo tee "$apt_config" >/dev/null
           /usr/bin/time -p bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         timeout-minutes: 10
