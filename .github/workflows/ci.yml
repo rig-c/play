@@ -68,23 +68,30 @@ jobs:
           path: ~/.cache/ms-playwright
           # No partial restore: match the installed CLI, architecture and image.
           key: playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}-chromium-webkit
-      - name: Cache Playwright system dependency archives
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/playwright-apt-archives/*.deb
-          # APT checks the size of cached archives, so scope reuse to this image and CLI.
-          key: playwright-apt-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.image }}-${{ steps.playwright.outputs.version }}-chromium-webkit
       - name: Install Playwright system dependencies
         timeout-minutes: 10
         run: |
-          archive_dir="$RUNNER_TEMP/playwright-apt-archives"
-          install -d -m 0755 "$archive_dir"
-          # Playwright invokes apt-get through sudo. Use a temporary config
-          # fragment so the same CLI refreshes the index and installs on every run.
-          apt_config=/etc/apt/apt.conf.d/zz-rig-play-archives
-          trap 'sudo rm -f "$apt_config"' EXIT
-          printf 'Dir::Cache::archives "%s";\nAPT::Keep-Downloaded-Packages "true";\n' "$archive_dir" |
-            sudo tee "$apt_config" >/dev/null
+          # ubuntu-24.04 uses deb822, with the runner mirror list or direct Ubuntu URIs.
+          sources=/etc/apt/sources.list.d/ubuntu.sources
+          mirror_list=/etc/apt/apt-mirrors.txt
+          ubuntu_uri='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://(azure\.archive|archive|security|us-east-2\.ec2\.archive)\.ubuntu\.com/ubuntu)/?'
+          uri_line="^(URIs:[[:blank:]]+)${ubuntu_uri}([[:blank:]]*)$"
+          if ! uris=$(grep -E '^URIs:' "$sources"); then
+            echo "::error::No Ubuntu APT URI fields in $sources"
+            exit 1
+          fi
+          printf 'Ubuntu APT URI fields before pinning (%s)\n%s\n' "$sources" "$uris"
+          if grep -qvE "$uri_line" <<< "$uris"; then
+            echo "::error::Unexpected Ubuntu APT URI in $sources"
+            exit 1
+          fi
+          if [[ $uris == *"mirror+file:$mirror_list"* ]]; then
+            printf 'Runner APT mirror list (%s)\n' "$mirror_list"
+            cat "$mirror_list"
+          fi
+          sudo sed -i -E "s#${uri_line}#\1http://azure.archive.ubuntu.com/ubuntu\4#" "$sources"
+          printf 'Ubuntu APT URI fields after pinning (%s)\n' "$sources"
+          grep -E '^URIs:' "$sources"
           /usr/bin/time -p bunx playwright install-deps chromium webkit
       - name: Install Playwright browsers
         timeout-minutes: 10
