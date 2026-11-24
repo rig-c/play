@@ -1,0 +1,41 @@
+{
+  "spec": "rigc-motion/1",
+  "archetype": "step1-control",
+  "cut": "test-step1-control",
+  "easings": {},
+  "animations": {
+    "pulse": {
+      "duration": 1,
+      "loop": true,
+      "note": "Four fixed scales dirty all nine mesh canvases and give the two mounts different used vertex payloads.",
+      "tracks": [
+        {
+          "bone": "root",
+          "property": "scale",
+          "keys": [
+            {
+              "t": 0,
+              "v": [1, 1]
+            },
+            {
+              "t": 0.25,
+              "v": [0.9375, 0.9375]
+            },
+            {
+              "t": 0.5,
+              "v": [0.96875, 0.96875]
+            },
+            {
+              "t": 0.75,
+              "v": [0.90625, 0.90625]
+            },
+            {
+              "t": 1,
+              "v": [1, 1]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

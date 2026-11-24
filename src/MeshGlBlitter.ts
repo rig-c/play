@@ -221,6 +221,10 @@ void main() {
 const GUTTER = 1;
 /** Drawing-buffer growth quantum (device px). */
 const GROW_STEP = 256;
+/** Largest whole-float capacity representable by WebGL1's signed BUFFER_SIZE. */
+const MAX_VERTEX_BUFFER_BYTES = 0x7fff_fffc;
+/** Bound the spare VBO storage retained by this module-level blitter. */
+const MAX_VERTEX_BUFFER_SLACK_BYTES = 256 * 1024;
 
 /**
  * One rect of the offscreen buffer in one pass: a whole job, or one tile of
@@ -369,6 +373,8 @@ class MeshGlBlitter {
    */
   stats: FlushStats = { jobs: 0, passes: 0, pieces: 0, tiledJobs: 0 };
   private vertexData = new Float32Array(8192);
+  /** @internal Capacity in bytes of the shared ARRAY_BUFFER. */
+  private vertexCapacityBytes = 0;
   /** Per-job packed rect origins (a tiled job's first tile), filled by flush(). */
   private packX: number[] = [];
   private packY: number[] = [];
@@ -419,7 +425,9 @@ class MeshGlBlitter {
 
     // One dynamic buffer for both programs; each flush binds its own layout
     // (bindMesh / bindFrame), so neither sees the other's attribute state.
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    const buffer = gl.createBuffer();
+    if (!buffer) throw new Error('createBuffer failed');
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.enable(gl.BLEND);
     gl.enable(gl.SCISSOR_TEST);
     gl.clearColor(0, 0, 0, 0);
@@ -482,6 +490,7 @@ class MeshGlBlitter {
     // in, so the Float32 a vertex is rounded to is the job's alone.
     let floats = 0;
     for (const job of jobs) floats += job.triangles.length * 4;
+    if (floats * Float32Array.BYTES_PER_ELEMENT > MAX_VERTEX_BUFFER_BYTES) return this.bufferFallback();
     if (this.vertexData.length < floats) {
       this.vertexData = new Float32Array(1 << Math.ceil(Math.log2(floats)));
     }
@@ -500,7 +509,7 @@ class MeshGlBlitter {
         data[f++] = uvs[vi + 1];
       }
     }
-    if (floats > 0) gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, floats), gl.DYNAMIC_DRAW);
+    if (!this.uploadVertices(data, floats)) return this.bufferFallback();
 
     const cleared = new Uint8Array(jobs.length);
     const bufH = this.canvas.height;
@@ -560,6 +569,33 @@ class MeshGlBlitter {
       ctx.clearRect(0, 0, jobs[i].canvas.width, jobs[i].canvas.height);
     }
     return null;
+  }
+
+  /** @internal Replace only the prefix that the current draws reference. */
+  private uploadVertices(data: Float32Array, floats: number): boolean {
+    if (floats === 0) return true;
+    const bytes = floats * Float32Array.BYTES_PER_ELEMENT;
+    if (floats > data.length || bytes > MAX_VERTEX_BUFFER_BYTES) return false;
+    if (bytes > this.vertexCapacityBytes) {
+      const slack = Math.min(Math.floor(floats / 4) * Float32Array.BYTES_PER_ELEMENT, MAX_VERTEX_BUFFER_SLACK_BYTES);
+      const capacity = Math.min(bytes + slack, MAX_VERTEX_BUFFER_BYTES);
+      if (!this.allocateVertexBuffer(capacity)) {
+        // A driver may fit the payload even when it declines the extra room.
+        if (capacity === bytes || this.gl.isContextLost() || !this.allocateVertexBuffer(bytes)) return false;
+      }
+    }
+    const gl = this.gl;
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, floats));
+    return true;
+  }
+
+  /** @internal Confirm storage only on growth, before any upload or draw. */
+  private allocateVertexBuffer(bytes: number): boolean {
+    const gl = this.gl;
+    gl.bufferData(gl.ARRAY_BUFFER, bytes, gl.DYNAMIC_DRAW);
+    // A failed allocation may drop the old store. Only trust a confirmed size.
+    this.vertexCapacityBytes = gl.getBufferParameter(gl.ARRAY_BUFFER, gl.BUFFER_SIZE) === bytes ? bytes : 0;
+    return this.vertexCapacityBytes !== 0;
   }
 
   private bufferFallback(): FlushFallback {
@@ -759,7 +795,7 @@ class MeshGlBlitter {
 
     let vertices = 0;
     for (const run of job.runs) vertices = Math.max(vertices, run.first + run.count);
-    if (vertices > 0) gl.bufferData(gl.ARRAY_BUFFER, job.data.subarray(0, vertices * job.stride), gl.DYNAMIC_DRAW);
+    if (!this.uploadVertices(job.data, vertices * job.stride)) return this.bufferFallback();
 
     const ctx = job.canvas.getContext('2d');
     if (ctx) {
@@ -917,6 +953,7 @@ class MeshGlBlitter {
    */
   private markLost(): void {
     this.lost = true;
+    this.vertexCapacityBytes = 0;
     this.textures = new WeakMap();
     this.liveTextureCount = 0;
   }
