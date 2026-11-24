@@ -187,8 +187,8 @@ ${transform}`);
   code('named-never-returns-to-baked', 10, handoff, ['leave blends toward the advancing backdrop', 'leave reaches the current baked phase'], mount,
     "      if (mode === 'parallax') handoff.leave();\n", ''),
   code('named-handoff-pauses-figure', 10, handoff, 'live source clock', mount,
-    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      poser.advance(rigElapsed);',
-    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      if (!named || handoff.weight === 0) poser.advance(rigElapsed);'),
+    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      advanceCamera(cameraElapsed);\n      syncTurn(mode);\n      poser.advance(rigElapsed);',
+    '    function advance(rigElapsed: number, cameraElapsed = rigElapsed): void {\n      if (disposed || stopped) return;\n      advanceCamera(cameraElapsed);\n      syncTurn(mode);\n      if (!named || handoff.weight === 0) poser.advance(rigElapsed);'),
   code('named-touch-takes-camera', 11, sweep, 'touch stays automatic', mount,
     "event.pointerType === 'touch' || (event.type === 'pointerenter' && !boundaryEvent(event))", "(event.type === 'pointerenter' && !boundaryEvent(event))"),
 ];
