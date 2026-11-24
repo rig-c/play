@@ -565,6 +565,12 @@ shift in Y-down CSS pixels, including baked plate displacement when present.
 Pan moves all planes at equal gain. Fixed plays the authored pose with the
 camera at rest.
 
+In named Parallax takes with discovered turn dials, pointer X drives yaw and
+body, and pointer Y drives pitch. Plate hover stays horizontal. Dial targets
+clamp to the compiled endpoints. The same handoff ramp blends between those
+targets and the live bone-local values from animation keys or the setup pose.
+Takes without discovered dials keep the camera and plate behavior above.
+
 A plate with compiled travel can declare `baked: { bone: 'plate-bone' }`.
 Bind the region's direct root-child bone with a linear translate loop from
 setup center back to setup center. In Parallax, baked travel drives that plate
@@ -973,6 +979,49 @@ patch and matched history**: the same animation, environment, adjustment, reset
 and step partition. Closed-over callback state still needs `repose()` or the
 adjust setter to invalidate cached poses. Pause, zero advance and renderer mode
 changes add no evaluations; explicit `repose()` keeps the same context time.
+
+### Discovering turn dials
+
+`discoverTurnDials(model, durations?)` reads the parsed `skeleton.model.json`
+and returns `TurnDial[]` in yaw, pitch, body order. It uses the animation
+durations serialized in the model by default. Pass the matching
+`assets.animations` from `loadModel` to use the runtime durations instead.
+With a supplied list, an animation missing from that list skips its dial.
+
+Each dial carries its `axis`, exact `bone` and `slider` names, writable
+`channel` in `BoneLocals`, inclusive `min` and `max` in that channel's local
+units, and a human-readable `provenance` string naming the compiled binding.
+The recognized bones are `yaw_dial`, `pitch_dial` and `body_yaw_dial`. A
+`body_turn` animation also identifies a body slider on a custom bone. Matching
+ignores one nonempty prefix before the first colon, so a single composed actor's
+dials still use the exact namespaced names when applied.
+
+An axis needs exactly one slider binding to an existing bone. Discovery skips
+ambiguous axes, world-space or looping sliders, unsupported channels, missing
+or nonpositive durations, and mappings that cannot produce a finite,
+nonconstant range containing zero. The endpoints come from inverting the
+compiled slider mapping at animation time zero and at its duration, including
+when the slider scale is negative. If two axes drive the same bone and channel,
+the earlier discovered axis takes precedence.
+
+Use `normalizedDial(value, dial)` to map a control from `[-1, 1]` into the
+dial range. The function clamps input at the ends and interpolates from neutral
+to each endpoint independently, preserving zero for asymmetric ranges.
+
+```ts
+import { discoverTurnDials, normalizedDial, type TurnAxis } from '@rig-c/play';
+
+const dials = discoverTurnDials(compiledModel, assets.animations);
+const input: Partial<Record<TurnAxis, number>> = { yaw: 0.5, pitch: -0.25 };
+player.adjust = (bones) => {
+  for (const dial of dials) {
+    bones.bone(dial.bone)[dial.channel] = normalizedDial(input[dial.axis] ?? 0, dial);
+  }
+};
+```
+
+Both helpers work without a player or a DOM. See the [stability
+inventory](STABILITY.md#turn-dials) for the public contract.
 
 ### Live physics parameters
 

@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { expect, type Page, test, type TestInfo } from '@playwright/test';
 import { build } from 'vite';
-import type { ComposedHarnessWindow, MountOptions } from './composed-take-harness.js';
+import type { ComposedHarnessWindow, MountOptions, TranslationDial } from './composed-take-harness.js';
 
 const FIXTURES = 'tests/fixtures/composed-direction';
 const model = (name: string) => `/${FIXTURES}/${name}/skeleton.model.json`;
@@ -22,13 +22,24 @@ type Mode = NonNullable<MountOptions['camera']>;
 type Point = { x: number; y: number };
 const check = (row: number, name: string) => `C2-${row} ${name}`;
 
-let bundledHarness: Promise<{ html: string; script: string }> | undefined;
-function harness() {
-  bundledHarness ??= (async () => {
+const bundledHarnesses = new Map<boolean, Promise<{ html: string; script: string }>>();
+function harness(shortDialTravel: boolean) {
+  const cached = bundledHarnesses.get(shortDialTravel);
+  if (cached) return cached;
+  const bundle = (async () => {
     const [html, bundle] = await Promise.all([
       readFile('tests/composed-take-harness.html', 'utf8'),
       build({
         configFile: false, logLevel: 'silent',
+        plugins: shortDialTravel ? [{
+          name: 'test-dial-travel', enforce: 'pre',
+          transform(source, id) {
+            if (id !== resolve('samples/composed-take.ts')) return;
+            const setting = 'TURN_FULL_RANGE_AT_STAGE_EDGE = 1;';
+            if (!source.includes(setting)) throw new Error('Missing default dial travel setting');
+            return source.replace(setting, 'TURN_FULL_RANGE_AT_STAGE_EDGE = 0.5;');
+          },
+        }] : [],
         build: { write: false, lib: { entry: resolve('tests/composed-take-harness.ts'), formats: ['es'] } },
       }),
     ]);
@@ -38,11 +49,15 @@ function harness() {
     if (entry?.type !== 'chunk') throw new Error('Missing composed harness entry');
     return { html: html.replace('./composed-take-harness.ts', '/composed-probe.js'), script: entry.code };
   })();
-  return bundledHarness;
+  bundledHarnesses.set(shortDialTravel, bundle);
+  return bundle;
 }
 
-async function open(page: Page): Promise<void> {
-  const { html, script } = await harness();
+async function open(page: Page, shortDialTravel = false): Promise<void> {
+  const { html, script } = await harness(shortDialTravel);
+  await page.unroute('**/composed-probe.html');
+  await page.unroute('**/composed-probe.js');
+  await page.unroute(`**/${FIXTURES}/**`);
   await page.route('**/composed-probe.html', route => route.fulfill({ contentType: 'text/html', body: html }));
   await page.route('**/composed-probe.js', route => route.fulfill({ contentType: 'text/javascript', body: script }));
   await page.route(`**/${FIXTURES}/**`, async route => {
@@ -63,7 +78,7 @@ function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = 
 function mountNamed(page: Page, backend: Backend, modelUrl: string, overrides: Partial<NamedMountOptions> = {}) {
   const options: NamedMountOptions = {
     modelUrl, animation: 'idle', loop: true, planes: NAMED_PLANES, backend,
-    camera: 'parallax', maxDisplacement: { x: 64, y: 0 }, transitionMs: 120,
+    camera: 'parallax', maxDisplacement: { x: 64, y: 0 }, transitionMs: 120, pointerTurn: false,
     ...overrides,
   };
   return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), options);
@@ -162,11 +177,11 @@ interface CompiledControl {
   stage?: { x: number; y: number; width: number; height: number } | null;
   bones: { name: string; parent?: string; x: number; y: number }[];
   slots: { name: string; bone?: string; setup?: string }[];
-  animations: { name: string; bones: { name: string; timelines: object[] }[]; slots?: { name: string }[] }[];
+  animations: { name: string; duration: number; bones: { name: string; timelines: object[] }[]; slots?: { name: string }[] }[];
   constraints: { kind: string; name: string; bone: string; [parameter: string]: string | number | boolean }[];
   skins: { attachments: Record<string, Record<string, CompiledRegion | CompiledClip>> }[];
   pages: { name: string; regions: { name: string; x: number; y: number; width: number; height: number }[] }[];
-  editorOrder: { skins: { name: string; slots: string[] }[] };
+  editorOrder: { skins: { name: string; slots: string[] }[]; animations: string[] };
   rig?: { slotOrder: string[] };
 }
 
@@ -249,7 +264,39 @@ const COMPOSITE_PLANES = {
 const COMPOSITE_SLOTS = [...SLOTS.background, TABLES_SLOT];
 const NAMED_ALPHA_HOLE = /\b[1-9]\d* stage pixels have alpha below 255/;
 
-type FourPlaneVariant = 'still' | 'live-physics' | 'left-edge' | 'alpha-hole' | 'tables-edge' | 'covered-hole' | 'visible-hole' | 'opposite-tables-track';
+type FourPlaneVariant = 'still' | 'live-physics' | 'left-edge' | 'alpha-hole' | 'tables-edge' | 'covered-hole' | 'visible-hole'
+  | 'opposite-tables-track' | 'no-dials' | 'turn-dials';
+
+const TRANSLATION_DIALS = [
+  { bone: 'synthetic:yaw_dial', channel: 'x', range: 8, setup: 1.25, slot: 'actor:face', turn: 18, baked: 4 },
+  { bone: 'synthetic:pitch_dial', channel: 'y', range: 16, setup: 3.25, slot: 'actor:lantern', turn: 24 },
+  { bone: 'synthetic:body_yaw_dial', channel: 'x', range: 32, setup: -1.5, slot: 'actor:background', turn: 12, baked: -8 },
+] as const satisfies readonly (TranslationDial & { range: number; setup: number; slot: string; turn: number; baked?: number })[];
+
+function addTurnDials(doc: CompiledControl, idle: CompiledControl['animations'][number]): void {
+  const template = doc.animations.find(animation => animation.name === 'actor:body_turn')!;
+  for (const dial of TRANSLATION_DIALS) {
+    const { bone, channel, range, setup, slot, turn } = dial;
+    const target = `${bone}-target`;
+    const animation = `${bone}-turn`;
+    doc.bones.push({ name: bone, parent: 'root', x: 0, y: 0, [channel]: setup });
+    doc.bones.push({ name: target, parent: 'actor:body', x: 0, y: 0 });
+    doc.slots.find(row => row.name === slot)!.bone = target;
+    doc.constraints.push({
+      kind: 'slider', name: animation, animation, declaredIn: 'rig', bone, property: channel,
+      local: true, from: -range, scale: 1 / range, max: 2 * range,
+    });
+    doc.animations.push({ ...template, name: animation, duration: 2, bones: [{ name: target, timelines: [{
+      name: 'rotate', keys: [{ time: 0, value: -turn }, { time: 2, value: turn }],
+    }] }] });
+    doc.editorOrder.animations.push(animation);
+    if ('baked' in dial) {
+      idle.bones.push({ name: bone, timelines: [{ name: `translate${channel}`, keys: [
+        { time: 0, value: 0 }, { time: 2, value: dial.baked }, { time: 4, value: 0 },
+      ] }] });
+    }
+  }
+}
 
 function fourPlaneModel(page: Page, variant?: FourPlaneVariant) {
   const composite = variant === 'covered-hole' || variant === 'visible-hole';
@@ -286,7 +333,36 @@ function fourPlaneModel(page: Page, variant?: FourPlaneVariant) {
         kind: 'physics', name: 'actor:follow', declaredIn: 'rig', bone: 'actor:body', x: 1, wind: 30, strength: 35,
       });
     }
+    if (variant === 'no-dials' || variant === 'turn-dials') doc.constraints = [];
+    if (variant === 'turn-dials') addTurnDials(doc, idle);
   }, variant === 'alpha-hole' || composite ? { region: 'scene-plate.0', offset: 75 } : undefined);
+}
+
+type DrawnOrder = Awaited<ReturnType<typeof draw>>['order'];
+
+function float32Geometry(order: DrawnOrder) {
+  return order.map(slot => ({ ...slot, coords: slot.coords.map(Math.fround) }));
+}
+
+function figureGeometry(order: DrawnOrder) {
+  return float32Geometry(order.filter(row => (SLOTS.figure as readonly string[]).includes(row.slot)));
+}
+
+function bakedDials(time: number) {
+  return TRANSLATION_DIALS.map(dial => 'baked' in dial ? dial.setup + time / 2 * dial.baked : dial.setup);
+}
+
+async function expectDials(page: Page, frame: DrawnOrder, time: number, expected: readonly number[], label: string) {
+  const reading = await page.evaluate(({ time, dials }) => {
+    const rig = (window as ComposedHarnessWindow).composedTest;
+    return { locals: rig.dialLocals(dials), stock: rig.dialReference(time, dials) };
+  }, { time, dials: TRANSLATION_DIALS.map(({ bone, channel }, index) => ({ bone, channel, value: expected[index] })) });
+  expect(reading.locals.map(Math.fround), `${label} stored locals`).toEqual(expected.map(Math.fround));
+  expect(figureGeometry(frame), `${label} rendered figure against ordinary player`).toEqual(figureGeometry(reading.stock));
+}
+
+function turnReadouts(page: Page) {
+  return page.evaluate(() => (window as ComposedHarnessWindow).composedTest.turnReadouts());
 }
 
 type CropReading = ReturnType<ComposedHarnessWindow['composedTest']['cropReference']>;
@@ -1011,6 +1087,120 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
       expect((await draw(page)).order, 'leave reaches the current baked phase').toEqual(await source());
       await reference(8);
       expect((await draw(page)).order, 'automatic keeps following the live baked phase').toEqual(await source());
+    });
+
+    test('#282 no-dial opt-in preserves the #278 handoff and pixels', async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'no-dials');
+      const run = async (pointerTurn?: false) => {
+        await mountNamed(page, backend, modelUrl, { pointerTurn, maxDisplacement: undefined, transitionMs: 125 });
+        return page.evaluate(() => {
+          const rig = (window as ComposedHarnessWindow).composedTest;
+          const sample = (ms = 0) => ({ draw: rig.draw(ms), state: rig.state(), rgba: rig.renderedPixels() });
+          for (let i = 0; i < 8; i++) rig.tick(62.5);
+          const outside = sample();
+          rig.point(1, 1, 'pointerenter');
+          const entering = sample(62.5);
+          const centered = sample(62.5);
+          const hover = sample(62.5);
+          rig.reset('pointerleave');
+          const leaving = sample(62.5);
+          const released = sample(62.5);
+          return { outside, entering, centered, hover, leaving, released, reads: rig.turnReadouts() };
+        });
+      };
+      const stock = await run(false);
+      const actual = await run();
+      expect(actual.reads).toEqual([]);
+      for (const phase of ['outside', 'entering', 'centered', 'hover', 'leaving', 'released'] as const) {
+        expect(actual[phase].state, phase).toEqual(stock[phase].state);
+        expect(actual[phase].draw.backend, phase).toBe(backend);
+        expect(float32Geometry(actual[phase].draw.order), phase).toEqual(float32Geometry(stock[phase].draw.order));
+        expect(actual[phase].rgba === stock[phase].rgba, `${phase} exact RGBA`).toBe(true);
+      }
+      closePoint(stock.outside.state.offsets.backdrop, { x: 12, y: 0 }, '#278 baked plate');
+      closePoint(stock.entering.state.offsets.backdrop, { x: 6.75, y: 0 }, '#278 acquisition midpoint');
+      closePoint(stock.centered.state.offsets.backdrop, { x: 0, y: 0 }, '#278 acquisition endpoint');
+      expect(stock.hover.state.cameraExcursion).toEqual({ x: 12.8, y: 12.8 });
+      const hoverX = 0.55 * 12.8 * (1 - Math.exp(-0.0625 / 0.12));
+      closePoint(stock.hover.state.offsets.backdrop, { x: hoverX, y: -hoverX }, '#278 tracking');
+      closePoint(stock.leaving.state.offsets.backdrop, { x: (hoverX + 24 * 0.75) / 2, y: -hoverX / 2 }, '#278 release midpoint');
+      closePoint(stock.released.state.offsets.backdrop, { x: 24 * 0.8125, y: 0 }, '#278 live release');
+    });
+
+    test('#282 reaches both ends of yaw, body and pitch without vertical camera motion', async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'turn-dials');
+      await mountNamed(page, backend, modelUrl, { pointerTurn: undefined, transitionMs: 125, maxDisplacement: { x: 64, y: 8 } });
+      await ordinary(page, backend, modelUrl);
+      await freeze(page, 0.5);
+      await point(page, 0, 0, 'pointerenter');
+      const centered = await draw(page, 125);
+      await expectDials(page, centered.order, 0.5, [0, 0, 0], 'stage center');
+
+      for (const sign of [-1, 1]) {
+        await point(page, sign, 0);
+        const horizontal = await draw(page, 6000);
+        await expectDials(page, horizontal.order, 0.5, [sign * 8, 0, sign * 32], 'horizontal edge');
+        expect(await turnReadouts(page)).toHaveLength(3);
+        expect(figureGeometry(horizontal.order)).not.toEqual(figureGeometry(centered.order));
+        const camera = (await state(page)).offsets;
+        closePoint(camera.backdrop, { x: sign * 0.55 * 64, y: 0 }, 'horizontal camera at edge');
+
+        await point(page, sign, sign);
+        const diagonal = await draw(page, 6000);
+        await expectDials(page, diagonal.order, 0.5, [sign * 8, sign * 16, sign * 32], 'vertical edge at fixed X');
+        expect(figureGeometry(diagonal.order)).not.toEqual(figureGeometry(horizontal.order));
+        expect((await state(page)).offsets, 'vertical pointer leaves all camera offsets unchanged').toEqual(camera);
+        const plates = (order: DrawnOrder) => float32Geometry(order.filter(row => !(SLOTS.figure as readonly string[]).includes(row.slot)));
+        expect(plates(diagonal.order), 'vertical pointer leaves the drawn plates unchanged').toEqual(plates(horizontal.order));
+      }
+    });
+
+    test('#282 clamps a dial mapping that exceeds its compiled range inside the stage', async ({ page }) => {
+      await open(page, true);
+      const modelUrl = await fourPlaneModel(page, 'turn-dials');
+      await mountNamed(page, backend, modelUrl, { pointerTurn: undefined, transitionMs: 125 });
+      await ordinary(page, backend, modelUrl);
+      await freeze(page, 0.5);
+      await point(page, 0, 0, 'pointerenter');
+      await tick(page, 125);
+      for (const [input, factor, clamped] of [[0.25, 0.5, false], [0.75, 1, true], [-0.75, -1, true]] as const) {
+        await point(page, input, input);
+        const expected = TRANSLATION_DIALS.map(dial => dial.range * factor);
+        await expectDials(page, (await draw(page, 6000)).order, 0.5, expected, `mapping at ${input}`);
+        const readouts = await turnReadouts(page);
+        expect(readouts.map(row => row.clamped)).toEqual([clamped, clamped, clamped]);
+        expect(readouts.map(row => Math.fround(row.pointer))).toEqual(expected.map(Math.fround));
+      }
+    });
+
+    test('#282 blends the unkeyed setup local and returns to the advancing baked pose', async ({ page }) => {
+      const modelUrl = await fourPlaneModel(page, 'turn-dials');
+      await mountNamed(page, backend, modelUrl, { pointerTurn: true, transitionMs: 125 });
+      await ordinary(page, backend, modelUrl);
+      for (let i = 0; i < 8; i++) await tick(page, 62.5);
+      await expectDials(page, (await draw(page)).order, 0.5, bakedDials(0.5), 'automatic before enter');
+
+      await point(page, 1, -1, 'pointerenter');
+      const entering = await draw(page, 62.5);
+      await expectDials(page, entering.order, 0.5625, bakedDials(0.5625).map(value => value / 2), 'halfway into hover');
+      const enteringReadouts = await turnReadouts(page);
+      expect(Math.fround(enteringReadouts.find(row => row.axis === 'pitch')!.baked), 'unkeyed baked pitch uses setup')
+        .toBe(Math.fround(TRANSLATION_DIALS[1].setup));
+      const centered = await draw(page, 62.5);
+      await expectDials(page, centered.order, 0.625, [0, 0, 0], 'centered before tracking');
+      const tracking = await draw(page, 62.5);
+      const response = 1 - Math.exp(-0.0625 / 0.12);
+      const target = [8 * response, -16 * response, 32 * response];
+      await expectDials(page, tracking.order, 0.6875, target, 'tracking');
+
+      await reset(page, 'pointerleave');
+      const leaving = await draw(page, 62.5);
+      await expectDials(page, leaving.order, 0.75, bakedDials(0.75).map((value, i) => (value + target[i]) / 2), 'halfway out of hover');
+      const released = await draw(page, 62.5);
+      expect((await state(page)).trackTime).toBe(0.8125);
+      expect((await state(page)).refusal).toBeUndefined();
+      await expectDials(page, released.order, 0.8125, bakedDials(0.8125), 'live release endpoint');
+      await expectDials(page, (await draw(page, 62.5)).order, 0.875, bakedDials(0.875), 'automatic after release');
     });
 
     test(check(11, 'runs the 12-second horizontal still sweep even with touch input'), async ({ page }) => {
