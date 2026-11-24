@@ -164,6 +164,9 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      - name: Check registry confirmation (offline)
+        timeout-minutes: 2
+        run: node --test scripts/confirm-registry.test.ts
       # Keep equal to the npm pinned in release.yml.
       - name: Use the release job's npm
         run: |

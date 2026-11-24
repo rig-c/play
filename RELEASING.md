@@ -1,10 +1,10 @@
 # Releasing
 
 The cut is a deliberate version tag (`vX.Y.Z`) pushed on a `main` commit whose
-`package.json` carries `X.Y.Z`. Everything after that tag push is
-`.github/workflows/release.yml`, and no npm credential exists on any machine —
-the publish authenticates to the registry over OIDC (npm trusted publishing),
-so there is no token to leak and no 2FA prompt to answer.
+`package.json` carries `X.Y.Z`. The tag triggers `.github/workflows/release.yml`,
+which publishes to npm over OIDC (npm trusted publishing) and runs the first
+registry confirmation. Create the GitHub Release manually after publication
+succeeds.
 
 ## The loop
 
@@ -56,12 +56,11 @@ URLs (`firejune/spine-html`, `firejune/rig-play`); nothing redirects an npm page
   each path that differs. `tests/package.spec.ts` runs the pack over a temp
   build for each alias on every CI run, diffs the two manifests itself, and
   plants a one-byte difference the comparison has to name.
-- **The confirmation.** The last step of the release run fetches every name at
-  the released version from the registry (retrying for up to 15 minutes each
-  while the registry catches up), prints `npm view` for each, and runs
-  `compare` on the canonical tarball against each alias's as the registry served
-  them — so what is held equal is the published bytes, not this tree's. A version not served in time is a red
-  that says the confirmation was not taken; it does not un-publish anything.
+- **The confirmation.** After publishing, each job runs
+  `scripts/confirm-registry.mjs` to fetch the exact version from npm and compare
+  each selected alias tarball with the canonical tarball. The tag job checks all
+  three names. Alias repair checks the canonical name and the selected aliases.
+  See [Rerunning registry confirmation](#rerunning-registry-confirmation).
 - **An alias never has its own version.** No version of `rig-play` or
   `spine-html` is made by hand: it is `@rig-c/play`'s files at its version, or
   nothing. The one step that publishes aliases alone is the `alias` job of
@@ -169,19 +168,46 @@ that version's tag: `gh workflow run release.yml --repo rig-c/play --ref vX.Y.Z 
 (name only the missing aliases). The same old-tag limitation applies. That path
 continues to derive aliases from the canonical registry tarball, never a rebuild;
 the source guard binds its execution context to the checkout used by that path.
-An alias mismatch prints an alias-repair command preserving the original
-space-separated `alias_names` selection with shell-safe quoting; it never sends
-an already-published canonical version to the tag-retry path.
+A source SHA mismatch in alias repair prints a recovery command preserving the
+original `alias_names` selection with shell-safe quoting.
 Tag retry does not republish canonical or skip arbitrary aliases.
 
 The isolated decision checks run with `bun test scripts/release-workflow.test.ts`.
-They execute the workflow's shell bodies with mocked APIs and publish recorders.
+They execute the workflow's shell bodies with mocked APIs, publish recorders, and
+a confirmation recorder that checks the script's arguments. The verifier has
+its own offline test, `node --test scripts/confirm-registry.test.ts`.
 `scripts/fixtures/release-commit-responses.json` preserves fresh live `gh --jq`
 stdout/stderr and exits for the two tags above; the offline mock replays the
 response matching the actual requested endpoint. The planted old-prefix copy
 refuses the annotated tag while the lightweight control still resolves. Other
 API, checkout and publish behavior remains synthetic; these checks do not prove
 production OIDC, provenance issuance or registry propagation.
+
+## Rerunning registry confirmation
+
+From the repository root of a checkout containing `scripts/confirm-registry.mjs`,
+run the confirmation-only command with the exact published version, without the
+tag's leading `v`:
+
+```bash
+node scripts/confirm-registry.mjs X.Y.Z
+```
+
+The command checks `@rig-c/play`, `rig-play`, and `spine-html` by default.
+To follow up on an alias subset, pass each selected alias as a separate
+argument, for example `node scripts/confirm-registry.mjs X.Y.Z spine-html`.
+The canonical tarball is always included. Each invocation has one shared
+15-minute wall-clock window for all selected names.
+
+This is a read-only registry check of the published tarballs. Rerun this command
+directly when confirmation needs another attempt.
+
+| Exit | Outcome |
+| --- | --- |
+| `0` | The registry served the requested version and each selected alias matched the canonical tarball. |
+| `3` | A requested version was still unavailable when the window ended. The output says `confirmation NOT taken; re-run the confirm`. |
+| `1` | An alias comparison failed. The output names the differing path. |
+| `2` | Usage or infrastructure failure. Read the diagnostic before trying again. |
 
 ## One-time setup (owner, GitHub)
 
@@ -248,12 +274,19 @@ Two properties of that configuration are load-bearing in the workflow:
    That tag push is the cut.
 4. Watch the `release` run triggered by `vX.Y.Z`: it validates the tag, SHA,
    `origin/main` ancestry and `package.json` version, publishes `@rig-c/play`,
-   publishes the two aliases, and confirms every name serves the same files —
-   its comparison step prints one line per alias; the final install smoke renders the registry package in Chromium and requires drawn pixels.
-5. Confirm: `npm view @rig-c/play version`, `npm view rig-play version` and
-   `npm view spine-html version` print the same version, and each npm page shows
-   a provenance attestation of the same workflow run. Create the GitHub Release
-   notes for `vX.Y.Z` after publication succeeds.
+   and publishes the two aliases. It then confirms the exact registry version
+   under all three names. After confirmation succeeds, the install smoke renders
+   the registry package in Chromium and requires drawn pixels.
+5. Verify that each npm page for the exact published version shows the
+   provenance attestation for its publishing run. If needed, follow
+   [Rerunning registry confirmation](#rerunning-registry-confirmation).
+6. After publication succeeds, create the GitHub Release manually, even if the
+   first registry confirmation needs a follow-up. Save the matching
+   `CHANGELOG.md` entry to a notes file, then run:
+
+   ```bash
+   gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file CHANGELOG-vX.Y.Z.md
+   ```
 
 ## What was pre-flighted, and what the first cut proved
 
@@ -310,5 +343,6 @@ done
   the account's two-factor step when `npm publish` asks). Trusted publishing
   does not apply outside the workflow, and a classic token stops working once
   "require two-factor authentication and disallow tokens" is on.
-- Afterwards check each name as the workflow's confirmation does:
+- Afterwards, [confirm all three registry tarballs](#rerunning-registry-confirmation)
+  and run the canonical install smoke with
   `node scripts/install-smoke.mjs --spec "@rig-c/play@<version>"`.

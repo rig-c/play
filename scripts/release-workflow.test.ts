@@ -29,7 +29,7 @@ const resolver = workflow.jobs.release.steps.find((s: Step) => s.id === 'target'
 const publicationSteps = workflow.jobs.release.steps.filter((s: Step) => !sourceGuard(s) && s.id !== 'release' && s.id !== 'target' && s.name !== 'Verify the retry tag matches the package' && s.name !== 'Verify the retry tag is on main');
 
 // The mock never delegates npm/gh/bun/git to the host. Only node's local JSON checks
-// reach a real interpreter; alias pack/compare are recorded stand-ins here.
+// reach a real interpreter; alias packing and confirmation are recorded stand-ins.
 const mock = String.raw`
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -91,14 +91,11 @@ if (command === 'git') {
 if (command === 'npm') {
   if (args[0] === 'view') {
     const [name, version] = args[1].split(/@(?=[^@]*$)/);
-    if (args.includes('--json')) {
-      if (config.registryMalformed) { console.log('broken JSON'); process.exit(1); }
-      if (config.registryError) { console.log(JSON.stringify({error:{code:config.registryError}})); process.exit(1); }
-      if (state.served.includes(name)) { console.log(JSON.stringify(version)); process.exit(0); }
-      console.log(JSON.stringify({error:{code:'E404'}})); process.exit(1);
-    }
-    if (!state.served.includes(name)) fail('version not served');
-    console.log(version); process.exit(0);
+    if (!args.includes('--json')) fail('unexpected registry view outside verifier');
+    if (config.registryMalformed) { console.log('broken JSON'); process.exit(1); }
+    if (config.registryError) { console.log(JSON.stringify({error:{code:config.registryError}})); process.exit(1); }
+    if (state.served.includes(name)) { console.log(JSON.stringify(version)); process.exit(0); }
+    console.log(JSON.stringify({error:{code:'E404'}})); process.exit(1);
   }
   if (args[0] === 'install' || args[0] === '--version') process.exit(0);
   if (args.join(' ') === 'run build:lib') {
@@ -123,6 +120,23 @@ if (command === 'npm') {
 }
 if (command === 'bunx' && args.join(' ') === 'playwright install --with-deps chromium') process.exit(0);
 if (command === 'node') {
+  if (args[0] === 'scripts/confirm-registry.mjs') {
+    const [, version, ...selected] = args;
+    const aliases = ['rig-play', 'spine-html'];
+    const aliasRepair = config.event !== 'push' && config.tag === '';
+    if (version !== (aliasRepair ? config.aliasVersion : releaseTag.slice(1))) fail('wrong confirmation version');
+    if (aliasRepair !== (selected.length > 0) || selected.some(name => !aliases.includes(name))) fail('wrong confirmation selection');
+    const requested = aliasRepair ? selected : aliases;
+    for (const name of ['@rig-c/play', ...requested]) {
+      if (!state.served.includes(name)) fail('confirmation before ' + name + ' is served');
+    }
+    if (config.confirmationUnavailable) {
+      console.error('confirmation NOT taken; re-run the confirm');
+      process.exit(3);
+    }
+    for (const alias of requested) record('compared', ['@rig-c/play', alias, version]);
+    process.exit(0);
+  }
   if (args[0] === 'scripts/install-smoke.mjs') {
     if (JSON.stringify(args) !== JSON.stringify(['scripts/install-smoke.mjs','--spec','@rig-c/play@' + releaseTag.slice(1)])) fail('wrong installed smoke spec');
     if (!state.served.includes('@rig-c/play')) fail('smoke before canonical publish');
@@ -155,12 +169,6 @@ if (command === 'node') {
       const file = join(dest, name + '.tgz');
       writeFileSync(file, JSON.stringify({name, version:canonical.version})); console.log(file); process.exit(0);
     }
-    if (args[1] === 'compare') {
-      const a = JSON.parse(readFileSync(args[2], 'utf8'));
-      const b = JSON.parse(readFileSync(args[3], 'utf8'));
-      if (a.name !== '@rig-c/play' || !['rig-play','spine-html'].includes(b.name) || a.version !== b.version) fail('wrong confirmation inputs');
-      record('compared', [a.name,b.name,a.version]); process.exit(0);
-    }
   }
 }
 if (command === 'bun' && ['install --frozen-lockfile', 'run fetch-assets'].includes(args.join(' '))) process.exit(0);
@@ -174,7 +182,7 @@ type Scenario = {
   packageName?: string; buildFails?: boolean; packFails?: boolean; shallow?: string; gitQueryFails?: boolean;
   gitFetchFails?: boolean; ancestryStatus?: number; runSha?: string; headSha?: string; headQueryFails?: boolean;
   resolvedSha?: string; commitLookupFails?: boolean; recording?: string;
-  movedTagSha?: string;
+  movedTagSha?: string; confirmationUnavailable?: boolean;
 };
 setDefaultTimeout(30_000);
 const sharedEnvDir = mkdtempSync(join(tmpdir(), 'play-release-env-'));
@@ -284,6 +292,8 @@ function exercise(config: Scenario = {}, workflowFile?: string) {
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }
 const published = (r: ReturnType<typeof exercise>) => r.calls.filter(c => c.command === 'published').map(c => c.args[0]);
+const confirmationArgs = (r: ReturnType<typeof exercise>) =>
+  r.calls.filter(c => c.command === 'node' && c.args[0] === 'scripts/confirm-registry.mjs').map(c => c.args.slice(1));
 function noInstallOrPublish(r: ReturnType<typeof exercise>) {
   expect(r.calls.filter(c => c.command === 'npm' && ['install','publish','run'].includes(c.args[0]) || c.command === 'bun')).toEqual([]);
 }
@@ -355,13 +365,13 @@ describe('release workflow contract', () => {
       return c;
     };
     // SHA-256 of parsed publication steps, excluding only routing condition/ref.
-    expect(digest(publicationSteps.map(clean))).toBe('fef3d061ca69a84c8a8c71b8df0a380a6b9190c22288f4e06b4ead4a213797fc');
+    expect(digest(publicationSteps.map(clean))).toBe('9e859854a0741ddcaf4348fcd9dc8ebfe15ec030e38954b03f05b5c85698e608');
     expect(digest(workflow.jobs.alias.steps.filter((s: Step) => !sourceGuard(s)).map((s: Step) =>
       s.uses === 'actions/checkout@v4' ? {...s, with:{...s.with, ref:'v${{ inputs.alias_version }}'}} : s
-    ))).toBe('606aa08f03e85f08d66f5d6aca4dc8db871d5a382bbafa1b49e395356d3606d9');
+    ))).toBe('dfbd602957cfc896d8c8cb268c0992df56057b9b5323a9c198790514b93880dc');
     // Preserve the existing steps in full, including publish conditions and
     // the canonical HEAD-to-main ancestry guard, with release-please removed.
-    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('e667d6ae202bd075dd069aa5d748e03ecd4b86f2c934060f931c2bf96924a5b7');
+    expect(digest(workflow.jobs.release.steps.filter((s: Step) => s.id !== 'target' && !sourceGuard(s)))).toBe('e2d637cb6840ed2afbee11d9ef73da11daad4067ed960c11425532edb5a58034');
     expect(existsSync(join(root, 'release-please-config.json'))).toBe(false);
     expect(existsSync(join(root, '.release-please-manifest.json'))).toBe(false);
     expect(source).not.toContain('release-please');
@@ -408,6 +418,7 @@ describe('release workflow contract', () => {
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.actions.some(a=>a.uses === 'googleapis/release-please-action@v4')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
+    expect(confirmationArgs(r)).toEqual([['1.12.0']]);
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(ALIASES.map(a=>['@rig-c/play',a,'1.12.0']));
     expect(r.calls.filter(c=>c.command === 'npm' && c.args[0] === 'run').map(c=>c.args)).toEqual([['run','build:lib']]);
     expect(r.calls.filter(c=>c.command === 'node' && c.args[0] === 'scripts/pack-release.mjs')).toHaveLength(1);
@@ -499,17 +510,19 @@ describe('release workflow contract', () => {
   });
   test.each([{buildFails:true},{packFails:true}])('canonical build or pack failure prevents all publication %j', scenario => {
     const r = exercise(scenario); expect(r.status).not.toBe(0); expect(published(r)).toEqual([]);
+    expect(confirmationArgs(r)).toEqual([]);
     expect(r.calls.some(c=>c.command === 'compared' || c.command === 'npm' && c.args[0] === 'publish')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'npm' && c.args[0] === 'run')).toHaveLength(1);
   });
   test('tag push with same SHA validates ancestry, source commit and manifest before publish and ignores dispatch inputs', () => {
-    const r = exercise({event:'push',ref:'refs/tags/v1.12.0',tag:'bad-input',aliasVersion:'ignored'});
+    const r = exercise({event:'push',ref:'refs/tags/v1.12.0',tag:'bad-input',aliasVersion:'ignored',aliasNames:'spine-html'});
     expect(r.status).toBe(0); expect(r.outputs.mode).toBe('tag'); expect(published(r)).toEqual(['@rig-c/play',...ALIASES]);
     expect(r.actions.find(a=>a.uses === 'actions/checkout@v4')?.ref).toBe(tagSha);
     expect(r.actions.some(a=>a.uses === 'googleapis/release-please-action@v4')).toBe(false);
     expect(r.calls.filter(c=>c.command === 'gh').map(c=>c.args)).toEqual([commitRequest]);
     expect(r.ran.indexOf('Verify the retry tag is on main')).toBeLessThan(r.ran.indexOf('Verify the dispatched source commit'));
     expect(r.ran.indexOf('Verify the dispatched source commit')).toBeLessThan(r.ran.indexOf('Verify the retry tag matches the package'));
+    expect(confirmationArgs(r)).toEqual([['1.12.0']]);
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(ALIASES.map(a=>['@rig-c/play',a,'1.12.0']));
   });
   test('same-SHA tag-ref alias-only dispatch uses served canonical, named missing alias, no canonical republish/build', () => {
@@ -522,7 +535,38 @@ describe('release workflow contract', () => {
     expect(r.calls.findIndex(c=>c.command === 'git')).toBeLessThan(r.calls.findIndex(c=>c.command === 'npm'));
     const pack = r.calls.find(c=>c.command === 'node' && c.args[1] === 'pack');
     expect(pack.args).toContain('--tarball');
+    expect(confirmationArgs(r)).toEqual([['1.12.0','spine-html']]);
     expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual([['@rig-c/play','spine-html','1.12.0']]);
+  });
+  test.each([
+    {aliasNames:undefined, served:['@rig-c/play'], aliases:ALIASES, publishes:ALIASES},
+    {aliasNames:'', served:['@rig-c/play',...ALIASES], aliases:ALIASES, publishes:[]},
+    {aliasNames:' \tspine-html\n  rig-play \t', served:['@rig-c/play'], aliases:['spine-html','rig-play'], publishes:['spine-html','rig-play']},
+  ])('alias repair passes the intended confirmation selection for %j', ({aliasNames,served,aliases,publishes}) => {
+    const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames,served});
+    expect(r.status).toBe(0);
+    expect(published(r)).toEqual(publishes);
+    expect(confirmationArgs(r)).toEqual([['1.12.0',...aliases]]);
+    expect(r.calls.filter(c=>c.command === 'compared').map(c=>c.args)).toEqual(aliases.map(a=>['@rig-c/play',a,'1.12.0']));
+  });
+  test('alias repair refuses a whitespace-only selection before invoking confirmation', () => {
+    const r = exercise({tag:'',aliasVersion:'1.12.0',aliasNames:' \t\n ',served:['@rig-c/play']});
+    expect(r.status).toBe(2);
+    expect(r.output).toContain('alias_names must name at least one alias');
+    expect(published(r)).toEqual([]);
+    expect(confirmationArgs(r)).toEqual([]);
+  });
+  test.each([
+    {config:{}, publishes:['@rig-c/play',...ALIASES], args:['1.12.0']},
+    {config:{tag:'',aliasVersion:'1.12.0',aliasNames:'rig-play',served:['@rig-c/play']}, publishes:['rig-play'], args:['1.12.0','rig-play']},
+  ])('confirmation exit 3 is reported after publication for %j', ({config,publishes,args}) => {
+    const r = exercise({...config, confirmationUnavailable:true});
+    expect(r.status).toBe(3);
+    expect(r.output).toContain('confirmation NOT taken; re-run the confirm');
+    expect(published(r)).toEqual(publishes);
+    expect(confirmationArgs(r)).toEqual([args]);
+    expect(r.calls.some(c=>c.command === 'compared')).toBe(false);
+    expect(r.ran).not.toContain('Render the published installation in Chromium');
   });
 
   const modes: {mode: string; config: Scenario}[] = [
