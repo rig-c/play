@@ -775,12 +775,21 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
       expect(base.order.map(row => row.slot), 'exact named draw order and one draw per slot').toEqual(NAMED_ORDER);
       expect(Object.keys((await state(page)).offsets).sort(), 'exact named plane IDs').toEqual([...NAMED_IDS].sort());
       const table = base.order[1];
-      const span = (axis: number) => {
-        const values = table.coords.filter((_, i) => i % 2 === axis);
-        return Math.max(...values) - Math.min(...values);
-      };
-      expect(span(0), 'tables authored width without auto-fit').toBeCloseTo(12, 6);
-      expect(span(1), 'tables authored height without auto-fit').toBeCloseTo(12, 6);
+      const reference = await page.evaluate(() => (window as ComposedHarnessWindow).composedTest.referenceGeometry(0));
+      const authoredTable = reference.find(row => row.slot === TABLES_SLOT);
+      expect(authoredTable?.kind, 'ordinary tables slot is a region').toBe('region');
+      expect(table.kind, 'displayed tables slot is a region').toBe('region');
+      // Compare absolute positions at Float32 precision before and after camera translation.
+      const authored = authoredTable!.coords.map(Math.fround);
+      expect(authored, 'authored tables quad has four corners').toHaveLength(8);
+      expect(authored.every(Number.isFinite), 'authored tables corners are finite').toBe(true);
+      const [blX, blY, ulX, ulY, , , brX, brY] = authored;
+      const area = (ulX - blX) * (brY - blY) - (ulY - blY) * (brX - blX);
+      expect(Math.abs(area), 'authored tables quad is nondegenerate').toBeGreaterThan(0);
+      expect(table.coords, 'displayed tables quad has four corners').toHaveLength(8);
+      for (const [i, expected] of authored.entries()) {
+        expect(Math.fround(table.coords[i]), `tables authored coordinate ${i} without auto-fit`).toBe(expected);
+      }
       await point(page, 1, 1, 'pointerenter');
       await tick(page, 120);
 
@@ -802,7 +811,7 @@ for (const backend of ['canvas2d', 'webgl'] as const) {
             expect(slot.z).toBe(base.order[slotIndex].z);
             for (const [coordinate, value] of slot.coords.entries()) {
               const expected = base.order[slotIndex].coords[coordinate] + (coordinate % 2 ? 0 : shifts[id]);
-              expect(value, `${id} ${slot.slot} coordinate ${coordinate}`).toBeCloseTo(expected, 6);
+              expect(Math.fround(value), `${id} ${slot.slot} coordinate ${coordinate}`).toBe(Math.fround(expected));
             }
           }
         }

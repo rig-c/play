@@ -229,6 +229,12 @@ async function openReference(modelUrl: string, animation: string, backend: Backe
   ordinary = await makeOrdinary(modelUrl, animation, backend);
 }
 
+function referenceGeometry(time: number) {
+  if (!ordinary) throw new Error('Open the reference first');
+  ordinary.player.seek(time);
+  return geometry(ordinary.player.posedFrame());
+}
+
 function fixedReference(time: number) {
   if (!ordinary) throw new Error('Open the reference first');
   ordinary.player.seek(time);
@@ -368,7 +374,7 @@ function showReading(lines: string[], showReference = false): void {
 Object.assign(window, {
   composedTest: {
     mount, dispose, point, reset, tick, camera, layout, state, poseBytes, freeze,
-    sourceGeometry, draw, backdrop, openReference, fixedReference, livePose, liveReference, storeFigure,
+    sourceGeometry, draw, backdrop, openReference, referenceGeometry, fixedReference, livePose, liveReference, storeFigure,
     compareFigure, cropReference, planeReferences, layerPixels, compareWithout, showReading,
   },
 });
@@ -379,6 +385,7 @@ export type ComposedHarnessWindow = typeof window & {
     tick: typeof tick; camera: typeof camera; layout: typeof layout; state: typeof state;
     poseBytes: typeof poseBytes; freeze: typeof freeze; sourceGeometry: typeof sourceGeometry;
     draw: typeof draw; backdrop: typeof backdrop; openReference: typeof openReference;
+    referenceGeometry: typeof referenceGeometry;
     fixedReference: typeof fixedReference; livePose: typeof livePose; liveReference: typeof liveReference;
     storeFigure: typeof storeFigure; compareFigure: typeof compareFigure;
     cropReference: typeof cropReference; planeReferences: typeof planeReferences; layerPixels: typeof layerPixels;
