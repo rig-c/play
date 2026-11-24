@@ -44,6 +44,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Check composed-take plant preimages (offline)
+        run: node tests/composed-take-plants.mjs "$RUNNER_TEMP/composed-take-plants" preflight
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - name: Check README scope and planted failures (offline)
