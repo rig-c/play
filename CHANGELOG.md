@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.27.0
+
+### Read before upgrading
+
+* **New subpath `@rig-c/play/composed-take`.** It exports `mountComposedTake` and `ComposedTakeError`, and the types `CameraMode`, `ComposedPlane`, `ComposedTakeOptions` and `MountedTake`. Bind planes with named `planes`. The option names and refusal codes are supported. Until the demo page ships on this entry, a minor release may retune the defaults of `transitionMs`, `autoSweep` and the pointer hover excursion. `docs/REFERENCE.md` gives each default with its date.
+* **`dist/index.js` bytes change.** The root entry and the new subpath now share their renderer and player code in the private chunk `dist/_play-runtime.js`, so both use one `RigPlayer` and `CanvasRenderer`. The root exports and every existing declaration file are unchanged. If your deployment copies individual package files, ship the chunk with either entry.
+* **The package ships its reference docs.** `docs/REFERENCE.md`, `docs/MIGRATION.md` and `docs/STABILITY.md` are now in the tarball, so the README's links resolve on the package page.
+
+### Features
+
+* **composed take:** ship the composed take as the package entry `@rig-c/play/composed-take`, moved from the sample, with the camera logic in `src/composed-camera.ts` ([#291](https://github.com/rig-c/play/pull/291), closes [#290](https://github.com/rig-c/play/issues/290)).
+* **package:** ship `docs/REFERENCE.md`, `docs/MIGRATION.md` and `docs/STABILITY.md` ([#286](https://github.com/rig-c/play/pull/286), closes [#285](https://github.com/rig-c/play/issues/285)).
+
+### Bug Fixes
+
+* **canvas:** clip composed Canvas2D attachments in stock coordinates, then project the clipped positions, so a composed take matches its stock render ([#289](https://github.com/rig-c/play/pull/289), closes [#279](https://github.com/rig-c/play/issues/279)).
+
+### Documentation
+
+* the README names six things the reference documents ([#281](https://github.com/rig-c/play/pull/281), refs [#280](https://github.com/rig-c/play/issues/280)).
+* STABILITY records `dist/composed-camera.d.ts` as a type dependency of the subpath, not an import surface ([#289](https://github.com/rig-c/play/pull/289)).
+
+### Tests
+
+* cover fresh-browser Canvas2D mounts of the composed take ([#287](https://github.com/rig-c/play/pull/287), closes [#277](https://github.com/rig-c/play/issues/277)).
+
 ## 1.26.0
 
 ### Features
