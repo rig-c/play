@@ -252,6 +252,7 @@ async function runCase(plant) {
 
   const port = await portNumber();
   const baseURL = `http://127.0.0.1:${port}`;
+  const readinessURL = `${baseURL}/tests/composed-take-harness.html`;
   const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
   const viteCommand = [process.execPath, vite, '--config', 'composed-vite.config.mjs',
     '--host', '127.0.0.1', '--port', String(port), '--strictPort'].map(quote).join(' ');
@@ -265,7 +266,7 @@ async function runCase(plant) {
     { name: 'chromium', use: { browserName: 'chromium' } },
     { name: 'webkit', use: { browserName: 'webkit' } },
   ],
-  webServer: { command: ${JSON.stringify(viteCommand)}, url: ${JSON.stringify(baseURL)}, timeout: 20_000, reuseExistingServer: false },
+  webServer: { command: ${JSON.stringify(viteCommand)}, url: ${JSON.stringify(readinessURL)}, timeout: 20_000, reuseExistingServer: false },
 };\n`);
   const args = [playwright, 'test', 'composed-take.spec.ts', '--config=composed-playwright.config.mjs'];
   if (plant) args.push('--grep', plant.grep);
