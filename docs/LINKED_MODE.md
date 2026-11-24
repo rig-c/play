@@ -1,6 +1,6 @@
 # Linked Source Development (`@rig-c/source`)
 
-`@rig-c/play` ships a built bundle and declaration set (`dist/index.js` and `dist/*.d.ts`) in its published tarball (`files` in `package.json`). The published manifest exposes `./dist/index.js` for `import` and `./dist/index.d.ts` for `types`. Installed releases use these entries even when the consumer enables `@rig-c/source` for other packages.
+`@rig-c/play` ships JavaScript entries, their shared chunk and declarations in the published tarball. The published manifest resolves both `@rig-c/play` and `@rig-c/play/composed-take` through `dist/`, even when the consumer enables `@rig-c/source` for other packages.
 
 In a linked workspace checkout where `@rig-c/play` is consumed directly from source without building `dist/`, enable the explicit `@rig-c/source` package export condition in the consuming tool.
 
@@ -17,15 +17,21 @@ The checkout's `package.json` defines:
       "@rig-c/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./composed-take": {
+      "@rig-c/source": "./src/composed-take.ts",
+      "types": "./dist/composed-take.d.ts",
+      "import": "./dist/composed-take.js"
     }
   }
 }
 ```
 
-- **Default installed mode (no custom condition):** Node.js, Bun, TypeScript (`bundler` and `nodenext`), and Vite ignore `@rig-c/source` and resolve `./dist/index.d.ts` / `./dist/index.js`.
-- **Explicit linked source mode (`@rig-c/source` enabled):** Resolvers select `./src/index.ts` directly without requiring `dist/` to exist or be rebuilt on source edits.
-- **Published package:** The release packer removes the checkout-only condition from the staged manifest. The installed package resolves to `dist/` with either condition set.
-- **Incomplete linked checkout:** Source mode needs `src/index.ts` and its dependencies. If both the source and built entries are missing, resolution fails.
+- **Default installed mode (no custom condition).** Node.js, Bun, TypeScript (`bundler` and `nodenext`), and Vite use the built targets for the requested entry.
+- **Explicit linked source mode (`@rig-c/source` enabled).** Resolvers select `./src/index.ts` or `./src/composed-take.ts` directly. The selected source file and its imports must be present in the linked checkout.
+- **Published package.** The release packer removes the checkout-only condition from both exports in the staged manifest. Installed releases use the built targets with or without that condition.
+
+See [mounting a composed take](REFERENCE.md#mounting-a-composed-take) for the subpath API.
 
 ## Consumer Wiring
 

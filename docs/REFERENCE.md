@@ -482,94 +482,79 @@ pointer control, then leave to return to the automatic motion. The demo uses a
 the sweep's phase. The original plate has zero overscan, so use the overscan
 fixture for the moving camera.
 
-For another take, import [`mountComposedTake`](https://github.com/rig-c/play/blob/main/samples/composed-take.ts) from the
-repository sample and serve the take's `skeleton.model.json` with its named page
-images. Give the root a CSS width and height for the stage. Use the take's
-animation name and exact compiled slot names:
+#### Mounting a composed take
+
+Import `mountComposedTake` from `@rig-c/play/composed-take`. Serve the take's
+`skeleton.model.json` and its named page images. The compiled model needs a
+positive stage and a named animation with a positive duration. Give the browser
+root a CSS width and height for the stage. Cross-origin page images must allow
+anonymous CORS so the renderer can read back canvas pixels.
 
 ```ts
-import { mountComposedTake } from './samples/composed-take.js';
+import { mountComposedTake } from '@rig-c/play/composed-take';
 
 const take = await mountComposedTake(viewport, {
   modelUrl: '/take/skeleton.model.json',
   animation: 'idle',
   loop: true,
-  slots: { background: ['backdrop'], figure: ['actor:body'], foreground: ['foreground'] },
-  camera: 'fixed',
-});
-
-// Call take.setCamera('parallax') to opt in, or take.dispose() when unmounting.
-```
-
-Assign every drawable slot once and omit `foreground` if the take has none.
-Classify slots by their role in this composition. The example's
-`actor:background` moves with the figure. The mount uses one player's current
-pose and original draw order, translates geometry and clips with their plane,
-and crops once at the model's fixed stage. The loop runs on its own clock.
-The returned `canvas`, `player`, `mode` and `offsets` expose the rendered take.
-`offsets` are signed CSS pixels with +Y down. `cameraExcursion` gives the
-configured maximum before gains. `backend` can select `canvas2d` or `webgl`.
-
-Parallax applies gains −0.55, 0 and +0.55 to background, figure and foreground.
-Pan uses gain 1 on every plane. A positive gain moves art opposite the camera.
-The default camera excursion is 10% of each CSS stage axis, capped at 64 px X
-and 40 px Y before applying the gains. At those caps the outer planes move up
-to 35.2 px X and 22 px Y in Parallax. In Pan every plane moves up to 64 px X and
-40 px Y. Moving modes need an opaque backdrop covering all edges over the full
-selected envelope at the current layout.
-
-`maxDisplacement: { x, y }` supplies a symmetric camera excursion in CSS pixels
-before gain, with zero disabling that axis. The override is applied as supplied.
-For example, with 88 CSS pixels of opaque margin on each horizontal edge and
-zero vertical margin at the current layout, `{ x: 160, y: 0 }` in Parallax and
-`{ x: 88, y: 0 }` in Pan each move the backdrop by up to 88 px on X and 0 on Y.
-Select Fixed for a take with zero overscan or supply a plate authored with the
-needed margins. The mount and `setCamera` report these conditions by code.
-A layout or backdrop change that invalidates a moving mode draws Fixed and
-exposes the reason on `take.refusal`.
-
-#### Named planes and camera handoff
-
-Use `planes` in place of `slots` to name the planes and declare their roles.
-Give the take one `backdrop`, one `figure`, and any `overlay` planes. Each
-plate binds one drawable region slot. Each figure binds its drawable slots.
-An overlay can be smaller than the stage. The backdrop quad must cover the
-stage throughout the selected motion envelope. For each displayed state,
-including Fixed, the layers below the first figure slot in the model's current
-draw order must composite to opaque pixels across the stage at its backing
-resolution. An opaque overlay below the figure can fill a hole in the backdrop.
-
-```ts
-const take = await mountComposedTake(viewport, {
-  modelUrl: '/take/skeleton.model.json',
-  animation: 'idle',
-  loop: true,
-  camera: 'parallax',
   planes: {
     backdrop: { slots: ['backdrop'], role: 'backdrop' },
     figure: { slots: ['actor:body'], role: 'figure' },
     overlay: { slots: ['overlay'], role: 'overlay', gain: 0.55 },
   },
-  transitionMs: 120,
-  autoSweep: { periodSeconds: 12, maxDisplacement: { x: 24, y: 0 } },
 });
+
+// On unmount, call take.dispose().
 ```
 
-In Parallax, the backdrop defaults to gain −0.55 and the figure stays at gain
-0. Pointer entry ramps the automatic plate motion to its setup center before
-tracking the pointer. Pointer exit ramps back to the current automatic phase.
-`transitionMs` sets the ramp duration. The player keeps advancing the take
-through the handoff. `cameraTarget` gives the requested pointer position in
-Y-up CSS pixels. With named planes, `offsets` gives each plane's displayed
-shift in Y-down CSS pixels, including baked plate displacement when present.
-Pan moves all planes at equal gain. Fixed plays the authored pose with the
-camera at rest.
+Name the planes in `planes` and assign each drawable slot once by its exact
+compiled name. Give the take one `backdrop`, one `figure` and any number of
+`overlay` planes. Each plate binds one rigid region slot. The figure binds
+its drawable slots. The mount preserves the player's draw order, moves geometry
+and clips with their plane, and crops at the model's fixed stage.
 
-In named Parallax takes with discovered turn dials, pointer X drives yaw and
-body, and pointer Y drives pitch. Plate hover stays horizontal. Dial targets
-clamp to the compiled endpoints. The same handoff ramp blends between those
+The returned `MountedTake` owns the mounted canvas, player, loaded assets,
+coverage renderer, pointer listeners and resize observer. Use `take.canvas`
+for accessibility attributes and `take.player` for pose inspection and
+playback controls such as `seek()` and `pause()`. Let the take control drawing
+and its dial adjustment hook. Call `take.dispose()` to cancel its frame clock,
+remove the mounted surface and release its resources. The caller owns the root.
+
+#### Camera and handoff
+
+| Option | Default as of 2026-11-25 |
+| --- | --- |
+| `camera` | `'fixed'` |
+| `backend` | `'webgl'`. Use `'canvas2d'` to select Canvas 2D. |
+| `autoStart` | `true`. With `false`, call `take.advance(rigElapsed, cameraElapsed = rigElapsed)` in seconds and then `take.render()`. Pointer input and resize observation remain active. |
+| `maxDisplacement` | 10% of each CSS stage axis before gains, capped at 64 px X and 40 px Y. With any discovered turn dial, Parallax uses zero Y pointer excursion for the plates. Pan keeps both axes. |
+| `transitionMs` | 120 ms in each direction. |
+| `autoSweep` | Omitted. Automatic sweep is opt-in. The demo's **Automatic and pointer** setting uses a 12-second period and `{ x: 24, y: 0 }` CSS px before gains. |
+| `pointerTurn` | Enabled. Set `false` for camera-only control. |
+
+Use `take.setCamera()` with `'fixed'`, `'pan'` or `'parallax'`. Fixed plays
+the authored pose with the camera at rest. Pan uses gain 1 on each plane.
+In Parallax the backdrop defaults to gain −0.55 and the figure stays at gain 0.
+A positive gain moves art opposite the camera. `maxDisplacement: { x, y }`
+sets symmetric pointer bounds in CSS pixels before gains. Supply finite
+nonnegative values and use zero to disable an axis.
+
+`mode` is the active camera. `cameraExcursion` gives its configured pointer
+bounds before gains. Use `cameraExcursionFor(mode)` to read those bounds for a
+different mode. `cameraTarget` gives the requested pointer position in Y-up
+CSS pixels. `offsets` maps each plane ID to its displayed shift in Y-down CSS
+pixels, including baked travel.
+
+In Parallax, pointer entry ramps the automatic plate motion to its setup
+center before tracking the pointer. Pointer exit ramps back to the current
+automatic phase. The take keeps advancing through the handoff. With discovered
+turn dials, pointer X drives yaw and body and pointer Y drives pitch. Dial
+targets clamp to the compiled endpoints. The handoff blends between these
 targets and the live bone-local values from animation keys or the setup pose.
-Takes without discovered dials keep the camera and plate behavior above.
+`turnReadouts` reports the last posed values and the current pointer request's
+`clamped` status.
+
+#### Plates and automatic motion
 
 A plate with compiled travel can declare `baked: { bone: 'plate-bone' }`.
 Bind the region's direct root-child bone with a linear translate loop from
@@ -578,24 +563,48 @@ outside the stage pointer. Inside, the handoff brings the plate to center and
 pointer motion replaces its baked displacement. An overlay with a comparable
 horizontal baked track can infer its gain by multiplying the backdrop's
 resolved gain by the ratio of the overlay's travel amplitude to the backdrop's.
-Choose `autoSweep` for a take whose plates use a camera-only sweep.
+Give other overlays an explicit finite gain.
+
+For a camera-only sweep in Parallax, give `autoSweep` a positive finite
+`periodSeconds` and finite nonnegative `maxDisplacement` axes in CSS pixels.
+The sine sweep follows the player's track time. Use plates without baked
+travel for this option.
+
+The backdrop quad must cover the stage across the selected motion envelope.
+At each displayed state, including Fixed, the layers below the first figure
+slot must composite to opaque pixels across the stage at its backing
+resolution. An overlay can be smaller than the stage and can fill a hole in
+the backdrop when it is opaque and below the figure.
+
+#### Composed take refusals
+
+Use `ComposedTakeError.code` to handle a refusal. Model and page loading can
+also report their own errors. If a moving camera fails coverage and Fixed
+passes its coverage check, mounting can resolve in Fixed with `take.refusal`
+set. `setCamera()` can switch to Fixed and still throw the coverage refusal.
+A later layout or frame change can also fall back to Fixed. If a frame
+cannot be drawn, the take hides the canvas and stops its frame clock.
+Render-time composition refusals are available on `take.refusal`. A
+successful `setCamera()` clears that status.
+
+| Code | Condition |
+| --- | --- |
+| `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
+| `COMPOSED_LOOP_REQUIRED` | Missing `loop: true` or a positive-duration animation |
+| `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
+| `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
+| `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry, inadequate stage coverage or unavailable opacity readback |
+| `COMPOSED_INVALID_DISPLACEMENT` | Invalid excursion, sweep period, transition duration or gain |
+| `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
+| `COMPOSED_PLATE_TRACK` | Unsupported plate track or gain binding, or a sweep combined with baked travel |
+
+#### Reusing the demo controls
 
 Import `mountComposedParallax` from [`samples/composed-parallax.ts`](https://github.com/rig-c/play/blob/main/samples/composed-parallax.ts)
 to reuse the demo controls with another take. Pass its `take` options and
 `poseDuration`, and optionally pass `planeLabels` and `inferredGains` for the
 readouts. The page supplies the stage, camera control and readouts. The caller
 supplies the fixture selector and model URLs.
-
-| Code | Condition |
-| --- | --- |
-| `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
-| `COMPOSED_LOOP_REQUIRED` | Missing positive-duration animation or `loop: true` |
-| `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
-| `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
-| `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry or inadequate backdrop opacity in a named mode, or inadequate backdrop coverage in a legacy moving mode |
-| `COMPOSED_INVALID_DISPLACEMENT` | An excursion axis is negative or non-finite |
-| `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
-| `COMPOSED_PLATE_TRACK` | Named plane has an unsupported plate track or gain binding |
 
 See the [public fixture and its producer receipts](https://github.com/rig-c/play/blob/main/tests/fixtures/composed-direction/README.md).
 

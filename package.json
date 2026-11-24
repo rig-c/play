@@ -34,11 +34,20 @@
       "@rig-c/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./composed-take": {
+      "@rig-c/source": "./src/composed-take.ts",
+      "types": "./dist/composed-take.d.ts",
+      "import": "./dist/composed-take.js"
     }
   },
   "files": [
     "dist/index.js",
     "dist/index.js.map",
+    "dist/composed-take.js",
+    "dist/composed-take.js.map",
+    "dist/_play-runtime.js",
+    "dist/_play-runtime.js.map",
     "dist/CanvasRenderer.d.ts",
     "dist/CanvasRenderer.d.ts.map",
     "dist/DomRenderer.d.ts",
@@ -49,6 +58,10 @@
     "dist/MeshGlBlitter.d.ts.map",
     "dist/index.d.ts",
     "dist/index.d.ts.map",
+    "dist/composed-take.d.ts",
+    "dist/composed-take.d.ts.map",
+    "dist/composed-camera.d.ts",
+    "dist/composed-camera.d.ts.map",
     "dist/loadModel.d.ts",
     "dist/loadModel.d.ts.map",
     "dist/pixelRatio.d.ts",

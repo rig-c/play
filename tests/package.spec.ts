@@ -181,6 +181,15 @@ test('the package entry resolves by name in node and exposes its public API', ()
   ]);
 });
 
+test('the composed take entry resolves by name in node and exposes only its two runtime exports', () => {
+  const run = probe(
+    'probe-composed-take.mjs',
+    "const m = await import('@rig-c/play/composed-take');\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
+  );
+  expect(run.status, run.stderr).toBe(0);
+  expect(JSON.parse(run.stdout)).toEqual(['ComposedTakeError', 'mountComposedTake']);
+});
+
 test('the binary subpath is gone: the package reads compiled models, not Spine exports', () => {
   const run = probe(
     'probe-binary.mjs',
@@ -190,24 +199,33 @@ test('the binary subpath is gone: the package reads compiled models, not Spine e
   expect(JSON.parse(run.stdout).code).toBe('ERR_PACKAGE_PATH_NOT_EXPORTED');
 });
 
-test('an unlisted subpath is refused by the exports map', () => {
-  // The control for the two tests above: it is the `exports` map they are
-  // going through, not a bare directory walk that would resolve anything.
+test('the exports map refuses deep imports, including the shared runtime', () => {
   const run = probe(
     'probe-subpath.mjs',
-    "try {\n  await import('@rig-c/play/dist/index.js');\n  console.log(JSON.stringify({ code: 'RESOLVED' }));\n} catch (error) {\n  console.log(JSON.stringify({ code: error.code }));\n}\n",
+    [
+      "for (const file of ['index.js', 'composed-take.js', '_play-runtime.js']) {",
+      "  const code = await import('@rig-c/play/dist/' + file).then(() => 'RESOLVED', error => error.code);",
+      '  console.log(code);',
+      '}',
+    ].join('\n'),
   );
   expect(run.status, `probe crashed:\n${run.stderr}`).toBe(0);
-  expect(JSON.parse(run.stdout).code).toBe('ERR_PACKAGE_PATH_NOT_EXPORTED');
+  expect(run.stdout.trim().split(/\r?\n/)).toEqual(Array(3).fill('ERR_PACKAGE_PATH_NOT_EXPORTED'));
 });
 
 /**
  * What the library build is supposed to emit — the complete library allowlist,
- * even when a checkout's `dist/` also holds demo/test assets: one bundled module
- * (with its map), and one declaration file (with its map) per source module.
+ * even when a checkout's `dist/` also holds demo/test assets: the two entries,
+ * their shared runtime, and declarations with a map for every emitted file.
  */
-const EMITTED_BUNDLE = ['index.js', 'index.js.map'];
-const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame', 'turnDials'];
+const BUNDLED_MODULES = ['_play-runtime.js', 'composed-take.js', 'index.js'];
+const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'composed-camera', 'composed-take', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame', 'turnDials'];
+const LIBRARY_FILES = [...BUNDLED_MODULES, ...DECLARED_MODULES.map(name => `${name}.d.ts`)]
+  .flatMap(file => [file, `${file}.map`]).sort();
+const PACKED_EXPORTS = {
+  '.': { types: './dist/index.d.ts', import: './dist/index.js' },
+  './composed-take': { types: './dist/composed-take.d.ts', import: './dist/composed-take.js' },
+};
 
 test('the library build emits those modules and nothing else', () => {
   /**
@@ -232,14 +250,10 @@ test('the library build emits those modules and nothing else', () => {
   // that explains it rather than on the set comparison below.
   expect(emitted.filter((file) => /(^|\/)main\./.test(file))).toEqual([]);
 
-  // The payload, as an explicit set: the next file to wander in fails here
-  // instead of shipping unnoticed for two more releases. One module — the
-  // bundle — and types plus their maps for every source module, which also
-  // pins `declaration` / `declarationMap` / `sourcemap` staying on.
-  expect(emitted.filter((file) => file.endsWith('.js'))).toEqual(['index.js']);
-  expect(emitted).toEqual(
-    [...EMITTED_BUNDLE, ...DECLARED_MODULES.flatMap((name) => [`${name}.d.ts`, `${name}.d.ts.map`])].sort(),
-  );
+  expect(emitted.filter((file) => file.endsWith('.js'))).toEqual(BUNDLED_MODULES);
+  expect(emitted).toEqual(LIBRARY_FILES);
+  const { files } = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')) as { files: string[] };
+  expect(files.filter(file => file.startsWith('dist/')).sort()).toEqual(LIBRARY_FILES.map(file => `dist/${file}`));
 });
 
 test('nothing the package ships names a Spine runtime', () => {
@@ -371,11 +385,8 @@ test('the manifest keeps Spine dev-only, declares no peer, and pins @rig-c/core,
     exports?: Record<string, Record<string, string>>;
   };
   expect(rawManifest.exports).toEqual({
-    '.': {
-      '@rig-c/source': './src/index.ts',
-      types: './dist/index.d.ts',
-      import: './dist/index.js',
-    },
+    '.': { '@rig-c/source': './src/index.ts', ...PACKED_EXPORTS['.'] },
+    './composed-take': { '@rig-c/source': './src/composed-take.ts', ...PACKED_EXPORTS['./composed-take'] },
   });
 });
 
@@ -637,11 +648,35 @@ test('the real tarball includes every library output and shipped reference doc, 
   const checkoutManifest = JSON.parse(readFileSync(resolve(source, 'package.json'), 'utf8'));
   const releaseManifest = JSON.parse(readFileSync(resolve(extracted, 'package/package.json'), 'utf8'));
   expect(checkoutManifest.exports['.']['@rig-c/source']).toBe('./src/index.ts');
-  expect(releaseManifest.exports).toEqual({
-    '.': { types: './dist/index.d.ts', import: './dist/index.js' },
-  });
+  expect(checkoutManifest.exports['./composed-take']['@rig-c/source']).toBe('./src/composed-take.ts');
+  expect(releaseManifest.exports).toEqual(PACKED_EXPORTS);
   for (const file of libraryFiles) {
     expect(readFileSync(resolve(extracted, 'package/dist', file)).equals(readFileSync(resolve(pkgDist, file))), file).toBe(true);
+  }
+});
+
+test('release packing refuses a missing shared runtime or composed entry before creating a tarball', () => {
+  const source = resolve(sandbox, 'incomplete-release');
+  const destination = resolve(sandbox, 'incomplete-release-output');
+  mkdirSync(source);
+  cpSync(pkgDist, resolve(source, 'dist'), { recursive: true });
+  cpSync(resolve(repoRoot, 'package.json'), resolve(source, 'package.json'));
+  for (const [file, error] of [
+    ['_play-runtime.js', 'Missing release file dist/_play-runtime.js'],
+    ['composed-take.js', 'Missing release entry ./dist/composed-take.js'],
+    ['composed-take.d.ts', 'Missing release entry ./dist/composed-take.d.ts'],
+  ]) {
+    const missing = resolve(source, 'dist', file);
+    const bytes = readFileSync(missing);
+    rmSync(missing);
+    try {
+      const run = node([resolve(repoRoot, 'scripts/pack-release.mjs'), destination, source], sandbox);
+      expect(run.status, file).toBe(1);
+      expect(run.stderr, file).toContain(error);
+      expect(existsSync(destination), file).toBe(false);
+    } finally {
+      writeFileSync(missing, bytes);
+    }
   }
 });
 
@@ -753,54 +788,53 @@ function specifiers(code: string): string[] {
   return [...code.matchAll(pattern)].map((match) => (match[1] ?? match[2]) as string);
 }
 
-interface GraphNode {
-  file: string;
-  /** Comment-stripped source: what the bundler sees, not what a grep sees. */
-  code: string;
-  relative: { spec: string; target: string | null }[];
-}
-
 /**
  * Transitive relative-import graph of `entry`, resolved the way node's ESM
- * resolver does it: a relative specifier is a path, taken literally, with no
- * extension guessing. So an extensionless specifier shows up here as
- * unresolved — the same fact node reports as ERR_MODULE_NOT_FOUND.
+ * resolver does it: a relative specifier is a path, taken literally.
  */
-function walkGraph(entry: string): Map<string, GraphNode> {
-  const seen = new Map<string, GraphNode>();
+function walkGraph(entry: string): Map<string, string> {
+  const seen = new Map<string, string>();
   const queue = [entry];
   while (queue.length) {
     const file = queue.shift() as string;
     if (seen.has(file)) continue;
     const code = stripComments(readFileSync(file, 'utf8'));
-    const graphNode: GraphNode = { file, code, relative: [] };
+    seen.set(file, code);
     for (const spec of specifiers(code)) {
       if (!spec.startsWith('.')) continue;
       const path = resolve(dirname(file), spec);
-      const target = existsSync(path) ? path : null;
-      graphNode.relative.push({ spec, target });
-      if (target) queue.push(target);
+      expect(existsSync(path), `${file} imports missing ${spec}`).toBe(true);
+      queue.push(path);
     }
-    seen.set(file, graphNode);
   }
   return seen;
 }
 
-test('the bundle imports nothing: rig-c/core is inside it, and no node built-in is reached', () => {
-  // rig-c's `./core` entry is TypeScript source in a devDependency — a
-  // consumer has neither. So the bundle must carry the core's closure rather
-  // than import it, and must import nothing else either: a bare specifier left
-  // in `index.js` is a package the consumer was never told to install.
-  const graph = walkGraph(resolve(pkgDist, 'index.js'));
+test('both public entries share one self-contained runtime', () => {
+  const runtimeFile = resolve(pkgDist, '_play-runtime.js');
   const name = (file: string) => relative(pkgDist, file);
-  expect([...graph.keys()].map(name)).toEqual(['index.js']);
-  const code = (graph.values().next().value as GraphNode).code;
-  expect(specifiers(code)).toEqual([]);
-  expect(/\bimport\s*\(/.test(code)).toBe(false);
-  // rig-c states its core links no `node:` module; a browser bundle is held to it.
-  expect(code).not.toMatch(/['"]node:/);
-  // And the core really is inside: `openTrack` is what the player steps.
-  expect(code).toContain('function openTrack');
+  for (const entry of ['index.js', 'composed-take.js']) {
+    const entryFile = resolve(pkgDist, entry);
+    const graph = walkGraph(entryFile);
+    expect([...graph.keys()].map(name)).toEqual([entry, '_play-runtime.js']);
+    expect([...new Set(specifiers(graph.get(entryFile)!))]).toEqual(['./_play-runtime.js']);
+    const runtime = graph.get(runtimeFile)!;
+    expect(specifiers(runtime)).toEqual([]);
+    expect(runtime).toContain('function openTrack');
+    for (const [file, code] of graph) {
+      expect(code, name(file)).not.toMatch(/\bimport\s*\(|['"]node:/);
+    }
+  }
+  const filesByModule = (source: string) => BUNDLED_MODULES.filter(file => {
+    const map = JSON.parse(readFileSync(resolve(pkgDist, `${file}.map`), 'utf8')) as { sources: string[] };
+    return map.sources.some(path => path.endsWith(`/src/${source}.ts`));
+  });
+  for (const source of ['CanvasRenderer', 'MeshGlBlitter', 'player']) {
+    expect(filesByModule(source)).toEqual(['_play-runtime.js']);
+  }
+  for (const source of ['composed-camera', 'composed-take']) {
+    expect(filesByModule(source)).toEqual(['composed-take.js']);
+  }
   // The shipped types name nothing a consumer does not have — the adapter's
   // rig-c types are `@internal` and stripped (tsconfig.build.json).
   const declarations = readdirSync(pkgDist).filter((file) => file.endsWith('.d.ts'));
@@ -817,6 +851,18 @@ const CONSUMER_SOURCE = [
   "import type { ModelAssets, PosedFrame, PosedSlot, RigPlayerOptions, SlotIdentity, SlotIdentityReason, SlotIdentitySnapshot } from '@rig-c/play';",
   "import type { BoneAdjust, BoneAdjustContext, PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from '@rig-c/play';",
   "import type { TurnAxis, TurnDial } from '@rig-c/play';",
+  "import { ComposedTakeError, mountComposedTake, type CameraMode, type ComposedPlane, type ComposedTakeOptions, type MountedTake } from '@rig-c/play/composed-take';",
+  "const backdrop: ComposedPlane = { role: 'backdrop', slots: ['backdrop'] };",
+  "const options: ComposedTakeOptions = { modelUrl: '/take/skeleton.model.json', animation: 'idle', loop: true, planes: { backdrop, figure: { role: 'figure', slots: ['body'] } } };",
+  "export async function mountNamed(root: HTMLElement, mode: CameraMode): Promise<MountedTake> { const take = await mountComposedTake(root, { ...options, camera: mode }); const player: RigPlayer = take.player; const refusal: ComposedTakeError | null = take.refusal; void player; void refusal; return take; }",
+  "const slots = { background: ['backdrop'], figure: ['body'] };",
+  "const legacy = { modelUrl: '/take/skeleton.model.json', animation: 'idle', loop: true as const, slots };",
+  '// @ts-expect-error the published mount requires named planes',
+  'export const mountLegacy = (root: HTMLElement) => mountComposedTake(root, legacy);',
+  '// @ts-expect-error legacy slots are absent from the public options',
+  'export const legacyOptions: ComposedTakeOptions = legacy;',
+  '// @ts-expect-error named plane options do not accept a legacy slot partition',
+  'export const mountMixed = (root: HTMLElement) => mountComposedTake(root, { ...options, slots });',
   'export function turn(model: unknown, assets: ModelAssets, input: Partial<Record<TurnAxis, number>>): BoneAdjust { const dials: TurnDial[] = discoverTurnDials(model, assets.animations); return bones => { for (const dial of dials) bones.bone(dial.bone)[dial.channel] = normalizedDial(input[dial.axis] ?? 0, dial); }; }',
   "export const unaryAdjust: BoneAdjust = bones => { bones.bone('root').rotation = 3; };",
   "export const contextualAdjust: BoneAdjust = (bones, ctx: BoneAdjustContext) => { const time: number | null = ctx.trackTime; const animation: string | null = ctx.animation; const global: number = ctx.globalTime; bones.bone('root').rotation = time ?? global; void animation; };",

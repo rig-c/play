@@ -5,8 +5,8 @@ import { createServer } from 'node:net';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const compositor = 'samples/parallax-compositor.ts';
-const mount = 'samples/composed-take.ts';
+const compositor = 'src/composed-camera.ts';
+const mount = 'src/composed-take.ts';
 const fixture = 'tests/fixtures/composed-direction';
 const model = `${fixture}/overscan/skeleton.model.json`;
 const plantPattern = (row, name) => `C2-${row} ${name}`;

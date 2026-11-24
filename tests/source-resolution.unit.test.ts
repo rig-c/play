@@ -33,6 +33,23 @@ const ROOT_EXPORTS = [
   'revokeRegions',
   'unpackRegions',
 ];
+const COMPOSED_EXPORTS = ['ComposedTakeError', 'mountComposedTake'];
+const INSTALLED_EXPORTS = {
+  '.': { types: './dist/index.d.ts', import: './dist/index.js' },
+  './composed-take': { types: './dist/composed-take.d.ts', import: './dist/composed-take.js' },
+};
+const RESOLVE_ENTRIES = [
+  "const names = ['@rig-c/play', '@rig-c/play/composed-take'];",
+  'const entries = await Promise.all(names.map(async name => ({',
+  '  resolved: import.meta.resolve(name), keys: Object.keys(await import(name)).sort(),',
+  '})));',
+  'console.log(JSON.stringify(entries));',
+].join('\n');
+
+interface ResolvedEntry {
+  resolved: string;
+  keys: string[];
+}
 
 let sandbox = '';
 
@@ -185,11 +202,8 @@ test(
   assert.match(fetchAssets, /require\('\$ROOT\/package\.json'\)\.devDependencies\['@rig-c\/core'\]/);
 
   assert.deepEqual(manifest.exports, {
-    '.': {
-      '@rig-c/source': './src/index.ts',
-      types: './dist/index.d.ts',
-      import: './dist/index.js',
-    },
+    '.': { '@rig-c/source': './src/index.ts', ...INSTALLED_EXPORTS['.'] },
+    './composed-take': { '@rig-c/source': './src/composed-take.ts', ...INSTALLED_EXPORTS['./composed-take'] },
   });
 
   const legacyPathLiteral = /['"`](?:rig-c\/(?:core|runtime|plate|cli)|[^'"`\n]*node_modules\/rig-c(?:\/|['"`])|[^'"`\n]*\/rig-c\/src\/)/;
@@ -229,24 +243,29 @@ test(
     ensureSandbox();
     const pkg = resolve(sandbox, 'node_modules/@rig-c/play');
     const manifest = JSON.parse(readFileSync(resolve(pkg, 'package.json'), 'utf8'));
-    assert.deepEqual(manifest.exports, {
-      '.': { types: './dist/index.d.ts', import: './dist/index.js' },
-    });
+    assert.deepEqual(manifest.exports, INSTALLED_EXPORTS);
     assert.equal(existsSync(resolve(pkg, 'src')), false);
     const entry = resolve(sandbox, 'consumer.ts');
     writeFileSync(entry,
-      "import { RigPlayer, type ModelAssets } from '@rig-c/play';\nexport function check(root: HTMLElement, assets: ModelAssets): RigPlayer { return new RigPlayer(root, assets); }\n",
+      [
+        "import { RigPlayer, type ModelAssets } from '@rig-c/play';",
+        "import { mountComposedTake } from '@rig-c/play/composed-take';",
+        'export function check(root: HTMLElement, assets: ModelAssets): RigPlayer { return new RigPlayer(root, assets); }',
+        'export const mountTake = mountComposedTake;',
+        '',
+      ].join('\n'),
     );
 
-    const probe = "const m = await import('@rig-c/play'); console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play'), keys: Object.keys(m).sort() }));";
     for (const source of [false, true]) {
       const flags = source ? ['--conditions=@rig-c/source'] : [];
       for (const [runtime, args] of [['node', ['--input-type=module']], ['bun', []]] as const) {
-        const result = spawnSync(runtime, [...flags, ...args, '-e', probe], { cwd: sandbox, encoding: 'utf8' });
+        const result = spawnSync(runtime, [...flags, ...args, '-e', RESOLVE_ENTRIES], { cwd: sandbox, encoding: 'utf8' });
         assert.equal(result.status, 0, result.stderr);
-        const data = JSON.parse(result.stdout) as { resolved: string; keys: string[] };
-        assert.match(data.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
-        assert.deepEqual(data.keys, ROOT_EXPORTS);
+        const [root, composed] = JSON.parse(result.stdout) as ResolvedEntry[];
+        assert.match(root.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
+        assert.deepEqual(root.keys, ROOT_EXPORTS);
+        assert.match(composed.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/composed-take\.js$/);
+        assert.deepEqual(composed.keys, COMPOSED_EXPORTS);
       }
 
       for (const [moduleResolution, module] of [['bundler', 'ESNext'], ['nodenext', 'NodeNext']] as const) {
@@ -263,6 +282,7 @@ test(
         });
         assert.equal(result.status, 0, result.stdout + result.stderr);
         assert.match(result.stdout, /Module name '@rig-c\/play' was successfully resolved to '.*\/dist\/index\.d\.ts'/);
+        assert.match(result.stdout, /Module name '@rig-c\/play\/composed-take' was successfully resolved to '.*\/dist\/composed-take\.d\.ts'/);
         assert.doesNotMatch(result.stdout, /Failed to resolve under condition '@rig-c\/source'/);
       }
 
@@ -272,27 +292,29 @@ test(
         build: { write: false, lib: { entry, formats: ['es'], fileName: 'out' } },
       });
       const outputs = Array.isArray(vite) ? vite : [vite];
-      assert(outputs.some((result) => 'output' in result && result.output.some(
-        (chunk) => chunk.type === 'chunk' && Object.keys(chunk.modules).some(
-          (id) => id.endsWith('/node_modules/@rig-c/play/dist/index.js'),
-        ),
-      )));
+      const modules = outputs.flatMap(result => 'output' in result
+        ? result.output.flatMap(chunk => chunk.type === 'chunk' ? Object.keys(chunk.modules) : []) : []);
+      for (const file of ['_play-runtime.js', 'composed-take.js']) {
+        assert(modules.some(id => id.endsWith(`/node_modules/@rig-c/play/dist/${file}`)), file);
+      }
     }
 
-    // Plant the old dangling export in the installed copy. The default
-    // import above still works, so this control exercises condition selection.
+    // Plant a dangling source condition on each installed entry in turn.
     const manifestPath = resolve(pkg, 'package.json');
     const original = readFileSync(manifestPath, 'utf8');
-    writeFileSync(manifestPath, JSON.stringify({
-      ...manifest, exports: { '.': { '@rig-c/source': './src/index.ts', ...manifest.exports['.'] } },
-    }));
     try {
-      const missing = spawnSync('node', ['--conditions=@rig-c/source', '--input-type=module', '-e', probe], {
-        cwd: sandbox, encoding: 'utf8',
-      });
-      assert.notEqual(missing.status, 0);
-      assert.match(missing.stderr, /ERR_MODULE_NOT_FOUND/);
-      assert.match(missing.stderr, /src\/index\.ts/);
+      for (const [subpath, source] of [['.', './src/index.ts'], ['./composed-take', './src/composed-take.ts']]) {
+        writeFileSync(manifestPath, JSON.stringify({
+          ...manifest,
+          exports: { ...manifest.exports, [subpath]: { '@rig-c/source': source, ...manifest.exports[subpath] } },
+        }));
+        const missing = spawnSync('node', ['--conditions=@rig-c/source', '--input-type=module', '-e', RESOLVE_ENTRIES], {
+          cwd: sandbox, encoding: 'utf8',
+        });
+        assert.notEqual(missing.status, 0);
+        assert.match(missing.stderr, /ERR_MODULE_NOT_FOUND/);
+        assert(missing.stderr.includes(source.slice(2)));
+      }
     } finally {
       writeFileSync(manifestPath, original);
     }
@@ -300,7 +322,7 @@ test(
 );
 
 test(
-  'explicit @rig-c/source mode resolves src/index.ts without dist and observes live synthetic edits',
+  'explicit @rig-c/source mode resolves both entries without dist and observes live synthetic edits',
   { timeout: 60_000 },
   async () => {
   const linkedRoot = mkdtempSync(resolve(tmpdir(), 'play-linked-'));
@@ -328,20 +350,22 @@ test(
     });
     assert.notEqual(bunWithoutCondition.status, 0);
 
-    // With @rig-c/source, Bun resolves src/index.ts directly without dist/.
+    // With @rig-c/source, Bun resolves both source entries without dist/.
     const bunLinked = spawnSync(
       'bun',
       [
         '--conditions=@rig-c/source',
         '-e',
-        "const m = await import('@rig-c/play'); console.log(JSON.stringify({ resolved: import.meta.resolve('@rig-c/play'), keys: Object.keys(m).sort() }));",
+        RESOLVE_ENTRIES,
       ],
       { cwd: consumerDir, encoding: 'utf8' },
     );
     assert.equal(bunLinked.status, 0, bunLinked.stderr);
-    const bunInfo = JSON.parse(bunLinked.stdout) as { resolved: string; keys: string[] };
-    assert.match(bunInfo.resolved.replaceAll('\\', '/'), /\/play-checkout\/src\/index\.ts$/);
-    assert.deepEqual(bunInfo.keys, ROOT_EXPORTS);
+    const [root, composed] = JSON.parse(bunLinked.stdout) as ResolvedEntry[];
+    assert.match(root.resolved.replaceAll('\\', '/'), /\/play-checkout\/src\/index\.ts$/);
+    assert.deepEqual(root.keys, ROOT_EXPORTS);
+    assert.match(composed.resolved.replaceAll('\\', '/'), /\/play-checkout\/src\/composed-take\.ts$/);
+    assert.deepEqual(composed.keys, COMPOSED_EXPORTS);
 
     // Synthetic source-edit observation in the temp copy (no dist/, no build, no pack, real src/ untouched).
     const tempIndex = resolve(linkedPlay, 'src', 'index.ts');
@@ -366,7 +390,14 @@ test(
 
     writeFileSync(
       resolve(consumerDir, 'linked-entry.ts'),
-      "import { __SYNTHETIC_SOURCE_EDIT__, RigPlayer } from '@rig-c/play';\nexport const observed: 'observed-without-dist-build' = __SYNTHETIC_SOURCE_EDIT__;\nexport const player = RigPlayer;\n",
+      [
+        "import { __SYNTHETIC_SOURCE_EDIT__, RigPlayer } from '@rig-c/play';",
+        "import { mountComposedTake } from '@rig-c/play/composed-take';",
+        "export const observed: 'observed-without-dist-build' = __SYNTHETIC_SOURCE_EDIT__;",
+        'export const player = RigPlayer;',
+        'export const mountTake = mountComposedTake;',
+        '',
+      ].join('\n'),
     );
     const linkedTsconfig = resolve(consumerDir, 'tsconfig.linked.json');
     writeFileSync(
@@ -392,6 +423,7 @@ test(
     });
     assert.equal(tscEdited.status, 0, tscEdited.stdout + tscEdited.stderr);
     assert.match(tscEdited.stdout.replaceAll('\\', '/'), /\/play-checkout\/src\/index\.ts/);
+    assert.match(tscEdited.stdout.replaceAll('\\', '/'), /\/play-checkout\/src\/composed-take\.ts/);
     assert.doesNotMatch(tscEdited.stdout.replaceAll('\\', '/'), /\/play-checkout\/dist\//);
 
     const viteOut = await viteBuild({

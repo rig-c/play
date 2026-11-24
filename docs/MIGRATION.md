@@ -4,6 +4,10 @@ This guide covers adding live-frame consumers and the earlier migration notes
 moved from the README (#182): the 1.8 → 1.9 mesh backend default, and the
 `spine-html` 0.8 → 1.0 guide.
 
+## Importing a composed take
+
+Replace the `./samples/composed-take.js` import of `mountComposedTake` with `@rig-c/play/composed-take` and pass named `planes` as shown in the [composed take reference](REFERENCE.md#mounting-a-composed-take).
+
 ## Adding live-frame consumers
 
 `posedFrame()` keeps its detached snapshot contract. Existing callers may retain
