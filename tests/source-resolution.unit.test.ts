@@ -234,7 +234,7 @@ test(
         assert.match(data.resolved.replaceAll('\\', '/'), /\/node_modules\/@rig-c\/play\/dist\/index\.js$/);
         assert.deepEqual(data.keys, [
           'CanvasRenderer', 'DomRenderer', 'RigPlayer', 'createAtlasRegions',
-          'loadModel', 'readSetupMesh', 'revokeRegions', 'unpackRegions',
+          'discoverTurnDials', 'loadModel', 'normalizedDial', 'readSetupMesh', 'revokeRegions', 'unpackRegions',
         ]);
       }
 
