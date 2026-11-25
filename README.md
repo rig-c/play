@@ -18,7 +18,9 @@ as **one canvas** per player. It poses through rigc's bundled `@rig-c/core/runti
 and `@rig-c/core/core`, and links nothing from Esoteric Software.
 `rig-play` is the convenience install name; `spine-html` is the legacy install name.
 The compiler is [@rig-c/core](https://github.com/rig-c/core) (npm `@rig-c/core`)
-and the part generator [rig-c/parts](https://github.com/rig-c/parts).
+and the part generator [rig-c/parts](https://github.com/rig-c/parts). The
+[getting-started guide](https://github.com/rig-c/getting-started#the-whole-thing-in-one-glance)
+shows what each rig-c package takes and gives.
 
 ## Why
 
