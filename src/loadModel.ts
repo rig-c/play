@@ -14,6 +14,13 @@ import { type AtlasRegion, createAtlasRegions, type RegionImage, revokeRegions, 
  * through `rig-c/core` and reads nothing else.
  */
 
+/**
+ * The fetch call `loadModel` makes: the call signature only. `typeof fetch`
+ * also carries whatever statics the ambient typings add (bun-types adds
+ * `preconnect`), which a wrapper or a test double cannot satisfy.
+ */
+export type ModelFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export interface LoadModelOptions {
   /** URL of the compiled model document (`skeleton.model.json`). */
   modelUrl: string;
@@ -31,7 +38,7 @@ export interface LoadModelOptions {
    */
   crossOrigin?: string;
   /** fetch implementation, for custom headers or a test double. */
-  fetch?: typeof globalThis.fetch;
+  fetch?: ModelFetch;
   /**
    * What the region cut produces — the rigid tier's per-region bitmaps, which
    * only the DOM mode draws. `'atlas'`: opt-in page-backed rigid canvases,
@@ -335,7 +342,7 @@ export function readSetsText(text: string, where: string, doc: CompiledDocument)
 }
 
 async function loadSets(
-  fetchImpl: typeof globalThis.fetch,
+  fetchImpl: ModelFetch,
   modelUrl: string,
   setsUrlOption: string | null | undefined,
   doc: CompiledDocument,
@@ -380,7 +387,7 @@ function resolveAgainstModel(pageName: string, modelUrl: string): string {
   return new URL(pageName, new URL(modelUrl, document.baseURI)).href;
 }
 
-async function fetchText(fetchImpl: typeof globalThis.fetch, url: string): Promise<string> {
+async function fetchText(fetchImpl: ModelFetch, url: string): Promise<string> {
   const response = await fetchImpl(url);
   if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.status}`);
   return response.text();
