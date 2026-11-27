@@ -1,0 +1,275 @@
+{
+  "spec": "spine-parts-scene/1",
+  "canvas": {
+    "width": 128,
+    "height": 128
+  },
+  "plates": [
+    {
+      "name": "backdrop",
+      "image": "inputs/background-camera-marked.png",
+      "at": [
+        -15,
+        -15
+      ],
+      "opaque_backdrop": true,
+      "provenance": "generated",
+      "note": "Public synthetic overscan with opaque registration marks for camera validation."
+    },
+    {
+      "name": "foreground",
+      "image": "inputs/foreground.png",
+      "at": [
+        14,
+        88
+      ],
+      "provenance": "generated"
+    }
+  ],
+  "order": [
+    "backdrop",
+    "actor",
+    "foreground"
+  ],
+  "characters": [
+    {
+      "id": "actor",
+      "build": "evidence/compose-character",
+      "offset": [
+        16,
+        16
+      ],
+      "scale": 0.75,
+      "placement_pivot": true
+    }
+  ],
+  "animations": {
+    "idle": {
+      "duration": 4,
+      "tracks": [
+        {
+          "bone": "foreground",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 2,
+              "v": [
+                3,
+                0
+              ]
+            },
+            {
+              "t": 4,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "backdrop",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 1.07,
+              "v": [
+                6,
+                -4
+              ]
+            },
+            {
+              "t": 2.61,
+              "v": [
+                -5,
+                3
+              ]
+            },
+            {
+              "t": 4,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "shot": {
+      "duration": 0.73,
+      "loop": false,
+      "tracks": [
+        {
+          "bone": "backdrop",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 0.43,
+              "v": [
+                -6,
+                4
+              ]
+            },
+            {
+              "t": 0.67,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 0.73,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        },
+        {
+          "bone": "actor:placement",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 0.43,
+              "v": [
+                7,
+                -3
+              ]
+            },
+            {
+              "t": 0.67,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 0.73,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "camera": {
+    "backdrop": "backdrop",
+    "tracks": {
+      "idle": [
+        {
+          "t": 0,
+          "pan": [
+            0,
+            0
+          ],
+          "zoom": 1.0625,
+          "ease": "actor:open"
+        },
+        {
+          "t": 0.37,
+          "pan": [
+            9,
+            -6
+          ],
+          "zoom": 1.28,
+          "ease": "stepped"
+        },
+        {
+          "t": 1.13,
+          "pan": [
+            -5,
+            5
+          ],
+          "zoom": 1.14
+        },
+        {
+          "t": 2.61,
+          "pan": [
+            5,
+            4
+          ],
+          "zoom": 1.16,
+          "ease": "actor:shut"
+        },
+        {
+          "t": 4,
+          "pan": [
+            0,
+            0
+          ],
+          "zoom": 1.0625
+        }
+      ],
+      "shot": [
+        {
+          "t": 0,
+          "pan": [
+            -4,
+            3
+          ],
+          "zoom": 1.1,
+          "ease": "actor:shut"
+        },
+        {
+          "t": 0.29,
+          "pan": [
+            4,
+            -6
+          ],
+          "zoom": 1.24,
+          "ease": "stepped"
+        },
+        {
+          "t": 0.57,
+          "pan": [
+            -7,
+            7
+          ],
+          "zoom": 1.12,
+          "ease": "actor:open"
+        },
+        {
+          "t": 0.73,
+          "pan": [
+            11,
+            -9
+          ],
+          "zoom": 1.4
+        }
+      ]
+    }
+  }
+}

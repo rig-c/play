@@ -79,7 +79,7 @@ function mount(page: Page, backend: Backend, overrides: Partial<MountOptions> = 
   return page.evaluate(options => (window as ComposedHarnessWindow).composedTest.mount(options), mountOptions(backend, overrides));
 }
 
-function mountNamed(page: Page, backend: Backend, modelUrl: string, overrides: Partial<NamedMountOptions> = {}) {
+function mountNamed(page: Page, backend: Backend, modelUrl: string, overrides: Partial<Omit<NamedMountOptions, 'loop' | 'sceneReportUrl'>> = {}) {
   const options: NamedMountOptions = {
     modelUrl, animation: 'idle', loop: true, planes: NAMED_PLANES, backend,
     camera: 'parallax', maxDisplacement: { x: 64, y: 0 }, transitionMs: 120, pointerTurn: false,

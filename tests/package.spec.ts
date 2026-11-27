@@ -181,13 +181,16 @@ test('the package entry resolves by name in node and exposes its public API', ()
   ]);
 });
 
-test('the composed take entry resolves by name in node and exposes only its two runtime exports', () => {
+test('the composed take entry resolves by name in node and exposes its runtime exports', () => {
   const run = probe(
     'probe-composed-take.mjs',
     "const m = await import('@rig-c/play/composed-take');\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
   );
   expect(run.status, run.stderr).toBe(0);
-  expect(JSON.parse(run.stdout)).toEqual(['ComposedTakeError', 'mountComposedTake']);
+  expect(JSON.parse(run.stdout)).toEqual([
+    'ComposedTakeError', 'SCENE_CAMERA_REPORT_MAX_BYTES', 'bindSceneCamera', 'mountComposedTake',
+    'renderSceneCameraFrame', 'sceneCameraProjection',
+  ]);
 });
 
 test('the binary subpath is gone: the package reads compiled models, not Spine exports', () => {
@@ -219,7 +222,7 @@ test('the exports map refuses deep imports, including the shared runtime', () =>
  * their shared runtime, and declarations with a map for every emitted file.
  */
 const BUNDLED_MODULES = ['_play-runtime.js', 'composed-take.js', 'index.js'];
-const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'composed-camera', 'composed-take', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame', 'turnDials'];
+const DECLARED_MODULES = ['CanvasRenderer', 'DomRenderer', 'DomTexture', 'MeshGlBlitter', 'composed-camera', 'composed-take', 'index', 'liveFrame', 'liveFrameSource', 'loadModel', 'pixelRatio', 'player', 'posedFrame', 'scene-camera', 'turnDials'];
 const LIBRARY_FILES = [...BUNDLED_MODULES, ...DECLARED_MODULES.map(name => `${name}.d.ts`)]
   .flatMap(file => [file, `${file}.map`]).sort();
 const PACKED_EXPORTS = {
@@ -832,7 +835,7 @@ test('both public entries share one self-contained runtime', () => {
   for (const source of ['CanvasRenderer', 'MeshGlBlitter', 'player']) {
     expect(filesByModule(source)).toEqual(['_play-runtime.js']);
   }
-  for (const source of ['composed-camera', 'composed-take']) {
+  for (const source of ['composed-camera', 'composed-take', 'scene-camera']) {
     expect(filesByModule(source)).toEqual(['composed-take.js']);
   }
   // The shipped types name nothing a consumer does not have — the adapter's
@@ -852,9 +855,23 @@ const CONSUMER_SOURCE = [
   "import type { BoneAdjust, BoneAdjustContext, PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from '@rig-c/play';",
   "import type { TurnAxis, TurnDial } from '@rig-c/play';",
   "import { ComposedTakeError, mountComposedTake, type CameraMode, type ComposedPlane, type ComposedTakeOptions, type MountedTake } from '@rig-c/play/composed-take';",
+  "import { bindSceneCamera, renderSceneCameraFrame, SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraProjection, type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame } from '@rig-c/play/composed-take';",
+  'export const reportBudget: number = SCENE_CAMERA_REPORT_MAX_BYTES;',
   "const backdrop: ComposedPlane = { role: 'backdrop', slots: ['backdrop'] };",
   "const options: ComposedTakeOptions = { modelUrl: '/take/skeleton.model.json', animation: 'idle', loop: true, planes: { backdrop, figure: { role: 'figure', slots: ['body'] } } };",
   "export async function mountNamed(root: HTMLElement, mode: CameraMode): Promise<MountedTake> { const take = await mountComposedTake(root, { ...options, camera: mode }); const player: RigPlayer = take.player; const refusal: ComposedTakeError | null = take.refusal; void player; void refusal; return take; }",
+  "export const mountOneShot = (root: HTMLElement) => mountComposedTake(root, { ...options, sceneReportUrl: '/take/scene.json', loop: false });",
+  'export function drawAuthored(renderer: CanvasRenderer, pose: PosedFrame, report: unknown, assets: ModelAssets, sha256: string): SceneCameraFrame | null {',
+  '  const bound: BoundSceneCamera | null = bindSceneCamera(report, { sha256, stage: assets.stage, animations: assets.animations });',
+  "  const clock: SceneCameraClock = { endpoint: 'terminal' };",
+  '  const sample = bound?.sample(options.animation, clock) ?? null;',
+  '  if (sample) {',
+  '    renderSceneCameraFrame(renderer, pose, sample, { width: 128, height: 128 });',
+  '    const projection = sceneCameraProjection(sample);',
+  '    projection.outputToWorld(projection.worldToOutput({ x: 0, y: 0 }));',
+  '  }',
+  '  return sample;',
+  '}',
   "const slots = { background: ['backdrop'], figure: ['body'] };",
   "const legacy = { modelUrl: '/take/skeleton.model.json', animation: 'idle', loop: true as const, slots };",
   '// @ts-expect-error the published mount requires named planes',

@@ -4,9 +4,16 @@ import { cameraLimits, createCameraHandoff, easeCamera, planeOffsets, planeShift
 import { loadModel, type ModelAssets, type ReadDocument } from './loadModel.js';
 import { RigPlayer, type BoneAdjust } from './player.js';
 import { frameOf, frameSource, type PosedClip, type PosedFrame, type PosedRegion, type PosedSlot } from './posedFrame.js';
+import {
+  bindSceneCameraReport, checkSceneCameraReportSize, decodeSceneCameraReport, projectSceneCamera,
+  SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraDriftEvidence, sceneCameraModelDigest, sceneCameraTransform,
+  type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame, type SceneCameraRefusal,
+} from './scene-camera.js';
 import { discoverTurnDials, normalizedDial, type TurnDial } from './turnDials.js';
 
 export type { CameraMode } from './composed-camera.js';
+export { SCENE_CAMERA_REPORT_MAX_BYTES } from './scene-camera.js';
+export type { BoundSceneCamera, SceneCameraClock, SceneCameraFrame } from './scene-camera.js';
 
 type Point = { readonly x: number; readonly y: number };
 type Offsets = Readonly<Record<string, Point>>;
@@ -24,7 +31,6 @@ export interface ComposedPlane {
 interface TakeOptions {
   modelUrl: string;
   animation: string;
-  loop: true;
   camera?: CameraMode;
   /** Maximum camera excursion in CSS pixels, before per-plane gains. */
   maxDisplacement?: Point;
@@ -33,8 +39,9 @@ interface TakeOptions {
   autoStart?: boolean;
 }
 
-type LegacyTakeOptions = TakeOptions & { slots: Bindings; planes?: never; autoSweep?: never; transitionMs?: never; pointerTurn?: never };
-export type ComposedTakeOptions = TakeOptions & {
+type TakeLoop = { loop: true; sceneReportUrl?: string } | { loop: boolean; sceneReportUrl: string };
+type LegacyTakeOptions = TakeOptions & TakeLoop & { slots: Bindings; planes?: never; autoSweep?: never; transitionMs?: never; pointerTurn?: never };
+export type ComposedTakeOptions = TakeOptions & TakeLoop & {
   planes: Readonly<Record<string, ComposedPlane>>;
   autoSweep?: { periodSeconds: number; maxDisplacement: Point };
   transitionMs?: number;
@@ -45,12 +52,36 @@ type RuntimeTakeOptions = LegacyTakeOptions | (ComposedTakeOptions & { slots?: n
 
 type Refusal = 'COMPOSED_STAGE_REQUIRED' | 'COMPOSED_LOOP_REQUIRED' | 'COMPOSED_SLOT_PARTITION'
   | 'COMPOSED_CROSS_PLANE_CLIP' | 'COMPOSED_BACKDROP_COVERAGE' | 'COMPOSED_INVALID_DISPLACEMENT'
-  | 'COMPOSED_INVALID_CAMERA' | 'COMPOSED_PLATE_TRACK';
+  | 'COMPOSED_INVALID_CAMERA' | 'COMPOSED_PLATE_TRACK' | SceneCameraRefusal;
 
 export class ComposedTakeError extends Error {
   constructor(readonly code: Refusal, detail: string, cause?: unknown) {
     super(`${code}: ${detail}`, { cause });
   }
+}
+
+function refuseSceneCamera(code: SceneCameraRefusal, detail: string, cause?: unknown): never {
+  throw new ComposedTakeError(code, detail, cause);
+}
+
+/**
+ * Bind a UTF-8 Uint8Array or a parsed report to the consumed model's SHA-256.
+ * Callers supplying a parsed report enforce the report byte budget before parsing.
+ */
+export function bindSceneCamera(
+  report: unknown,
+  model: { sha256: string; stage: CanvasViewport | null; animations: readonly { name: string; duration: number }[] },
+): BoundSceneCamera | null {
+  return bindSceneCameraReport(report, model, refuseSceneCamera);
+}
+
+/** Map world points to and from fixed, authored output pixels, with Y down. */
+export function sceneCameraProjection(frame: SceneCameraFrame): {
+  worldToOutput(p: { x: number; y: number }): { x: number; y: number };
+  outputToWorld(p: { x: number; y: number }): { x: number; y: number };
+  outputClip: { x: number; y: number; width: number; height: number };
+} {
+  return projectSceneCamera(frame, refuseSceneCamera);
 }
 
 type TurnValue = Pick<TurnDial, 'axis' | 'min' | 'max'> & {
@@ -162,7 +193,7 @@ function bindSlots(assets: ModelAssets, options: RuntimeTakeOptions): Map<string
   return planes;
 }
 
-function checkFrame(frame: PosedFrame, planes: ReadonlyMap<string, string>, backdropPlane = 'background'): PosedSlot[] {
+function checkFrame(frame: PosedFrame, planes: ReadonlyMap<string, string>, backdropPlane = 'background', allowSharedClip = false): PosedSlot[] {
   const seen = new Set<string>();
   const clipPlanes = new Map<PosedClip, string>();
   const backdrop: PosedSlot[] = [];
@@ -172,7 +203,7 @@ function checkFrame(frame: PosedFrame, planes: ReadonlyMap<string, string>, back
       throw new ComposedTakeError('COMPOSED_SLOT_PARTITION', `unbound or repeated posed slot ${JSON.stringify(slot.slot)}`);
     }
     seen.add(slot.slot);
-    if (slot.clip) {
+    if (slot.clip && !allowSharedClip) {
       const owner = clipPlanes.get(slot.clip);
       if (owner !== undefined && owner !== plane) {
         throw new ComposedTakeError('COMPOSED_CROSS_PLANE_CLIP', `one clip covers ${owner} and ${plane} at ${JSON.stringify(slot.slot)}`);
@@ -188,12 +219,12 @@ function trackError(id: string, detail: string): ComposedTakeError {
   return new ComposedTakeError('COMPOSED_PLATE_TRACK', `plane ${JSON.stringify(id)} ${detail}`);
 }
 
-function namedPlanes(assets: ModelAssets, options: RuntimeTakeOptions): NamedPlanes | undefined {
+function namedPlanes(assets: ModelAssets, options: RuntimeTakeOptions, animationName = options.animation): NamedPlanes | undefined {
   if (!options.planes) return undefined;
   const read = assets.document as ReadDocument;
   const doc = underNoSkin(read.doc);
   const skin = doc.skins.find(skin => skin.name === 'default');
-  const animation = doc.animations.find(animation => animation.name === options.animation)!;
+  const animation = doc.animations.find(animation => animation.name === animationName)!;
   const setup = poseRawSetup(doc);
   const setupFrame = frameOf(frameSource(doc, read.parsed), setup);
   const bones = new Map(doc.bones.map(bone => [bone.name, bone]));
@@ -326,7 +357,7 @@ function transformFrame(
     clipInStockSpace?: boolean;
   } = {},
 ): PosedFrame {
-  const clips = new Map<PosedClip, PosedClip>();
+  const clips = new Map<PosedClip, { shift: Point; clip: PosedClip }[]>();
   const native = origin.x === 0 && origin.y === 0 && scale.x === 1 && scale.y === 1;
   return { order: frame.order.map(slot => {
     const shift = shiftFor(slot);
@@ -340,9 +371,17 @@ function transformFrame(
       : (value - delta.y - origin.y) * scale.y);
     let clip = slot.clip;
     if (clip) {
-      const transformed = clips.get(clip) ?? { ...clip, polygon: transform(clip.polygon) };
-      clips.set(clip, transformed);
-      clip = transformed;
+      // Shared authored clips move with each receiving slot. Equal plane
+      // offsets can share a transformed polygon and the renderer's clip cache.
+      const variants = clips.get(clip) ?? [];
+      const existing = variants.find(entry => entry.shift.x === shift.x && entry.shift.y === shift.y);
+      if (existing) clip = existing.clip;
+      else {
+        const source = clip;
+        clip = { ...source, polygon: transform(source.polygon) };
+        variants.push({ shift, clip });
+        clips.set(source, variants);
+      }
     }
     const positioned: PosedSlot = slot.kind === 'mesh'
       ? { ...slot, clip, vertices: transform(slot.vertices) }
@@ -355,6 +394,47 @@ function transformFrame(
       : slot;
     return rememberComposedClip(positioned, source, shift, origin, scale);
   }) };
+}
+
+function drawSceneCamera(
+  renderer: CanvasRenderer,
+  pose: PosedFrame,
+  frame: SceneCameraFrame,
+  backing?: { width: number; height: number },
+  shiftFor: (slot: PosedSlot) => Point = () => NEUTRAL,
+): void {
+  const { origin, zoom, width, height } = sceneCameraTransform(frame, refuseSceneCamera);
+  const pixels = backing === undefined ? { width: Math.ceil(width), height: Math.ceil(height) } : backing;
+  const backingDimension = (value: number) => Number.isInteger(value) && value > 0 && value <= 0xffffffff;
+  if (!pixels || !backingDimension(pixels.width) || !backingDimension(pixels.height)) {
+    refuseSceneCamera('SCENE_CAMERA_VIEW_INVALID', 'the backing needs positive integer canvas dimensions');
+  }
+  const scale = { x: zoom * (pixels.width / width), y: zoom * (pixels.height / height) };
+  if (!Object.values(scale).every(value => Number.isFinite(value) && value > 0)) {
+    refuseSceneCamera('SCENE_CAMERA_VIEW_INVALID', 'the view cannot be projected into this backing');
+  }
+  // Use an integer target rect and project the pose first, so CanvasRenderer
+  // does not round the world-space camera edges. Canvas2D clips in stock space.
+  const projected = transformFrame(pose, shiftFor, { origin, scale, clipInStockSpace: true });
+  const { viewport, pixelRatio } = renderer;
+  try {
+    renderer.viewport = { x: 0, y: -pixels.height, width: pixels.width, height: pixels.height };
+    renderer.pixelRatio = 1;
+    renderer.render(projected);
+  } finally {
+    renderer.viewport = viewport;
+    renderer.pixelRatio = pixelRatio;
+  }
+}
+
+/** Draw a pose into the camera output, optionally scaling to an integer backing size. */
+export function renderSceneCameraFrame(
+  renderer: CanvasRenderer,
+  pose: PosedFrame,
+  frame: SceneCameraFrame,
+  backing?: { width: number; height: number },
+): void {
+  drawSceneCamera(renderer, pose, frame, backing);
 }
 
 type Layout = {
@@ -580,11 +660,85 @@ function checkPlateEnvelopes(
   }
 }
 
+async function fetchSceneReport(url: string): Promise<unknown> {
+  if (typeof url !== 'string' || !url.trim()) {
+    return refuseSceneCamera('SCENE_CAMERA_REPORT_INVALID', 'expected a scene report URL');
+  }
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.body) throw new Error('missing response body');
+    const reader = response.body.getReader();
+    let bytes = new Uint8Array(0);
+    let total = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const observed = total + value.byteLength;
+        checkSceneCameraReportSize(observed, refuseSceneCamera);
+        if (observed > bytes.length) {
+          const capacity = Math.min(SCENE_CAMERA_REPORT_MAX_BYTES, Math.max(observed, bytes.length * 2, 4096));
+          const grown = new Uint8Array(capacity);
+          grown.set(bytes.subarray(0, total));
+          bytes = grown;
+        }
+        bytes.set(value, total);
+        total = observed;
+      }
+    } catch (error) {
+      void reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    return decodeSceneCameraReport(bytes.subarray(0, total), refuseSceneCamera);
+  } catch (error) {
+    if (error instanceof ComposedTakeError) throw error;
+    return refuseSceneCamera('SCENE_CAMERA_REPORT_INVALID', `could not read the scene report at ${url}`, error);
+  }
+}
+
+async function hashModelResponse(response: Response): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (typeof subtle?.digest !== 'function') {
+    return refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH',
+      'could not compute SHA-256 for the exact model response bytes because Web Crypto subtle.digest is unavailable (browsers require a secure context)');
+  }
+  try {
+    const bytes = await response.clone().arrayBuffer();
+    const digest = await subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  } catch (error) {
+    return refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH', 'could not compute SHA-256 for the exact model response bytes with Web Crypto', error);
+  }
+}
+
+function keyedPlaneGains(planes: ComposedTakeOptions['planes'] | undefined): ReadonlyMap<string, number> | undefined {
+  if (!planes) return undefined;
+  const gains = new Map<string, number>();
+  for (const [id, { role, gain, baked }] of Object.entries(planes)) {
+    if (gain !== undefined && !Number.isFinite(gain)) {
+      throw new ComposedTakeError('COMPOSED_INVALID_DISPLACEMENT', `plane ${JSON.stringify(id)} needs a finite gain`);
+    }
+    if (role === 'figure' && (baked !== undefined || (gain !== undefined && gain !== 0))) {
+      throw trackError(id, 'must stay at focal gain 0 without a baked camera track');
+    }
+    // Keyed draws retain all posed plate motion. Gains control only the
+    // additive screen-space pointer and sweep layer.
+    gains.set(id, gain ?? (role === 'backdrop' ? BACKDROP_GAIN : 0));
+  }
+  return gains;
+}
+
 export function mountComposedTake(root: HTMLElement, options: ComposedTakeOptions): Promise<MountedTake>;
 export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeOptions): Promise<MountedTake> {
   const initial = options.camera ?? 'fixed';
   checkMode(initial);
-  if (options.loop !== true) throw new ComposedTakeError('COMPOSED_LOOP_REQUIRED', 'declare the existing take as loop: true');
+  const { loop, sceneReportUrl } = options;
+  if (loop !== true && (loop !== false || sceneReportUrl === undefined)) {
+    throw new ComposedTakeError('COMPOSED_LOOP_REQUIRED', 'declare the existing take as loop: true');
+  }
   const override = options.maxDisplacement;
   const validLimit = (limit: Point) => limit && Number.isFinite(limit.x) && limit.x >= 0
     && Number.isFinite(limit.y) && limit.y >= 0;
@@ -603,8 +757,23 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
   if (!Number.isFinite(options.transitionMs ?? DEFAULT_TRANSITION_MS) || !(transitionSeconds > 0)) {
     throw new ComposedTakeError('COMPOSED_INVALID_DISPLACEMENT', 'transitionMs must be positive and finite');
   }
-  const assets = await loadModel({ modelUrl: options.modelUrl, regions: 'none', setsUrl: null, crossOrigin: 'anonymous' }).catch(error => {
+  const report = sceneReportUrl === undefined ? undefined : await fetchSceneReport(sceneReportUrl);
+  const digest = sceneReportUrl === undefined ? null : sceneCameraModelDigest(report, refuseSceneCamera);
+  if (digest === null && loop !== true) throw new ComposedTakeError('COMPOSED_LOOP_REQUIRED', 'declare the existing take as loop: true');
+  let sha256 = '';
+  const assets = await loadModel({
+    modelUrl: options.modelUrl, regions: 'none', setsUrl: null, crossOrigin: 'anonymous',
+    ...(digest === null ? {} : { fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      if (response.ok) {
+        sha256 = await hashModelResponse(response);
+        if (sha256 !== digest) refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH', 'the scene camera SHA-256 does not match the consumed model');
+      }
+      return response;
+    } }),
+  }).catch(error => {
     if (error instanceof Error && /(?:problem\(s\): |; )(?:stage[.: ]|section "stage" is missing(?=; | — |$))/.test(error.message)) {
+      if (digest !== null) refuseSceneCamera('SCENE_CAMERA_VIEW_INVALID', 'the compiled model needs a valid stage', error);
       throw new ComposedTakeError('COMPOSED_STAGE_REQUIRED', 'the compiled model needs a valid stage', error);
     }
     throw error;
@@ -614,14 +783,39 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
   let player: RigPlayer | undefined;
   let audit: CanvasRenderer | undefined;
   try {
+    const bound = digest === null ? null : bindSceneCamera(report, { sha256, stage: assets.stage, animations: assets.animations });
+    const driftEvidence = bound && sceneCameraDriftEvidence(report, refuseSceneCamera);
+    function cameraFor(animation: string, animationTime: number, loop: boolean): SceneCameraFrame | null {
+      const view = bound?.sample(animation, { basis: 'compiled', seconds: animationTime }) ?? null;
+      if (view && view.loop !== loop) {
+        refuseSceneCamera('SCENE_CAMERA_CLIP_MISMATCH', `loop must match the authored camera track for ${JSON.stringify(animation)}`);
+      }
+      return view;
+    }
+    const initialView = cameraFor(options.animation, 0, loop);
+    if (!initialView && loop !== true) throw new ComposedTakeError('COMPOSED_LOOP_REQUIRED', 'declare the existing take as loop: true');
     const stage = requireStage(assets.stage);
     const take = assets.animations.find(animation => animation.name === options.animation);
-    if (!take || !Number.isFinite(take.duration) || take.duration <= 0) {
+    if (!take || (!initialView && (!Number.isFinite(take.duration) || take.duration <= 0))) {
       throw new ComposedTakeError('COMPOSED_LOOP_REQUIRED', `no positive-duration animation named ${JSON.stringify(options.animation)}`);
     }
+    const initialAnimation = take.name;
     const planes = bindSlots(assets, options);
-    const named = namedPlanes(assets, options);
-    const dials = named && options.pointerTurn !== false
+    const namedInput = options.planes !== undefined;
+    const backdropPlane = Object.entries(options.planes ?? {}).find(([, plane]) => plane.role === 'backdrop')?.[0] ?? 'background';
+    const legacyPlanes = new Map<string, NamedPlanes>();
+    function planesFor(animation: string): NamedPlanes | undefined {
+      if (!namedInput) return undefined;
+      let named = legacyPlanes.get(animation);
+      if (!named) {
+        named = namedPlanes(assets, options, animation)!;
+        legacyPlanes.set(animation, named);
+      }
+      return named;
+    }
+    const initialNamed = initialView ? undefined : planesFor(initialAnimation);
+    let keyedGains = initialView ? keyedPlaneGains(options.planes) : undefined;
+    const dials = namedInput && options.pointerTurn !== false
       ? discoverTurnDials((assets.document as ReadDocument).parsed, assets.animations) : [];
     const handoff = createCameraHandoff(transitionSeconds);
     let mode: CameraMode = initial;
@@ -660,26 +854,42 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     root.appendChild(surface);
     const poser = player = new RigPlayer(surface, assets, { mode: 'canvas', adjust: dials.length ? adjustTurn : null });
     const renderer = poser.renderer as CanvasRenderer;
-    const coverage = audit = new CanvasRenderer(doc.createElement('div'), assets.pageImages);
-    renderer.backend = coverage.backend = options.backend ?? 'webgl';
+    const backend = options.backend ?? 'webgl';
+    renderer.backend = backend;
+    let coverageChecks: ReturnType<typeof createCoverageChecks> | undefined;
+    function createCoverageChecks() {
+      const renderer = audit = new CanvasRenderer(doc.createElement('div'), assets.pageImages);
+      renderer.backend = backend;
+      const auditBackdrop = backdropAlphaAudit(renderer);
+      return { renderer, auditBackdrop, requireCoverage: backdropGuard(auditBackdrop, stage) };
+    }
+    if (!initialView) coverageChecks = createCoverageChecks();
     const canvas = renderer.canvas;
-    poser.play(take.name, { loop: true });
+    poser.play(initialAnimation, { loop });
 
     let offsets: Offsets = planeOffsets(NEUTRAL, 'fixed');
     let camera = NEUTRAL;
     let target = NEUTRAL;
     let hover: number | undefined;
     let layout: Layout;
+    let keyedAdmission: { animation: string; layout: Layout; mode: CameraMode } | undefined;
+    let legacyLayoutPending = true;
+    let drawingKeyed = initialView !== null;
     let refusal: ComposedTakeError | null = null;
     let stopped = false;
     let disposed = false;
     let frameId: number | undefined;
     const window = doc.defaultView!;
-    const auditBackdrop = backdropAlphaAudit(coverage);
-    const requireCoverage = backdropGuard(auditBackdrop, stage);
     const origin = { x: stage.x, y: stageTop(stage) };
     const autoStart = options.autoStart !== false;
     let lastCameraAt = window.performance.now();
+
+    function applyLegacyLayout(): void {
+      const { native, width, height } = layout;
+      renderer.viewport = native ? stage : { x: 0, y: -height, width, height };
+      renderer.pixelRatio = native ? width / stage.width : 1;
+      legacyLayoutPending = false;
+    }
 
     function measure(): void {
       const box = surface.getBoundingClientRect();
@@ -694,8 +904,8 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         && stage.width * pixelRatio === width && stage.height * pixelRatio === height;
       const excursion = explicit ?? cameraLimits(cssWidth, cssHeight);
       layout = { cssWidth, cssHeight, width, height, dpr, native, excursion };
-      renderer.viewport = native ? stage : { x: 0, y: -height, width, height };
-      renderer.pixelRatio = native ? pixelRatio : 1;
+      legacyLayoutPending = true;
+      if (!bound) applyLegacyLayout();
     }
 
     function cameraExcursionFor(next: CameraMode): Point {
@@ -706,7 +916,9 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
 
     const cssTarget = (point: Point, excursion: Point): Point => ({ x: point.x * excursion.x, y: point.y * excursion.y });
 
-    function prepareFrame(frame: PosedFrame, plates: LivePlate[], next: CameraMode, excursion: Point): { frame: PosedFrame; offsets: Offsets } {
+    function prepareFrame(
+      frame: PosedFrame, plates: LivePlate[], next: CameraMode, excursion: Point, named: NamedPlanes | undefined,
+    ): { frame: PosedFrame; offsets: Offsets } {
       const worldX = stage.width / layout.cssWidth;
       const worldY = stage.height / layout.cssHeight;
       const centered = new Map<string, PosedRegion>();
@@ -769,7 +981,10 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       return { frame: positioned, offsets: frameOffsets };
     }
 
-    function checkBackdropAlpha(frame: PosedFrame, { figureSlots, backdrop }: NamedPlanes, next: CameraMode): void {
+    function checkBackdropAlpha(
+      frame: PosedFrame, { figureSlots, backdrop }: NamedPlanes, next: CameraMode,
+      coverage: CanvasRenderer, auditBackdrop: ReturnType<typeof backdropAlphaAudit>,
+    ): void {
       // Hidden figure slots still mark the boundary between foreground and backdrop.
       const isFigure = (slot: { slot: string }) => figureSlots.has(slot.slot);
       const figures = frame.order.filter(isFigure);
@@ -790,49 +1005,121 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       }
     }
 
-    function currentFrame(next: CameraMode) {
+    function currentFrame(next: CameraMode, named: NamedPlanes | undefined, keyed: boolean) {
       syncTurn(next);
       // Paused, held or zero-time steps may retain the prior pose.
       if (posedTurnInput !== turnInput) poser.repose();
       const frame = poser.posedFrame(null);
-      if (named) return { frame, backdrop: checkFrame(frame, planes, named.backdrop) };
-      return { frame, backdrop: checkFrame(frame, planes) };
+      return { frame, backdrop: checkFrame(frame, planes, named?.backdrop, keyed) };
     }
 
-    function drawMode(frame: PosedFrame, backdrop: PosedSlot[], next: CameraMode, switching: boolean): void {
-      const plates = named ? livePlates(frame, named, next) : [];
+    function requireKeyedCoverage(view: SceneCameraFrame, next: CameraMode, excursion: Point): void {
+      if (!driftEvidence || next === 'fixed') return;
+      const sweep = keyedGains && next === 'parallax' ? sweepLimit : NEUTRAL;
+      if (excursion.x === 0 && excursion.y === 0 && sweep.x === 0 && sweep.y === 0) return;
+      const gain = next === 'pan' ? 1 : keyedGains?.get(backdropPlane) ?? BACKDROP_GAIN;
+      const sampledPlane = planes.get(driftEvidence.backdrop);
+      if (gain === 0 && sampledPlane !== undefined && keyedGains?.get(sampledPlane) === 0) return;
+
+      const context = `take ${JSON.stringify(view.animation)}, sampled backdrop slot ${JSON.stringify(driftEvidence.backdrop)}, `
+        + `pointer excursion ±[${excursion.x}, ${excursion.y}] CSS px, sweep endpoint [${sweep.x}, ${sweep.y}] CSS px, backdrop gain ${gain}`;
+      if (sampledPlane !== backdropPlane) {
+        throw plateCoverageError(backdropPlane, next, `${context} needs that exact slot bound to the backdrop plane`);
+      }
+      const toOutput = ({ x, y }: Point): Point => ({
+        x: x === 0 ? 0 : x * (view.output.width / layout.cssWidth),
+        y: y === 0 ? 0 : y * (view.output.height / layout.cssHeight),
+      });
+      const backingPixel = { x: view.output.width / layout.width, y: view.output.height / layout.height };
+      const failure = driftEvidence.failure(
+        view.animation, toOutput(planeShift(excursion, gain)), toOutput(planeShift(sweep, gain)), backingPixel,
+      );
+      if (failure) throw plateCoverageError(backdropPlane, next, `${context}; ${failure}`);
+    }
+
+    function drawKeyedFrame(frame: PosedFrame, next: CameraMode, excursion: Point, view: SceneCameraFrame): Offsets {
+      let displayed: Offsets = planeOffsets(cssTarget(camera, excursion), next);
+      if (keyedGains) {
+        const changingMode = mode !== next;
+        const weight = changingMode ? 0 : handoff.weight;
+        const pointer = cssTarget(changingMode ? NEUTRAL : next === 'pan' ? camera : handoff.pointer, excursion);
+        const phase = sweepPeriod === undefined ? 0 : Math.sin(2 * Math.PI * ((poser.time % sweepPeriod) / sweepPeriod));
+        const sweep = { x: sweepLimit.x * phase, y: sweepLimit.y * phase };
+        const input = next === 'pan' ? pointer : {
+          x: (1 - weight) * sweep.x + weight * pointer.x,
+          y: (1 - weight) * sweep.y + weight * pointer.y,
+        };
+        displayed = Object.fromEntries([...keyedGains].map(([id, gain]) => [
+          id, next === 'fixed' ? NEUTRAL : planeShift(input, next === 'pan' ? 1 : gain),
+        ]));
+      }
+      // Convert display CSS offsets to world units before the shared
+      // projection. The reciprocal zoom cancels the projection's zoom.
+      const worldX = view.output.width / layout.cssWidth / view.zoom;
+      const worldY = view.output.height / layout.cssHeight / view.zoom;
+      drawSceneCamera(renderer, frame, view, layout, slot => {
+        const { x, y } = displayed[planes.get(slot.slot)!];
+        return { x: x === 0 ? 0 : x * worldX, y: y === 0 ? 0 : y * worldY };
+      });
+      return displayed;
+    }
+
+    function drawMode(
+      frame: PosedFrame, backdrop: PosedSlot[], next: CameraMode, switching: boolean,
+      view: SceneCameraFrame | null, named: NamedPlanes | undefined,
+    ): void {
       const excursion = cameraExcursionFor(next);
-      if (named) checkPlateEnvelopes(stage, layout, next, excursion, plates, named.gains, sweepLimit);
-      else requireCoverage(backdrop, layout, next);
+      let displayed: Offsets;
+      if (view) {
+        keyedGains ??= keyedPlaneGains(options.planes);
+        // The Parts verdict covers authored framing. Admit extra drift on a
+        // take, layout or mode change using that take's sampled geometry.
+        if (keyedAdmission?.animation !== view.animation || keyedAdmission.layout !== layout || keyedAdmission.mode !== next) {
+          requireKeyedCoverage(view, next, excursion);
+          keyedAdmission = { animation: view.animation, layout, mode: next };
+        }
+        displayed = drawKeyedFrame(frame, next, excursion, view);
+      } else {
+        keyedAdmission = undefined;
+        if (legacyLayoutPending) applyLegacyLayout();
+        const checks = coverageChecks ??= createCoverageChecks();
+        const plates = named ? livePlates(frame, named, next) : [];
+        if (named) checkPlateEnvelopes(stage, layout, next, excursion, plates, named.gains, sweepLimit);
+        else checks.requireCoverage(backdrop, layout, next);
+        const prepared = prepareFrame(frame, plates, next, excursion, named);
+        if (named) checkBackdropAlpha(prepared.frame, named, next, checks.renderer, checks.auditBackdrop);
+        renderer.render(prepared.frame);
+        displayed = prepared.offsets;
+      }
 
-      const prepared = prepareFrame(frame, plates, next, excursion);
-      if (named) checkBackdropAlpha(prepared.frame, named, next);
-      renderer.render(prepared.frame);
-
-      if (named && mode !== next) {
+      if (namedInput && mode !== next) {
         camera = NEUTRAL;
         handoff.reset();
         if (next === 'parallax' && hover !== undefined) handoff.enter();
       }
       mode = next;
-      if (!named && switching && mode === 'fixed') camera = target = NEUTRAL;
-      offsets = prepared.offsets;
-      if (named && mode === 'parallax') handoff.painted();
+      if (!namedInput && switching && mode === 'fixed') camera = target = NEUTRAL;
+      offsets = displayed;
+      if (namedInput && mode === 'parallax') handoff.painted();
       canvas.style.visibility = '';
       Object.assign(canvas.style, { width: '100%', height: '100%', transform: 'none', pointerEvents: 'auto' });
     }
 
     function select(next: CameraMode, switching: boolean, allowFallback: boolean): void {
-      const { frame, backdrop } = currentFrame(next);
+      const entry = bound && poser.entry();
+      const view = entry?.animation ? cameraFor(entry.animation, entry.animationTime, entry.loop) : null;
+      drawingKeyed = view !== null;
+      const named = view ? undefined : planesFor(entry?.animation ?? initialAnimation);
+      const { frame, backdrop } = currentFrame(next, named, drawingKeyed);
       try {
-        drawMode(frame, backdrop, next, switching);
+        drawMode(frame, backdrop, next, switching, view, named);
       } catch (error) {
         if (!(error instanceof ComposedTakeError) || error.code !== 'COMPOSED_BACKDROP_COVERAGE'
-          || next === 'fixed' || (!named && !allowFallback)) throw error;
+          || next === 'fixed' || (!named && !view && !allowFallback)) throw error;
         // Check the authored Fixed mode independently before presenting it.
         try {
-          const fixed = turnInput.weight === 0 ? { frame, backdrop } : currentFrame('fixed');
-          drawMode(fixed.frame, fixed.backdrop, 'fixed', true);
+          const fixed = turnInput.weight === 0 ? { frame, backdrop } : currentFrame('fixed', named, drawingKeyed);
+          drawMode(fixed.frame, fixed.backdrop, 'fixed', true, view, named);
         } catch (fixedError) {
           canvas.style.visibility = 'hidden';
           throw fixedError;
@@ -847,7 +1134,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         select(mode, false, true);
       } catch (error) {
         if (error instanceof ComposedTakeError) refusal = error;
-        if (named) canvas.style.visibility = 'hidden';
+        if (namedInput || drawingKeyed) canvas.style.visibility = 'hidden';
         stopped = true;
         if (frameId !== undefined) window.cancelAnimationFrame(frameId);
         throw error;
@@ -863,14 +1150,14 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         refusal = null;
       } catch (error) {
         if (error instanceof ComposedTakeError) refusal = error;
-        if (named && next === 'fixed') canvas.style.visibility = 'hidden';
+        if ((namedInput || drawingKeyed) && next === 'fixed') canvas.style.visibility = 'hidden';
         throw error;
       }
     }
 
     function advanceCamera(elapsed: number): void {
       if (!(elapsed > 0)) return;
-      if (named && mode === 'parallax') handoff.advance(elapsed, target);
+      if (namedInput && mode === 'parallax') handoff.advance(elapsed, target);
       else camera = easeCamera(camera, target, elapsed);
     }
 
@@ -894,7 +1181,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     }
 
     measure();
-    select(initial, true, named !== undefined);
+    select(initial, true, initialNamed !== undefined || initialView !== null);
 
     function leave(): void {
       if (hover === undefined || stopped) return;
@@ -907,7 +1194,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     const boundaryEvent = (event: PointerEvent) => event.target === root || event.bubbles;
     const aim = (event: PointerEvent) => {
       if (!event.isPrimary || stopped) return;
-      if (named) {
+      if (namedInput) {
         if (event.pointerType === 'touch' || (event.type === 'pointerenter' && !boundaryEvent(event))
           || (hover !== undefined && hover !== event.pointerId)) return;
         if (event.pointerType === 'pen' && event.buttons !== 0) {
@@ -918,7 +1205,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return;
       const box = surface.getBoundingClientRect();
       if (!(box.width > 0 && box.height > 0)) return;
-      if (named) {
+      if (namedInput) {
         if (autoStart) syncCamera(window.performance.now());
         if (hover === undefined && mode === 'parallax') handoff.enter();
         hover = event.pointerId;
@@ -927,7 +1214,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     };
     const recenter = (event: PointerEvent) => {
       if (!event.isPrimary) return;
-      if (!named) {
+      if (!namedInput) {
         target = NEUTRAL;
         return;
       }
@@ -940,7 +1227,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     root.addEventListener('pointermove', aim, true);
     root.addEventListener('pointerleave', recenter, true);
     root.addEventListener('pointercancel', recenter, true);
-    if (named) {
+    if (namedInput) {
       root.addEventListener('pointerenter', aim, true);
       root.addEventListener('pointerdown', contact, true);
       root.addEventListener('lostpointercapture', recenter, true);
@@ -958,13 +1245,13 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         if (disposed || stopped) return;
         const elapsed = Math.max(0, (now - last) / 1000);
         last = now;
-        if (named) {
+        if (namedInput) {
           syncCamera(now);
           advance(Math.min(elapsed, 1 / 15), 0);
         } else {
           advance(Math.min(elapsed, 1 / 15), elapsed);
         }
-        if (named || layout.dpr !== window.devicePixelRatio) measure();
+        if (namedInput || layout.dpr !== window.devicePixelRatio) measure();
         try { renderCurrent(); } catch (error) { if (!(error instanceof ComposedTakeError)) throw error; }
         if (!stopped) frameId = window.requestAnimationFrame(tick);
       });
@@ -995,14 +1282,14 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         root.removeEventListener('pointermove', aim, true);
         root.removeEventListener('pointerleave', recenter, true);
         root.removeEventListener('pointercancel', recenter, true);
-        if (named) {
+        if (namedInput) {
           root.removeEventListener('pointerenter', aim, true);
           root.removeEventListener('pointerdown', contact, true);
           root.removeEventListener('lostpointercapture', recenter, true);
           window.removeEventListener('blur', leave);
         }
         poser.dispose();
-        coverage.dispose();
+        audit?.dispose();
         surface.remove();
         assets.dispose();
       },

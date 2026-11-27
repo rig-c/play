@@ -520,6 +520,63 @@ playback controls such as `seek()` and `pause()`. Let the take control drawing
 and its dial adjustment hook. Call `take.dispose()` to cancel its frame clock,
 remove the mounted surface and release its resources. The caller owns the root.
 
+#### Authored scene camera
+
+Set `sceneReportUrl` to the Parts `scene.json` and `modelUrl` to the exact
+packed `check/build/skeleton.model.json` named by that report. Play checks
+the SHA-256 of the fetched model bytes for `spine-parts-scene-report/2`.
+Serve a keyed mount from a secure context, such as HTTPS or localhost, so the
+browser can use Web Crypto to verify those bytes.
+A keyed take uses the report's loop flag, which must agree with the mount's
+`loop` option. The camera follows the pose through playback, pause, seek and
+repeat, including curved and stepped keys between the report's coverage
+samples. Play trusts Parts' coverage for the authored window. When a pointer
+mode is selected, Play checks that the backdrop quad at every reported frame
+can cover the window across the mode's maximum CSS displacement, including
+any automatic sweep. Extra displacement must leave a guard of one backing
+pixel on each axis, projected onto the backdrop edges using the actual
+rounded backing dimensions and each sample's zoom. This keeps a contacting
+backdrop edge outside the view's raster boundary. If the sampled margin is
+insufficient, the take falls back to Fixed with `COMPOSED_BACKDROP_COVERAGE`.
+This is a geometric check at the producer's sampled phases. It gives no
+coverage reading for intervening poses or for texels outside the producer's
+measured window. On keyed takes,
+a skeletal clip shared by planes with different shifts uses a polygon moved
+with each distinct shift. Omitting the report, supplying report /1, or
+selecting an unkeyed /2 take uses the existing fixed-stage path.
+
+To drive rendering directly, import `bindSceneCamera`,
+`sceneCameraProjection` and `renderSceneCameraFrame` from
+`@rig-c/play/composed-take`. Pass `bindSceneCamera(report, model)` the stage,
+animation metadata and SHA-256 of the exact bytes parsed by your model loader.
+Hash those bytes before parsing. JSON serialized from the parsed model can
+have different bytes and is refused if its hash differs.
+
+Play applies the 8 MiB `SCENE_CAMERA_REPORT_MAX_BYTES` budget to the raw UTF-8
+report before decoding JSON. The mount enforces it as it reads the response. Pass
+the raw report as a `Uint8Array` to use the same check in direct binding. If
+you pass parsed JSON, check the raw report against the exported budget before
+parsing it.
+
+A bound camera's `sample(animation, clock)` takes seconds in either the
+`'authored'` or `'compiled'` basis. Phase samples wrap on looping takes and
+hold the terminal phase on one-shots. Pass `{ endpoint: 'terminal' }` for the
+unwrapped end of either kind of take. To draw the corresponding endpoint of
+a looping take, supply a pose evaluated at the unwrapped compiled end time.
+Sampling returns `null` for a known unkeyed animation. An unknown animation
+raises `SCENE_CAMERA_CLIP_MISMATCH`.
+
+Draw the pose that corresponds to the sample with
+`renderSceneCameraFrame(renderer, pose, sample)`. This applies one projection
+to every layer and its skeletal clips on both canvas backends. The default
+backing size rounds up each authored canvas dimension to a whole pixel. Use
+`sceneCameraProjection(sample)` to map between posed world coordinates (Y
+up) and authored output pixels (Y down). The output clip covers the fixed
+canvas, and both mappings also work outside it. If you provide a different
+backing size, divide backing-space pointer coordinates by the backing scale
+on each axis before calling `outputToWorld`. The projection still uses authored
+pixels.
+
 #### Camera and handoff
 
 | Option | Default as of 2026-11-25 |
@@ -590,13 +647,19 @@ successful `setCamera()` clears that status.
 | Code | Condition |
 | --- | --- |
 | `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
-| `COMPOSED_LOOP_REQUIRED` | Missing `loop: true` or a positive-duration animation |
+| `COMPOSED_LOOP_REQUIRED` | Missing `loop: true` on the fixed-stage path or missing positive-duration animation |
 | `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
-| `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
-| `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry, inadequate stage coverage or unavailable opacity readback |
+| `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes on the fixed-stage path |
+| `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry, inadequate stage coverage or unavailable opacity readback on the fixed-stage path, or insufficient sampled margin for extra displacement on a keyed take |
 | `COMPOSED_INVALID_DISPLACEMENT` | Invalid excursion, sweep period, transition duration or gain |
 | `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
 | `COMPOSED_PLATE_TRACK` | Unsupported plate track or gain binding, or a sweep combined with baked travel |
+| `SCENE_CAMERA_REPORT_INVALID` | Missing, unreadable or malformed declared scene report or camera data |
+| `SCENE_CAMERA_REPORT_TOO_LARGE` | Raw UTF-8 report exceeds the consumer byte budget |
+| `SCENE_CAMERA_MODEL_MISMATCH` | Missing or different SHA-256 binding to the model bytes, or the browser cannot compute the digest, for example when Web Crypto is unavailable in an insecure context |
+| `SCENE_CAMERA_CLIP_MISMATCH` | Unknown animation, mismatched compiled duration or incompatible loop setting |
+| `SCENE_CAMERA_CLOCK_INVALID` | Invalid camera sample clock |
+| `SCENE_CAMERA_VIEW_INVALID` | Invalid stage, sampled projection or raster size |
 
 #### Reusing the demo controls
 
