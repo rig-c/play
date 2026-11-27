@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.28.0
+
+### Read before upgrading
+
+* **Composed takes can play an authored scene camera.** Pass `sceneReportUrl` (the Parts `scene.json`) to `mountComposedTake` with `modelUrl` set to the exact model that report names. A `spine-parts-scene-report/2` report is bound to those model bytes by SHA-256, so serve a keyed mount from a secure context (HTTPS or localhost). The take then follows the report's camera and its loop flag, which must agree with the mount's `loop` option. With no report, a /1 report, or a /2 report without a camera track, a take plays as in 1.27.0.
+* **Pointer modes on a keyed take need room.** A pointer mode is admitted only when the backdrop keeps a margin larger than the mode's maximum displacement plus one backing pixel at every reported frame. Otherwise the take falls back to Fixed with `COMPOSED_BACKDROP_COVERAGE`. Takes without a camera report are not affected.
+* **A report has a size cap.** `SCENE_CAMERA_REPORT_MAX_BYTES` is 8,388,608 bytes. A larger report is refused with `SCENE_CAMERA_REPORT_TOO_LARGE`.
+
+### Features
+
+* **composed take:** play authored scene cameras. New exports on `@rig-c/play/composed-take`: `bindSceneCamera`, `BoundSceneCamera.sample`, `sceneCameraProjection`, `renderSceneCameraFrame`, `SCENE_CAMERA_REPORT_MAX_BYTES`, and the `sceneReportUrl` option of `mountComposedTake`. New refusal codes: `SCENE_CAMERA_REPORT_INVALID`, `SCENE_CAMERA_REPORT_TOO_LARGE`, `SCENE_CAMERA_MODEL_MISMATCH`, `SCENE_CAMERA_CLIP_MISMATCH`, `SCENE_CAMERA_CLOCK_INVALID` and `SCENE_CAMERA_VIEW_INVALID`. The package ships `dist/scene-camera.d.ts` ([#302](https://github.com/rig-c/play/pull/302), closes [#301](https://github.com/rig-c/play/issues/301)).
+
+### Performance
+
+* **webgl:** reuse one capacity-managed vertex buffer across draws instead of re-specifying its storage on every submission ([#298](https://github.com/rig-c/play/pull/298), closes [#297](https://github.com/rig-c/play/issues/297)).
+
+### Documentation
+
+* the README links the getting-started guide in one line ([#300](https://github.com/rig-c/play/pull/300), refs [#299](https://github.com/rig-c/play/issues/299)).
+
+### Tests and release tooling
+
+* restore the composed-take handoff plant, and check in CI that every plant still applies ([#293](https://github.com/rig-c/play/pull/293), closes [#288](https://github.com/rig-c/play/issues/288)).
+* cover the first three cold WebGL renders in a fresh browser ([#294](https://github.com/rig-c/play/pull/294), refs [#264](https://github.com/rig-c/play/issues/264)).
+* release: retry registry confirmation for up to 15 minutes after publishing, with a confirmation-only rerun when a name is not served in time ([#296](https://github.com/rig-c/play/pull/296), closes [#295](https://github.com/rig-c/play/issues/295)).
+
 ## 1.27.0
 
 ### Read before upgrading
