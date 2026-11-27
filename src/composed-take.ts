@@ -1030,7 +1030,10 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         x: x === 0 ? 0 : x * (view.output.width / layout.cssWidth),
         y: y === 0 ? 0 : y * (view.output.height / layout.cssHeight),
       });
-      const failure = driftEvidence.failure(view.animation, toOutput(planeShift(excursion, gain)), toOutput(planeShift(sweep, gain)));
+      const backingPixel = { x: view.output.width / layout.width, y: view.output.height / layout.height };
+      const failure = driftEvidence.failure(
+        view.animation, toOutput(planeShift(excursion, gain)), toOutput(planeShift(sweep, gain)), backingPixel,
+      );
       if (failure) throw plateCoverageError(backdropPlane, next, `${context}; ${failure}`);
     }
 

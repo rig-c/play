@@ -128,7 +128,7 @@ export function sceneCameraDriftEvidence(report: unknown, refuse: Refuse) {
   const { backdrop, width, height, fps, tracks } = camera;
   return {
     backdrop,
-    failure(animation: string, pointer: ScreenShift, sweep: ScreenShift): string | undefined {
+    failure(animation: string, pointer: ScreenShift, sweep: ScreenShift, backingPixel: ScreenShift): string | undefined {
       const track = tracks[animation];
       if (!isRecord(track) || !durationValue(track.duration) || !durationValue(track.compiled_duration)
         || !Array.isArray(track.frames)) return 'missing sampled backdrop geometry';
@@ -158,6 +158,8 @@ export function sceneCameraDriftEvidence(report: unknown, refuse: Refuse) {
         const px = pointer.x / zoom, py = pointer.y / zoom;
         const sx = sweep.x / zoom, sy = sweep.y / zoom;
         if (![px, py, sx, sy].every(finite)) return `${label} has a nonfinite scene excursion`;
+        const gx = backingPixel.x / zoom, gy = backingPixel.y / zoom;
+        if (!positive(gx) || !positive(gy)) return `${label} has an invalid backing-pixel edge guard`;
 
         const edgeTolerance = Math.max(tolerance, 4 * Number.EPSILON * Math.max(...quad.flat().map(Math.abs)));
         let winding = 0;
@@ -178,8 +180,12 @@ export function sceneCameraDriftEvidence(report: unknown, refuse: Refuse) {
           // so the sweep is a segment. A convex handoff uses the greater support.
           const excursion = Math.max(Math.abs(nx * px) + Math.abs(ny * py), Math.abs(nx * sx + ny * sy));
           if (!finite(margin) || !finite(excursion)) return `${label} has nonfinite ${side} edge margin or excursion`;
-          if (margin - excursion < -edgeTolerance) {
-            return `${label}, ${side} edge margin ${margin} scene px, required excursion ${excursion} scene px`;
+          // The raster needs one backing pixel along both axes at the drift limit.
+          const guard = Math.abs(nx) * gx + Math.abs(ny) * gy;
+          const requiredExcursion = excursion + guard;
+          if (!positive(guard) || !finite(requiredExcursion)) return `${label} has an invalid ${side} edge guard or guarded excursion`;
+          if (margin - requiredExcursion < -edgeTolerance) {
+            return `${label}, ${side} edge margin ${margin} scene px, required excursion ${excursion} scene px, edge guard ${guard} scene px`;
           }
         }
       }

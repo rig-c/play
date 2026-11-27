@@ -380,37 +380,54 @@ for (const backend of ['webgl', 'canvas2d'] as const) {
       expect(zero).toMatchObject({ mode: 'pan', refusal: null, pixel: fixed.pixel });
     });
 
-    test('admits keyed Pan at the overscan boundary and checks later report samples', async ({ page }) => {
+    test('refuses keyed Pan when excursion equals geometric overscan', async ({ page }) => {
+      await routeCoverage(page);
+      const options = { ...idle, ...boundary, pointerTurn: false, maxDisplacement: { x: 15, y: 0 } };
+      const [fixed] = await mounted(page, options, [{}]);
+      const [fallback] = await mounted(page, { ...options, camera: 'pan' }, [{}]);
+
+      // With only the guard removed, Pan mounts at the centered pose and this
+      // refusal assertion fails without drawing a shifted raster.
+      expect(fallback.refusal).toBe(coverageCode);
+      expect(fallback.refusalMessage).toContain('plane "backdrop" in pan');
+      expect(fallback.refusalMessage).toContain('sample 0');
+      expect(fallback.refusalMessage).toContain('left edge margin 15 scene px, required excursion 15 scene px, edge guard 1 scene px');
+      expect(fixed).toMatchObject({ mode: 'fixed', refusal: null, pixel: { opaque: allPixels } });
+      expect(fallback).toMatchObject({ mode: 'fixed', animationTime: 0, pixel: fixed.pixel });
+    });
+
+    test('admits keyed Pan with one backing pixel to spare and checks later report samples', async ({ page }) => {
       const { first, overscanQuad } = await routeCoverage(page);
-      const options = { ...idle, ...boundary, camera: 'pan' as const, pointerTurn: false, maxDisplacement: { x: 15, y: 0 } };
+      const options = { ...idle, ...boundary, camera: 'pan' as const, pointerTurn: false, maxDisplacement: { x: 14, y: 0 } };
       const [center, edge] = await mounted(page, options, [{}, maxPan]);
       checkReport(center.draw, { ...first, backdrop_quad: overscanQuad }, 'first keyed frame with the public overscan plate');
-      expect(center.pixel.opaque).toBe(allPixels);
       for (const observation of [center, edge]) {
         expect(observation).toMatchObject({
-          mode: 'pan', refusal: null, animationTime: 0, draw: { backend },
+          mode: 'pan', refusal: null, animationTime: 0,
+          draw: { backend, width: outputClip.width, height: outputClip.height }, pixel: { opaque: allPixels },
         });
       }
-      close(coordinates(edge.cameraTarget), [15, 0], 'maximum horizontal pointer request');
-      close(coordinates(edge.offsets.backdrop), [-15, 0], 'backdrop uses all of its right overscan');
-      close(slot(edge.draw, 'backdrop').points, [-30, 143, -30, -15, 128, -15, 128, 143], 'plate at maximum Pan');
+      close(coordinates(edge.cameraTarget), [14, 0], 'maximum horizontal pointer request');
+      close(coordinates(edge.offsets.backdrop), [-14, 0], 'backdrop shift leaves one pixel of right overscan');
+      close(slot(edge.draw, 'backdrop').points, [-29, 143, -29, -15, 129, -15, 129, 143], 'plate at maximum Pan');
 
       const [later] = await mounted(page, { ...options, ...laterTight }, [{}]);
       expect(later).toMatchObject({ mode: 'fixed', refusal: coverageCode, animationTime: 0, pixel: center.pixel });
+      expect(later.refusalMessage).toContain('sample 24');
     });
 
     test('draws an exposed edge when the exact-fit backdrop is reported as overscanned', async ({ page }) => {
       const { first } = await routeCoverage(page);
       const [center, edge] = await mounted(page, {
-        ...idle, ...expandedEcho, camera: 'pan', pointerTurn: false, maxDisplacement: { x: 15, y: 0 },
+        ...idle, ...expandedEcho, camera: 'pan', pointerTurn: false, maxDisplacement: { x: 14, y: 0 },
       }, [{}, maxPan]);
       checkReport(center.draw, first, 'unchanged exact-fit plate under the wider report');
       expect(center).toMatchObject({ mode: 'pan', refusal: null, animationTime: 0, pixel: { opaque: allPixels } });
       expect(edge).toMatchObject({
         mode: 'pan', refusal: null, animationTime: 0, draw: { backend }, pixel: { rightEdgeVisible: 0 },
       });
-      close(coordinates(edge.offsets.backdrop), [-15, 0], 'actual displacement with the wider report');
-      close(slot(edge.draw, 'backdrop').points, [-15, 128, -15, 0, 113, 0, 113, 128], 'actual exposed plate edge');
+      close(coordinates(edge.offsets.backdrop), [-14, 0], 'actual displacement with the wider report');
+      close(slot(edge.draw, 'backdrop').points, [-14, 128, -14, 0, 114, 0, 114, 128], 'actual exposed plate edge');
       expect(edge.pixel.visible).toBeLessThan(allPixels);
     });
 

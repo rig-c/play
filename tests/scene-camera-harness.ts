@@ -181,6 +181,7 @@ async function mounted(options: MountOptions, actions: Move[]) {
       readings.push({
         draw, pixel: await readback(image), animation: entry?.animation, trackTime: entry?.trackTime, animationTime: entry?.animationTime,
         mode: take.mode, offsets: take.offsets, cameraTarget: take.cameraTarget, refusal: take.refusal?.code ?? null,
+        refusalMessage: take.refusal?.message ?? null,
         cameraRefusal,
       });
     }

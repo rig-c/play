@@ -533,10 +533,14 @@ repeat, including curved and stepped keys between the report's coverage
 samples. Play trusts Parts' coverage for the authored window. When a pointer
 mode is selected, Play checks that the backdrop quad at every reported frame
 can cover the window across the mode's maximum CSS displacement, including
-any automatic sweep. If the sampled margin is insufficient, the take falls
-back to Fixed with `COMPOSED_BACKDROP_COVERAGE`. This is a geometric check at
-the producer's sampled phases. It gives no coverage reading for intervening
-poses or for texels outside the producer's measured window. On keyed takes,
+any automatic sweep. Extra displacement must leave a guard of one backing
+pixel on each axis, projected onto the backdrop edges using the actual
+rounded backing dimensions and each sample's zoom. This keeps a contacting
+backdrop edge outside the view's raster boundary. If the sampled margin is
+insufficient, the take falls back to Fixed with `COMPOSED_BACKDROP_COVERAGE`.
+This is a geometric check at the producer's sampled phases. It gives no
+coverage reading for intervening poses or for texels outside the producer's
+measured window. On keyed takes,
 a skeletal clip shared by planes with different shifts uses a polygon moved
 with each distinct shift. Omitting the report, supplying report /1, or
 selecting an unkeyed /2 take uses the existing fixed-stage path.
