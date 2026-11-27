@@ -69,12 +69,14 @@ const plants = [
   code('fixed-one-pixel', 3, fixed, 'fixed ordinary RGBA', mount,
     'renderer.viewport = native ? stage :', 'renderer.viewport = native ? { ...stage, x: stage.x + 1 } :'),
   mutation('static-foreground', 3, fixed, 'fixed ordinary RGBA', directory => {
-    replace(directory, mount, '    poser.play(take.name, { loop: true });',
-      `    poser.play(take.name, { loop: true });
+    const play = '    poser.play(initialAnimation, { loop });';
+    replace(directory, mount, play,
+      `${play}
     const stillForeground = poser.posedFrame(null).order.find(slot => slot.slot === 'foreground')!;`);
-    replace(directory, mount, '      return { frame, backdrop: checkFrame(frame, planes) };',
+    const checkedFrame = '      return { frame, backdrop: checkFrame(frame, planes, named?.backdrop, keyed) };';
+    replace(directory, mount, checkedFrame,
       `      frame.order = frame.order.map(slot => slot.slot === 'foreground' ? stillForeground : slot);
-      return { frame, backdrop: checkFrame(frame, planes) };`);
+${checkedFrame}`);
   }),
   code('pointer-time-into-poser', 4, clock, 'pointer-independent source clock', mount,
     'poser.advance(rigElapsed);', 'poser.advance(rigElapsed + Math.abs(target.x) * 0.005);'),
@@ -114,10 +116,10 @@ const plants = [
   code('viewport-is-clipped-bounds', 7, crop, 'viewport is original stage', mount,
     'renderer.viewport = native ? stage :', 'renderer.viewport = native ? { ...stage, width: 120 } :'),
   code('fixed-polygon', 7, 'moves an authored attachment polygon', 'polygon and figure move together', mount,
-    'polygon: transform(clip.polygon)', 'polygon: clip.polygon'),
+    'polygon: transform(source.polygon)', 'polygon: source.polygon'),
   {
     ...mutation('clip-offset-one-css-pixel', 7, clipRaster, clipAssertions, directory => {
-      const clipCache = '  const clips = new Map<PosedClip, PosedClip>();';
+      const clipCache = '  const clips = new Map<PosedClip, { shift: Point; clip: PosedClip }[]>();';
       replace(directory, mount, clipCache, `${clipCache}\n  const offsetClips = new Map<PosedClip, PosedClip>();`);
       const transform = '    const transform = (xy: number[], delta = shift) => xy.map((value, i) => i % 2 === 0';
       // Shift each input clip once before it feeds both the presented and stock coordinates.
@@ -147,8 +149,14 @@ ${transform}`);
   code('missing-stage-accepted', 8, refuse('missing stage'), named('missing stage'), mount,
     '    const stage = requireStage(assets.stage);',
     '    const stage = assets.stage ?? { x: -64, y: 0, width: 128, height: 128 };'),
-  code('nonloop-accepted', 8, refuse('loop disabled'), named('loop disabled'), mount,
-    'if (options.loop !== true)', 'if (false)'),
+  mutation('nonloop-accepted', 8, refuse('loop disabled'), named('loop disabled'), directory => {
+    replace(directory, mount, 'if (loop !== true && (loop !== false || sceneReportUrl === undefined))',
+      'if (loop !== true && loop !== false)');
+    replace(directory, mount, 'if (digest === null && loop !== true)',
+      'if (sceneReportUrl !== undefined && digest === null && loop !== true)');
+    replace(directory, mount, 'if (!initialView && loop !== true)',
+      'if (sceneReportUrl !== undefined && !initialView && loop !== true)');
+  }),
   code('missing-animation-accepted', 8, refuse('named animation missing'), named('named animation missing'), mount,
     'assets.animations.find(animation => animation.name === options.animation);',
     "assets.animations.find(animation => animation.name === options.animation) ?? assets.animations.find(animation => animation.name === 'idle');"),
