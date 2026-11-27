@@ -62,6 +62,8 @@
     "dist/composed-take.d.ts.map",
     "dist/composed-camera.d.ts",
     "dist/composed-camera.d.ts.map",
+    "dist/scene-camera.d.ts",
+    "dist/scene-camera.d.ts.map",
     "dist/loadModel.d.ts",
     "dist/loadModel.d.ts.map",
     "dist/pixelRatio.d.ts",

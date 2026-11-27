@@ -33,7 +33,13 @@ const ROOT_EXPORTS = [
   'revokeRegions',
   'unpackRegions',
 ];
-const COMPOSED_EXPORTS = ['ComposedTakeError', 'mountComposedTake'];
+const COMPOSED_EXPORTS = [
+  'ComposedTakeError',
+  'bindSceneCamera',
+  'mountComposedTake',
+  'renderSceneCameraFrame',
+  'sceneCameraProjection',
+];
 const INSTALLED_EXPORTS = {
   '.': { types: './dist/index.d.ts', import: './dist/index.js' },
   './composed-take': { types: './dist/composed-take.d.ts', import: './dist/composed-take.js' },

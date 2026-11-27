@@ -1,0 +1,108 @@
+{
+  "spec": "spine-parts-scene/1",
+  "canvas": {
+    "width": 128,
+    "height": 128
+  },
+  "plates": [
+    {
+      "name": "backdrop",
+      "image": "inputs/background-overscan.png",
+      "at": [
+        -15,
+        -15
+      ],
+      "opaque_backdrop": true,
+      "provenance": "generated"
+    },
+    {
+      "name": "foreground",
+      "image": "inputs/foreground.png",
+      "at": [
+        14,
+        88
+      ],
+      "provenance": "generated"
+    }
+  ],
+  "order": [
+    "backdrop",
+    "actor",
+    "foreground"
+  ],
+  "characters": [
+    {
+      "id": "actor",
+      "build": "evidence/compose-character",
+      "offset": [
+        0,
+        0
+      ]
+    }
+  ],
+  "animations": {
+    "idle": {
+      "duration": 4,
+      "tracks": [
+        {
+          "bone": "foreground",
+          "property": "translate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0,
+                0
+              ]
+            },
+            {
+              "t": 2,
+              "v": [
+                3,
+                0
+              ]
+            },
+            {
+              "t": 4,
+              "v": [
+                0,
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "camera": {
+    "backdrop": "backdrop",
+    "tracks": {
+      "idle": [
+        {
+          "t": 0,
+          "pan": [
+            0,
+            0
+          ],
+          "zoom": 1
+        },
+        {
+          "t": 2,
+          "pan": [
+            12,
+            -4
+          ],
+          "zoom": 1.25
+        },
+        {
+          "t": 4,
+          "pan": [
+            0,
+            0
+          ],
+          "zoom": 1
+        }
+      ]
+    }
+  }
+}

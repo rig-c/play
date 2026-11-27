@@ -520,6 +520,47 @@ playback controls such as `seek()` and `pause()`. Let the take control drawing
 and its dial adjustment hook. Call `take.dispose()` to cancel its frame clock,
 remove the mounted surface and release its resources. The caller owns the root.
 
+#### Authored scene camera
+
+Set `sceneReportUrl` to the Parts `scene.json` and `modelUrl` to the exact
+packed `check/build/skeleton.model.json` named by that report. Play checks
+the SHA-256 of the fetched model bytes for `spine-parts-scene-report/2`.
+Serve a keyed mount from a secure context, such as HTTPS or localhost, so the
+browser can use Web Crypto to verify those bytes.
+A keyed take uses the report's loop flag, which must agree with the mount's
+`loop` option. The camera follows the pose through playback, pause, seek and
+repeat, including curved and stepped keys between the report's coverage
+samples. Pointer camera settings continue to control per-plane shifts in CSS
+pixels. The keyed path uses the coverage recorded by Parts for the authored
+window, including moving backdrops. Omitting the report, supplying report /1,
+or selecting an unkeyed /2 take uses the existing fixed-stage path.
+
+To drive rendering directly, import `bindSceneCamera`,
+`sceneCameraProjection` and `renderSceneCameraFrame` from
+`@rig-c/play/composed-take`. Pass `bindSceneCamera(report, model)` the stage,
+animation metadata and SHA-256 of the exact bytes parsed by your model loader.
+Hash those bytes before parsing. JSON serialized from the parsed model can
+have different bytes and is refused if its hash differs.
+
+A bound camera's `sample(animation, clock)` takes seconds in either the
+`'authored'` or `'compiled'` basis. Phase samples wrap on looping takes and
+hold the terminal phase on one-shots. Pass `{ endpoint: 'terminal' }` for the
+unwrapped end of either kind of take. To draw the corresponding endpoint of
+a looping take, supply a pose evaluated at the unwrapped compiled end time.
+Sampling returns `null` for a known unkeyed animation. An unknown animation
+raises `SCENE_CAMERA_CLIP_MISMATCH`.
+
+Draw the pose that corresponds to the sample with
+`renderSceneCameraFrame(renderer, pose, sample)`. This applies one projection
+to every layer and its skeletal clips on both canvas backends. The default
+backing size rounds up each authored canvas dimension to a whole pixel. Use
+`sceneCameraProjection(sample)` to map between posed world coordinates (Y
+up) and authored output pixels (Y down). The output clip covers the fixed
+canvas, and both mappings also work outside it. If you provide a different
+backing size, divide backing-space pointer coordinates by the backing scale
+on each axis before calling `outputToWorld`. The projection still uses authored
+pixels.
+
 #### Camera and handoff
 
 | Option | Default as of 2026-11-25 |
@@ -590,13 +631,18 @@ successful `setCamera()` clears that status.
 | Code | Condition |
 | --- | --- |
 | `COMPOSED_STAGE_REQUIRED` | Missing or invalid stage |
-| `COMPOSED_LOOP_REQUIRED` | Missing `loop: true` or a positive-duration animation |
+| `COMPOSED_LOOP_REQUIRED` | Missing `loop: true` on the fixed-stage path or missing positive-duration animation |
 | `COMPOSED_SLOT_PARTITION` | Missing, repeated or invalid drawable slot binding |
 | `COMPOSED_CROSS_PLANE_CLIP` | An active attachment clip covers multiple planes |
 | `COMPOSED_BACKDROP_COVERAGE` | Invalid plate geometry, inadequate stage coverage or unavailable opacity readback |
 | `COMPOSED_INVALID_DISPLACEMENT` | Invalid excursion, sweep period, transition duration or gain |
 | `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
 | `COMPOSED_PLATE_TRACK` | Unsupported plate track or gain binding, or a sweep combined with baked travel |
+| `SCENE_CAMERA_REPORT_INVALID` | Missing, unreadable or malformed declared scene report or camera data |
+| `SCENE_CAMERA_MODEL_MISMATCH` | Missing or different SHA-256 binding to the model bytes |
+| `SCENE_CAMERA_CLIP_MISMATCH` | Unknown animation, mismatched compiled duration or incompatible loop setting |
+| `SCENE_CAMERA_CLOCK_INVALID` | Invalid camera sample clock |
+| `SCENE_CAMERA_VIEW_INVALID` | Invalid stage, sampled projection or raster size |
 
 #### Reusing the demo controls
 
