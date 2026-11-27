@@ -98,7 +98,7 @@ function readCameraHeader(report: unknown, refuse: Refuse) {
     || !isRecord(canvas) || !positive(canvas.width) || !positive(canvas.height)) {
     return refuse('SCENE_CAMERA_REPORT_INVALID', 'expected a canvas and a keyed 12 fps camera with PASS coverage and zero overruns and alpha counts');
   }
-  return { width: canvas.width, height: canvas.height, tracks, digest };
+  return { width: canvas.width, height: canvas.height, backdrop, fps, tracks, digest };
 }
 
 function requireDigest(digest: unknown, refuse: Refuse): string {
@@ -113,6 +113,79 @@ function requireDigest(digest: unknown, refuse: Refuse): string {
 export function sceneCameraModelDigest(report: unknown, refuse: Refuse): string | null {
   const camera = readCameraHeader(report, refuse);
   return camera === null ? null : requireDigest(camera.digest, refuse);
+}
+
+type ScreenShift = { x: number; y: number };
+
+function finiteTuple(value: unknown, length: number): value is number[] {
+  return Array.isArray(value) && value.length === length && [...value].every(finite);
+}
+
+/** @internal Admit extra translation using only the producer's sampled geometry. */
+export function sceneCameraDriftEvidence(report: unknown, refuse: Refuse) {
+  const camera = readCameraHeader(report, refuse);
+  if (!camera) return null;
+  const { backdrop, width, height, fps, tracks } = camera;
+  return {
+    backdrop,
+    failure(animation: string, pointer: ScreenShift, sweep: ScreenShift): string | undefined {
+      const track = tracks[animation];
+      if (!isRecord(track) || !durationValue(track.duration) || !durationValue(track.compiled_duration)
+        || !Array.isArray(track.frames)) return 'missing sampled backdrop geometry';
+      const { duration, compiled_duration: compiled, frames } = track;
+      const ticks = Math.ceil(duration * fps);
+      const terminal = ticks > 0 && (ticks - 1) / fps >= duration ? ticks - 1 : ticks;
+      if (ticks >= 0xffffffff || frames.length !== terminal + 1) {
+        return `incomplete sampled backdrop geometry at ${fps} fps through ${duration} s`;
+      }
+      for (const [i, row] of frames.entries()) {
+        const at = i === terminal ? duration : i / fps;
+        const label = `sample ${i} at ${at} authored s`;
+        if (!isRecord(row) || row.frame !== i || row.authored_time !== at
+          || row.compiled_time !== (i === terminal ? compiled : at / duration * compiled)
+          || !usableZoom(row.zoom) || !finiteTuple(row.view, 4) || !Array.isArray(row.backdrop_quad)
+          || row.backdrop_quad.length !== 4 || ![...row.backdrop_quad].every(point => finiteTuple(point, 2))) {
+          return `${label} has invalid backdrop evidence`;
+        }
+        const { zoom, view: [left, top, right, bottom], backdrop_quad: quad } = row;
+        const viewWidth = right - left, viewHeight = bottom - top;
+        // Use the producer's coordinate-scale tolerance for double-precision edge contact.
+        const tolerance = 4 * Number.EPSILON * Math.max(1, Math.abs(left), Math.abs(top), Math.abs(right), Math.abs(bottom));
+        if (!positive(viewWidth) || !positive(viewHeight)
+          || Math.abs(viewWidth - width / zoom) > tolerance || Math.abs(viewHeight - height / zoom) > tolerance) {
+          return `${label} has a view inconsistent with its output size and zoom`;
+        }
+        const px = pointer.x / zoom, py = pointer.y / zoom;
+        const sx = sweep.x / zoom, sy = sweep.y / zoom;
+        if (![px, py, sx, sy].every(finite)) return `${label} has a nonfinite scene excursion`;
+
+        const edgeTolerance = Math.max(tolerance, 4 * Number.EPSILON * Math.max(...quad.flat().map(Math.abs)));
+        let winding = 0;
+        for (const [edge, [x, y]] of quad.entries()) {
+          const [nextX, nextY] = quad[(edge + 1) % 4];
+          const dx = nextX - x, dy = nextY - y;
+          const length = Math.hypot(dx, dy);
+          const nx = -dy / length, ny = dx / length;
+          const distance = ([a, b]: number[]) => nx * (a - x) + ny * (b - y);
+          const a = distance(quad[(edge + 2) % 4]), b = distance(quad[(edge + 3) % 4]);
+          if (edge === 0) winding = Math.sign(a);
+          const side = ['left', 'top', 'right', 'bottom'][edge];
+          if (!positive(length) || !finite(a) || !finite(b) || !(a * winding > 0 && b * winding > 0)) {
+            return `${label} has an invalid convex backdrop quad at its ${side} edge`;
+          }
+          const margin = winding * distance([nx * winding >= 0 ? left : right, ny * winding >= 0 ? top : bottom]);
+          // Pointer travel fills a rectangle. Both sweep axes share one sine,
+          // so the sweep is a segment. A convex handoff uses the greater support.
+          const excursion = Math.max(Math.abs(nx * px) + Math.abs(ny * py), Math.abs(nx * sx + ny * sy));
+          if (!finite(margin) || !finite(excursion)) return `${label} has nonfinite ${side} edge margin or excursion`;
+          if (margin - excursion < -edgeTolerance) {
+            return `${label}, ${side} edge margin ${margin} scene px, required excursion ${excursion} scene px`;
+          }
+        }
+      }
+      return undefined;
+    },
+  };
 }
 
 /** Core's model format uses the shortest decimal naming a float32. Core uses

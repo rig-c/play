@@ -16,7 +16,8 @@ type Sample = {
   figures: { id: string; bounds: number[] | null }[];
 };
 type CameraTrack = { duration: number; compiled_duration: number; loop: boolean; frames: Sample[] };
-type Report = { spec: string; camera: { model_sha256: string; tracks: Record<string, CameraTrack> } };
+type Plate = { name: string; image: string; at: [number, number]; size: [number, number]; sha256: string };
+type Report = { spec: string; plates: Plate[]; camera: { model_sha256: string; tracks: Record<string, CameraTrack> } };
 type OracleSample = Sample & { requested_time: number };
 type RichOracle = {
   tracks: Record<string, {
@@ -26,7 +27,9 @@ type RichOracle = {
 };
 
 const fixtures = 'tests/fixtures/scene-camera';
-const overscan = 'tests/fixtures/composed-direction/overscan';
+const composedDirection = 'tests/fixtures/composed-direction';
+const original = join(composedDirection, 'original');
+const overscan = join(composedDirection, 'overscan');
 const figure = process.env.SCENE_CAMERA_FIGURE_DIR ?? 'public/rigs/figure';
 const origin = 'http://127.0.0.1:37143';
 const prefix = '/scene-camera';
@@ -39,6 +42,13 @@ const outputClip = { x: 0, y: 0, width: 128, height: 128 };
 const allPixels = outputClip.width * outputClip.height;
 const modelSha256 = '01cf0c46b8f028fca3f90657ddec668e9e8bff6aa7c1fcf01e65300403e15a23';
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+const coveragePath = `${prefix}/coverage`;
+const exact = { modelUrl: `${coveragePath}/skeleton.model.json`, sceneReportUrl: `${coveragePath}/exact.json` };
+const expandedEcho = { ...exact, sceneReportUrl: `${coveragePath}/expanded-echo.json` };
+const boundary = { ...linear, sceneReportUrl: `${coveragePath}/boundary.json` };
+const laterTight = { ...linear, sceneReportUrl: `${coveragePath}/later-tight.json` };
+const coverageCode = 'COMPOSED_BACKDROP_COVERAGE';
+const maxPan = { pointer: { x: 1, y: 0.5 } };
 
 let inputFiles: ReturnType<typeof inputs> | undefined;
 function inputs() {
@@ -104,6 +114,56 @@ test.beforeEach(async ({ page }) => {
   await page.goto(`${origin}${prefix}/probe.html`);
   await page.waitForFunction(() => Boolean((window as SceneCameraWindow).sceneCameraTest));
 });
+
+function rectangle([left, top, right, bottom]: number[]) {
+  return [[left, bottom], [left, top], [right, top], [right, bottom]];
+}
+
+function withBackdropQuads(report: Report, quad: (row: Sample) => number[][]): Report {
+  const { camera } = report;
+  const { idle } = camera.tracks;
+  const frames = idle.frames.map(row => ({ ...row, backdrop_quad: quad(row) }));
+  return { ...report, camera: { ...camera, tracks: { ...camera.tracks, idle: { ...idle, frames } } } };
+}
+
+async function routeCoverage(page: Page) {
+  const [{ report }, originalModel, receiptText] = await Promise.all([
+    inputFiles ??= inputs(), readFile(join(original, 'skeleton.model.json')),
+    readFile(join(composedDirection, 'receipts/original.compose.json'), 'utf8'),
+  ]);
+  const originalModelHash = hash(originalModel);
+  expect(originalModelHash).toBe('b5f1bc5de634d763fe5737977b0237725a07b49cf20746cae66cae13c6668fe9');
+  const receipt: { plates: { name: string; path: string; sha256: string }[] } = JSON.parse(receiptText);
+  const sourcePlate = receipt.plates.find(plate => plate.name === 'backdrop')!;
+  const plate = report.plates.find(plate => plate.name === 'backdrop')!;
+  const [x, y] = plate.at;
+  const exactQuad = rectangle([0, 0, outputClip.width, outputClip.height]);
+  const overscanQuad = rectangle([x, y, x + plate.size[0], y + plate.size[1]]);
+  // Keep the Parts clocks, camera keys and views. Use the nominal rectangles
+  // of the two public plates so the comparison has exact pixel boundaries.
+  const exactReport = withBackdropQuads({
+    ...report,
+    plates: report.plates.map(row => row === plate ? {
+      ...row, image: sourcePlate.path, sha256: sourcePlate.sha256, at: [0, 0], size: [outputClip.width, outputClip.height],
+    } : row),
+    camera: { ...report.camera, model_sha256: originalModelHash },
+  }, () => exactQuad);
+  const reports: Record<string, Report> = {
+    [exact.sceneReportUrl]: exactReport,
+    // Same model bytes and sampled views as exact. Only the quad claims extra room.
+    [expandedEcho.sceneReportUrl]: withBackdropQuads(exactReport, () => overscanQuad),
+    [boundary.sceneReportUrl]: withBackdropQuads(report, () => overscanQuad),
+    [laterTight.sceneReportUrl]: withBackdropQuads(report, row => row.frame === 24 ? rectangle(row.view) : overscanQuad),
+  };
+  await page.route(`${origin}${coveragePath}/**`, route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === exact.modelUrl) return route.fulfill({ contentType: 'application/json', body: originalModel });
+    if (path === `${coveragePath}/skeleton.png`) return route.fulfill({ path: join(original, 'skeleton.png') });
+    const echo = reports[path];
+    return echo ? route.fulfill({ json: echo }) : route.fallback();
+  });
+  return { first: exactReport.camera.tracks.idle.frames[0], overscanQuad };
+}
 
 function authored(seconds: number): Clock {
   return { basis: 'authored', seconds };
@@ -276,10 +336,13 @@ for (const backend of ['webgl', 'canvas2d'] as const) {
     test('applies pointer offsets in display pixels independently of the keyed zoom', async ({ page }) => {
       const { report } = await (inputFiles ??= inputs());
       const row = report.camera.tracks.idle.frames[24];
-      const [fixed, pan] = await mounted(page, { ...idle, maxDisplacement: { x: 4, y: 8 } }, [{ seek: row.compiled_time }, { aim: true }]);
+      const [fixed, pan] = await mounted(page, { ...idle, maxDisplacement: { x: 4, y: 8 } }, [
+        { seek: row.compiled_time }, { camera: 'pan', pointer: { x: 0.75, y: 0.75 } },
+      ]);
       expect(row.zoom).toBe(1.25);
       expect(pan.mode).toBe('pan');
       expect(pan.refusal).toBeNull();
+      expect(pan.cameraRefusal).toBeNull();
       expect(pan.animationTime).toBe(fixed.animationTime);
       close(coordinates(pan.cameraTarget), [2, -4], 'pointer target in Y-up display pixels');
       close(coordinates(pan.offsets.figure), [-2, -4], 'figure display offset');
@@ -293,6 +356,74 @@ for (const backend of ['webgl', 'canvas2d'] as const) {
       }
       expect(pan.pixel.sha256).not.toBe(fixed.pixel.sha256);
       expect(pan.pixel.opaque).toBe(allPixels);
+    });
+
+    test('refuses keyed Pan on an exact-fit backdrop and preserves Fixed at mount and switch', async ({ page }) => {
+      const { first } = await routeCoverage(page);
+      const options = { ...idle, ...exact, pointerTurn: false, maxDisplacement: { x: 15, y: 0 } };
+      const [fixed, switched, afterPointer, cleared] = await mounted(page, options, [
+        {}, { camera: 'pan' }, maxPan, { camera: 'fixed' },
+      ]);
+      expect(first.view).toEqual([0, 0, 128, 128]);
+      checkReport(fixed.draw, first, 'first keyed frame with the public exact-fit plate');
+      expect(fixed).toMatchObject({
+        mode: 'fixed', refusal: null, animationTime: 0, draw: { backend }, pixel: { opaque: allPixels },
+      });
+      expect(switched.cameraRefusal).toMatchObject({ code: coverageCode });
+      const [initial, initialAfterPointer] = await mounted(page, { ...options, camera: 'pan' }, [{}, maxPan]);
+      for (const fallback of [switched, afterPointer, initial, initialAfterPointer]) {
+        expect(fallback).toMatchObject({ mode: 'fixed', refusal: coverageCode, pixel: fixed.pixel, animationTime: 0 });
+      }
+      expect(cleared).toMatchObject({ mode: 'fixed', refusal: null, cameraRefusal: null, pixel: fixed.pixel });
+
+      const [zero] = await mounted(page, { ...options, camera: 'pan', maxDisplacement: { x: 0, y: 0 } }, [maxPan]);
+      expect(zero).toMatchObject({ mode: 'pan', refusal: null, pixel: fixed.pixel });
+    });
+
+    test('admits keyed Pan at the overscan boundary and checks later report samples', async ({ page }) => {
+      const { first, overscanQuad } = await routeCoverage(page);
+      const options = { ...idle, ...boundary, camera: 'pan' as const, pointerTurn: false, maxDisplacement: { x: 15, y: 0 } };
+      const [center, edge] = await mounted(page, options, [{}, maxPan]);
+      checkReport(center.draw, { ...first, backdrop_quad: overscanQuad }, 'first keyed frame with the public overscan plate');
+      expect(center.pixel.opaque).toBe(allPixels);
+      for (const observation of [center, edge]) {
+        expect(observation).toMatchObject({
+          mode: 'pan', refusal: null, animationTime: 0, draw: { backend },
+        });
+      }
+      close(coordinates(edge.cameraTarget), [15, 0], 'maximum horizontal pointer request');
+      close(coordinates(edge.offsets.backdrop), [-15, 0], 'backdrop uses all of its right overscan');
+      close(slot(edge.draw, 'backdrop').points, [-30, 143, -30, -15, 128, -15, 128, 143], 'plate at maximum Pan');
+
+      const [later] = await mounted(page, { ...options, ...laterTight }, [{}]);
+      expect(later).toMatchObject({ mode: 'fixed', refusal: coverageCode, animationTime: 0, pixel: center.pixel });
+    });
+
+    test('draws an exposed edge when the exact-fit backdrop is reported as overscanned', async ({ page }) => {
+      const { first } = await routeCoverage(page);
+      const [center, edge] = await mounted(page, {
+        ...idle, ...expandedEcho, camera: 'pan', pointerTurn: false, maxDisplacement: { x: 15, y: 0 },
+      }, [{}, maxPan]);
+      checkReport(center.draw, first, 'unchanged exact-fit plate under the wider report');
+      expect(center).toMatchObject({ mode: 'pan', refusal: null, animationTime: 0, pixel: { opaque: allPixels } });
+      expect(edge).toMatchObject({
+        mode: 'pan', refusal: null, animationTime: 0, draw: { backend }, pixel: { rightEdgeVisible: 0 },
+      });
+      close(coordinates(edge.offsets.backdrop), [-15, 0], 'actual displacement with the wider report');
+      close(slot(edge.draw, 'backdrop').points, [-15, 128, -15, 0, 113, 0, 113, 128], 'actual exposed plate edge');
+      expect(edge.pixel.visible).toBeLessThan(allPixels);
+    });
+
+    test('refuses keyed Parallax sweep on an exact-fit backdrop with zero pointer excursion', async ({ page }) => {
+      await routeCoverage(page);
+      const options = {
+        ...idle, ...exact, camera: 'parallax' as const, bakedForeground: false as const,
+        pointerTurn: false, maxDisplacement: { x: 0, y: 0 },
+      };
+      const [still] = await mounted(page, options, [{}]);
+      const [sweep] = await mounted(page, { ...options, autoSweep: { periodSeconds: 4, maxDisplacement: { x: 24, y: 0 } } }, [{}]);
+      expect(still).toMatchObject({ mode: 'parallax', refusal: null, animationTime: 0, pixel: { opaque: allPixels } });
+      expect(sweep).toMatchObject({ mode: 'fixed', refusal: coverageCode, animationTime: 0, pixel: still.pixel });
     });
 
     test('projects real regions, meshes and their shared clip into a nonuniform backing', async ({ page }) => {

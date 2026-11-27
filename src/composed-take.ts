@@ -6,7 +6,7 @@ import { RigPlayer, type BoneAdjust } from './player.js';
 import { frameOf, frameSource, type PosedClip, type PosedFrame, type PosedRegion, type PosedSlot } from './posedFrame.js';
 import {
   bindSceneCameraReport, checkSceneCameraReportSize, decodeSceneCameraReport, projectSceneCamera,
-  SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraModelDigest, sceneCameraTransform,
+  SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraDriftEvidence, sceneCameraModelDigest, sceneCameraTransform,
   type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame, type SceneCameraRefusal,
 } from './scene-camera.js';
 import { discoverTurnDials, normalizedDial, type TurnDial } from './turnDials.js';
@@ -700,12 +700,17 @@ async function fetchSceneReport(url: string): Promise<unknown> {
 }
 
 async function hashModelResponse(response: Response): Promise<string> {
+  const subtle = globalThis.crypto?.subtle;
+  if (typeof subtle?.digest !== 'function') {
+    return refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH',
+      'could not compute SHA-256 for the exact model response bytes because Web Crypto subtle.digest is unavailable (browsers require a secure context)');
+  }
   try {
     const bytes = await response.clone().arrayBuffer();
-    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    const digest = await subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   } catch (error) {
-    return refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH', 'could not hash the exact model response bytes with Web Crypto SHA-256', error);
+    return refuseSceneCamera('SCENE_CAMERA_MODEL_MISMATCH', 'could not compute SHA-256 for the exact model response bytes with Web Crypto', error);
   }
 }
 
@@ -779,6 +784,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
   let audit: CanvasRenderer | undefined;
   try {
     const bound = digest === null ? null : bindSceneCamera(report, { sha256, stage: assets.stage, animations: assets.animations });
+    const driftEvidence = bound && sceneCameraDriftEvidence(report, refuseSceneCamera);
     function cameraFor(animation: string, animationTime: number, loop: boolean): SceneCameraFrame | null {
       const view = bound?.sample(animation, { basis: 'compiled', seconds: animationTime }) ?? null;
       if (view && view.loop !== loop) {
@@ -796,6 +802,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     const initialAnimation = take.name;
     const planes = bindSlots(assets, options);
     const namedInput = options.planes !== undefined;
+    const backdropPlane = Object.entries(options.planes ?? {}).find(([, plane]) => plane.role === 'backdrop')?.[0] ?? 'background';
     const legacyPlanes = new Map<string, NamedPlanes>();
     function planesFor(animation: string): NamedPlanes | undefined {
       if (!namedInput) return undefined;
@@ -865,6 +872,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     let target = NEUTRAL;
     let hover: number | undefined;
     let layout: Layout;
+    let keyedAdmission: { animation: string; layout: Layout; mode: CameraMode } | undefined;
     let legacyLayoutPending = true;
     let drawingKeyed = initialView !== null;
     let refusal: ComposedTakeError | null = null;
@@ -1005,8 +1013,28 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       return { frame, backdrop: checkFrame(frame, planes, named?.backdrop, keyed) };
     }
 
+    function requireKeyedCoverage(view: SceneCameraFrame, next: CameraMode, excursion: Point): void {
+      if (!driftEvidence || next === 'fixed') return;
+      const sweep = keyedGains && next === 'parallax' ? sweepLimit : NEUTRAL;
+      if (excursion.x === 0 && excursion.y === 0 && sweep.x === 0 && sweep.y === 0) return;
+      const gain = next === 'pan' ? 1 : keyedGains?.get(backdropPlane) ?? BACKDROP_GAIN;
+      const sampledPlane = planes.get(driftEvidence.backdrop);
+      if (gain === 0 && sampledPlane !== undefined && keyedGains?.get(sampledPlane) === 0) return;
+
+      const context = `take ${JSON.stringify(view.animation)}, sampled backdrop slot ${JSON.stringify(driftEvidence.backdrop)}, `
+        + `pointer excursion ±[${excursion.x}, ${excursion.y}] CSS px, sweep endpoint [${sweep.x}, ${sweep.y}] CSS px, backdrop gain ${gain}`;
+      if (sampledPlane !== backdropPlane) {
+        throw plateCoverageError(backdropPlane, next, `${context} needs that exact slot bound to the backdrop plane`);
+      }
+      const toOutput = ({ x, y }: Point): Point => ({
+        x: x === 0 ? 0 : x * (view.output.width / layout.cssWidth),
+        y: y === 0 ? 0 : y * (view.output.height / layout.cssHeight),
+      });
+      const failure = driftEvidence.failure(view.animation, toOutput(planeShift(excursion, gain)), toOutput(planeShift(sweep, gain)));
+      if (failure) throw plateCoverageError(backdropPlane, next, `${context}; ${failure}`);
+    }
+
     function drawKeyedFrame(frame: PosedFrame, next: CameraMode, excursion: Point, view: SceneCameraFrame): Offsets {
-      keyedGains ??= keyedPlaneGains(options.planes);
       let displayed: Offsets = planeOffsets(cssTarget(camera, excursion), next);
       if (keyedGains) {
         const changingMode = mode !== next;
@@ -1040,9 +1068,16 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
       const excursion = cameraExcursionFor(next);
       let displayed: Offsets;
       if (view) {
-        // The bound Parts verdict covers the authored view and posed plate.
+        keyedGains ??= keyedPlaneGains(options.planes);
+        // The Parts verdict covers authored framing. Admit extra drift on a
+        // take, layout or mode change using that take's sampled geometry.
+        if (keyedAdmission?.animation !== view.animation || keyedAdmission.layout !== layout || keyedAdmission.mode !== next) {
+          requireKeyedCoverage(view, next, excursion);
+          keyedAdmission = { animation: view.animation, layout, mode: next };
+        }
         displayed = drawKeyedFrame(frame, next, excursion, view);
       } else {
+        keyedAdmission = undefined;
         if (legacyLayoutPending) applyLegacyLayout();
         const checks = coverageChecks ??= createCoverageChecks();
         const plates = named ? livePlates(frame, named, next) : [];
@@ -1077,7 +1112,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
         drawMode(frame, backdrop, next, switching, view, named);
       } catch (error) {
         if (!(error instanceof ComposedTakeError) || error.code !== 'COMPOSED_BACKDROP_COVERAGE'
-          || next === 'fixed' || (!named && !allowFallback)) throw error;
+          || next === 'fixed' || (!named && !view && !allowFallback)) throw error;
         // Check the authored Fixed mode independently before presenting it.
         try {
           const fixed = turnInput.weight === 0 ? { frame, backdrop } : currentFrame('fixed', named, drawingKeyed);
@@ -1143,7 +1178,7 @@ export async function mountComposedTake(root: HTMLElement, options: RuntimeTakeO
     }
 
     measure();
-    select(initial, true, initialNamed !== undefined);
+    select(initial, true, initialNamed !== undefined || initialView !== null);
 
     function leave(): void {
       if (hover === undefined || stopped) return;

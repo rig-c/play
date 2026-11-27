@@ -20,7 +20,7 @@ range calculation and use with `BoneAdjust`.
 | `ComposedTakeError` | Use `code` to handle a refusal. Message wording and underlying causes may evolve. |
 | `CameraMode` | The literals `'fixed'`, `'pan'` and `'parallax'`. |
 | `ComposedPlane` | A plane declares `slots`, `role` and optional `gain` and `baked`. |
-| `ComposedTakeOptions` | Supported option names are `modelUrl`, `sceneReportUrl`, `animation`, `loop`, `planes`, `camera`, `maxDisplacement`, `backend`, `autoStart`, `autoSweep`, `transitionMs` and `pointerTurn`. A keyed report /2 take requires its authored loop flag. Other takes require `loop: true`. |
+| `ComposedTakeOptions` | Supported option names are `modelUrl`, `sceneReportUrl`, `animation`, `loop`, `planes`, `camera`, `maxDisplacement`, `backend`, `autoStart`, `autoSweep`, `transitionMs` and `pointerTurn`. For a keyed report /2 take, `loop` must agree with the authored flag. Other takes require `loop: true`. |
 | `MountedTake` | The mounted canvas and player, camera and turn readouts, refusal state, and camera, frame and disposal methods. |
 | `SCENE_CAMERA_REPORT_MAX_BYTES` | Consumer budget for raw UTF-8 scene report bytes. This value is the minimum budget for later minor releases. |
 | `bindSceneCamera(report, model)` | Returns `null` for report /1 or a bound camera for report /2. Pass raw UTF-8 bytes as a `Uint8Array` to enforce the budget before parsing. Callers passing a parsed report enforce the same budget on the raw bytes themselves. The model digest must cover the exact bytes the caller parses. The binding validates the stage and animation metadata. |
@@ -46,6 +46,9 @@ on the other. Samples map the current phase between the clocks, preserve the
 exact endpoints and use the player's JavaScript animation time. Consumers
 that compare a copied authored duration use exact equality with the report's
 `duration`.
+
+On keyed takes, a skeletal clip shared by planes with different shifts uses
+a polygon moved with each distinct shift.
 
 Until the demo page uses this entry, a minor release may retune the handoff
 duration (`transitionMs`), automatic sweep (`autoSweep`) or pointer hover excursion

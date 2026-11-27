@@ -5,6 +5,8 @@ import { CanvasRenderer, loadModel, RigPlayer, type PosedClip, type PosedFrame, 
 import { renderFrameOf } from '../src/liveFrameSource.js';
 
 type Take = Awaited<ReturnType<typeof mountComposedTake>>;
+type Camera = Parameters<Take['setCamera']>[0];
+type AutoSweep = NonNullable<Parameters<typeof mountComposedTake>[1]['autoSweep']>;
 type Frame = NonNullable<Parameters<typeof renderSceneCameraFrame>[2]>;
 type Clock = Parameters<NonNullable<ReturnType<typeof bindSceneCamera>>['sample']>[1];
 type Point = { x: number; y: number };
@@ -21,14 +23,18 @@ export interface MountOptions extends Source {
   loop: boolean;
   movingBackdrop?: boolean;
   bakedForeground?: false;
+  camera?: Camera;
+  pointerTurn?: boolean;
   maxDisplacement?: Point;
+  autoSweep?: AutoSweep;
 }
 export interface Move {
   play?: { animation: string; loop: boolean };
   seek?: number;
   pause?: boolean;
   advance?: number;
-  aim?: boolean;
+  camera?: Camera;
+  pointer?: Point;
 }
 interface DirectOptions extends Source {
   backend: Backend;
@@ -90,14 +96,18 @@ function capture(renderer: CanvasRenderer, action: () => void, output: Size) {
   return { draw, image };
 }
 
-async function readback({ data }: ImageData) {
+async function readback({ data, width }: ImageData) {
   let visible = 0;
   let opaque = 0;
+  let rightEdgeVisible = 0;
   for (let i = 3; i < data.length; i += 4) {
     visible += Number(data[i] > 0);
     opaque += Number(data[i] === 255);
   }
-  return { visible, opaque, sha256: await digest(data) };
+  for (let alpha = 4 * width - 1; alpha < data.length; alpha += 4 * width) {
+    rightEdgeVisible += Number(data[alpha] > 0);
+  }
+  return { visible, opaque, rightEdgeVisible, sha256: await digest(data) };
 }
 
 function diff(a: ImageData, b: ImageData) {
@@ -113,14 +123,18 @@ function diff(a: ImageData, b: ImageData) {
   return { pixels, maxChannelDelta };
 }
 
-async function openTake({ backend, animation, loop, movingBackdrop, bakedForeground, maxDisplacement, ...source }: MountOptions) {
+async function openTake({ backend, animation, loop, movingBackdrop, bakedForeground,
+  camera, pointerTurn, maxDisplacement, autoSweep, ...source }: MountOptions) {
   if (!source.sceneReportUrl && !loop) throw new Error('A one-shot mount requires a scene report');
   const bound = source.sceneReportUrl === undefined
     ? { modelUrl: source.modelUrl, loop: true as const }
     : { modelUrl: source.modelUrl, loop, sceneReportUrl: source.sceneReportUrl };
   return mountComposedTake(stage, {
     ...bound, animation, backend, autoStart: false,
+    ...(camera !== undefined && { camera }),
+    ...(pointerTurn !== undefined && { pointerTurn }),
     ...(maxDisplacement !== undefined && { maxDisplacement }),
+    ...(autoSweep !== undefined && { autoSweep }),
     planes: {
       backdrop: {
         role: 'backdrop', slots: ['backdrop'],
@@ -141,15 +155,17 @@ function move(take: Take, action: Move) {
   if (action.pause === false) take.player.resume();
   if (action.seek !== undefined) take.player.seek(action.seek);
   if (action.advance !== undefined) take.advance(action.advance, 0);
-  if (action.aim) {
-    take.setCamera('pan');
+  const { camera, pointer } = action;
+  const cameraRefusal = camera === undefined ? null : refusal(() => take.setCamera(camera));
+  if (pointer) {
     const { left, top, width, height } = take.canvas.getBoundingClientRect();
     stage.dispatchEvent(new PointerEvent('pointermove', {
       bubbles: true, isPrimary: true, pointerType: 'mouse', pointerId: 1,
-      clientX: left + 0.75 * width, clientY: top + 0.75 * height,
+      clientX: left + pointer.x * width, clientY: top + pointer.y * height,
     }));
     take.advance(0, 120);
   }
+  return cameraRefusal;
 }
 
 const output = { width: 128, height: 128 };
@@ -159,12 +175,13 @@ async function mounted(options: MountOptions, actions: Move[]) {
   try {
     const readings = [];
     for (const action of actions) {
-      move(take, action);
+      const cameraRefusal = move(take, action);
       const { draw, image } = capture(take.player.renderer as CanvasRenderer, () => take.render(), output);
       const entry = take.player.entry(0);
       readings.push({
         draw, pixel: await readback(image), animation: entry?.animation, trackTime: entry?.trackTime, animationTime: entry?.animationTime,
         mode: take.mode, offsets: take.offsets, cameraTarget: take.cameraTarget, refusal: take.refusal?.code ?? null,
+        cameraRefusal,
       });
     }
     return readings;
