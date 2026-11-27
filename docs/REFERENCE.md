@@ -542,6 +542,12 @@ animation metadata and SHA-256 of the exact bytes parsed by your model loader.
 Hash those bytes before parsing. JSON serialized from the parsed model can
 have different bytes and is refused if its hash differs.
 
+Play applies the 8 MiB `SCENE_CAMERA_REPORT_MAX_BYTES` budget to the raw UTF-8
+report before decoding JSON. The mount enforces it as it reads the response. Pass
+the raw report as a `Uint8Array` to use the same check in direct binding. If
+you pass parsed JSON, check the raw report against the exported budget before
+parsing it.
+
 A bound camera's `sample(animation, clock)` takes seconds in either the
 `'authored'` or `'compiled'` basis. Phase samples wrap on looping takes and
 hold the terminal phase on one-shots. Pass `{ endpoint: 'terminal' }` for the
@@ -639,6 +645,7 @@ successful `setCamera()` clears that status.
 | `COMPOSED_INVALID_CAMERA` | Unrecognized mode |
 | `COMPOSED_PLATE_TRACK` | Unsupported plate track or gain binding, or a sweep combined with baked travel |
 | `SCENE_CAMERA_REPORT_INVALID` | Missing, unreadable or malformed declared scene report or camera data |
+| `SCENE_CAMERA_REPORT_TOO_LARGE` | Raw UTF-8 report exceeds the consumer byte budget |
 | `SCENE_CAMERA_MODEL_MISMATCH` | Missing or different SHA-256 binding to the model bytes |
 | `SCENE_CAMERA_CLIP_MISMATCH` | Unknown animation, mismatched compiled duration or incompatible loop setting |
 | `SCENE_CAMERA_CLOCK_INVALID` | Invalid camera sample clock |

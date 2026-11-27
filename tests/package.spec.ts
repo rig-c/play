@@ -181,14 +181,15 @@ test('the package entry resolves by name in node and exposes its public API', ()
   ]);
 });
 
-test('the composed take entry resolves by name in node and exposes only its two runtime exports', () => {
+test('the composed take entry resolves by name in node and exposes its runtime exports', () => {
   const run = probe(
     'probe-composed-take.mjs',
     "const m = await import('@rig-c/play/composed-take');\nconsole.log(JSON.stringify(Object.keys(m).sort()));\n",
   );
   expect(run.status, run.stderr).toBe(0);
   expect(JSON.parse(run.stdout)).toEqual([
-    'ComposedTakeError', 'bindSceneCamera', 'mountComposedTake', 'renderSceneCameraFrame', 'sceneCameraProjection',
+    'ComposedTakeError', 'SCENE_CAMERA_REPORT_MAX_BYTES', 'bindSceneCamera', 'mountComposedTake',
+    'renderSceneCameraFrame', 'sceneCameraProjection',
   ]);
 });
 
@@ -854,7 +855,8 @@ const CONSUMER_SOURCE = [
   "import type { BoneAdjust, BoneAdjustContext, PhysicsParameters, PhysicsParameterPatch, PhysicsParameterRead } from '@rig-c/play';",
   "import type { TurnAxis, TurnDial } from '@rig-c/play';",
   "import { ComposedTakeError, mountComposedTake, type CameraMode, type ComposedPlane, type ComposedTakeOptions, type MountedTake } from '@rig-c/play/composed-take';",
-  "import { bindSceneCamera, renderSceneCameraFrame, sceneCameraProjection, type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame } from '@rig-c/play/composed-take';",
+  "import { bindSceneCamera, renderSceneCameraFrame, SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraProjection, type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame } from '@rig-c/play/composed-take';",
+  'export const reportBudget: number = SCENE_CAMERA_REPORT_MAX_BYTES;',
   "const backdrop: ComposedPlane = { role: 'backdrop', slots: ['backdrop'] };",
   "const options: ComposedTakeOptions = { modelUrl: '/take/skeleton.model.json', animation: 'idle', loop: true, planes: { backdrop, figure: { role: 'figure', slots: ['body'] } } };",
   "export async function mountNamed(root: HTMLElement, mode: CameraMode): Promise<MountedTake> { const take = await mountComposedTake(root, { ...options, camera: mode }); const player: RigPlayer = take.player; const refusal: ComposedTakeError | null = take.refusal; void player; void refusal; return take; }",

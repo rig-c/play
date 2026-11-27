@@ -35,6 +35,7 @@ const ROOT_EXPORTS = [
 ];
 const COMPOSED_EXPORTS = [
   'ComposedTakeError',
+  'SCENE_CAMERA_REPORT_MAX_BYTES',
   'bindSceneCamera',
   'mountComposedTake',
   'renderSceneCameraFrame',

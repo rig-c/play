@@ -393,3 +393,29 @@ test('reports all five named camera refusal codes on one-variable controls', asy
     mountRefusal: { code: 'SCENE_CAMERA_MODEL_MISMATCH' },
   });
 });
+
+test('caps raw UTF-8 report bytes before parsing or fetching the model', async ({ page }) => {
+  const modelRequests: string[] = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === linear.modelUrl) modelRequests.push(request.method());
+  });
+  const result = await page.evaluate(modelUrl => (window as SceneCameraWindow).sceneCameraTest.reportByteBudget(modelUrl), linear.modelUrl);
+  const { cap, direct, reportPath, atCap, oversized, oversizedMalformed, invalid } = result;
+  expect(direct.atCap).toBe(true);
+  expect(direct.malformed).toMatchObject({ code: 'SCENE_CAMERA_REPORT_INVALID' });
+  expect(atCap).toMatchObject({ error: null, delivered: cap, requests: [reportPath, linear.modelUrl] });
+  expect(atCap.chunks).toBeGreaterThan(1);
+
+  for (const error of [direct.oversized, direct.oversizedMalformed, oversized.error, oversizedMalformed.error]) {
+    expect(error).toMatchObject({ code: 'SCENE_CAMERA_REPORT_TOO_LARGE' });
+    const counts = error?.message.match(/\d+(?:[,_]\d{3})*/g)?.map(value => Number(value.replace(/[,_]/g, '')));
+    expect(counts).toEqual(expect.arrayContaining([cap + 1, cap]));
+  }
+  for (const stream of [oversized, oversizedMalformed]) {
+    expect(stream).toMatchObject({ delivered: cap + 1, requests: [reportPath], pulledPastLimit: false });
+    expect(stream.chunks).toBe(atCap.chunks + 1);
+  }
+  expect(invalid).toMatchObject({ error: { code: 'SCENE_CAMERA_REPORT_INVALID' }, requests: [reportPath] });
+  expect(invalid.delivered).toBeLessThan(cap);
+  expect(modelRequests).toEqual(['GET']);
+});

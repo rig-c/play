@@ -22,7 +22,16 @@ export interface BoundSceneCamera {
 }
 
 export type SceneCameraRefusal = 'SCENE_CAMERA_REPORT_INVALID' | 'SCENE_CAMERA_MODEL_MISMATCH'
-  | 'SCENE_CAMERA_CLIP_MISMATCH' | 'SCENE_CAMERA_CLOCK_INVALID' | 'SCENE_CAMERA_VIEW_INVALID';
+  | 'SCENE_CAMERA_CLIP_MISMATCH' | 'SCENE_CAMERA_CLOCK_INVALID' | 'SCENE_CAMERA_VIEW_INVALID'
+  | 'SCENE_CAMERA_REPORT_TOO_LARGE';
+
+// Parts 9da1aee / Core 3.11.0 wrote 7,777,629 UTF-8 bytes with two camera
+// tracks and one figure per row. At 12 fps the 600-second shot has 7,201 rows
+// and the 4-second idle has 49. Round up to the next power-of-two MiB (8 MiB).
+// This budgets about ten minutes for the measured one-figure format, at
+// about 1,072 bytes per added row. Budget about half the time for two figures
+// if each is charged the full one-figure row cost.
+export const SCENE_CAMERA_REPORT_MAX_BYTES = 8 * 1024 * 1024;
 
 type Refuse = (code: SceneCameraRefusal, detail: string, cause?: unknown) => never;
 type Sample = Pick<SceneCameraFrame, 'pan' | 'zoom'>;
@@ -37,6 +46,35 @@ type Track = {
 const PAN_CURVE_LENGTH = 8;
 const SHA256 = /^[a-f0-9]{64}$/;
 const floatBits = new DataView(new ArrayBuffer(4));
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+
+function isReportBytes(value: unknown): value is Uint8Array {
+  return ArrayBuffer.isView(value) && Reflect.get(typedArrayPrototype, Symbol.toStringTag, value) === 'Uint8Array';
+}
+
+/** @internal Shared by the streaming loader and direct raw-byte binding. */
+export function checkSceneCameraReportSize(byteLength: number, refuse: Refuse): void {
+  if (byteLength > SCENE_CAMERA_REPORT_MAX_BYTES) {
+    refuse('SCENE_CAMERA_REPORT_TOO_LARGE',
+      `observed ${byteLength} raw report bytes with a cap of ${SCENE_CAMERA_REPORT_MAX_BYTES} bytes`);
+  }
+}
+
+/** @internal Decode the exact bounded byte range as UTF-8 JSON. */
+export function decodeSceneCameraReport(bytes: Uint8Array, refuse: Refuse): unknown {
+  const byteLength = Reflect.get(typedArrayPrototype, 'byteLength', bytes) as number;
+  checkSceneCameraReportSize(byteLength, refuse);
+  try {
+    // Fix the checked extent even for a length-tracking view of a growable buffer.
+    const buffer = Reflect.get(typedArrayPrototype, 'buffer', bytes) as ArrayBufferLike;
+    const byteOffset = Reflect.get(typedArrayPrototype, 'byteOffset', bytes) as number;
+    const view = new Uint8Array(buffer, byteOffset, byteLength);
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(view)) as unknown;
+  } catch (error) {
+    return refuse('SCENE_CAMERA_REPORT_INVALID', 'the scene report is not valid UTF-8 JSON', error);
+  }
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -292,7 +330,8 @@ export function bindSceneCameraReport(
   model: { sha256: string; stage: CanvasViewport | null; animations: readonly { name: string; duration: number }[] },
   refuse: Refuse,
 ): BoundSceneCamera | null {
-  const camera = readCameraHeader(report, refuse);
+  const document = isReportBytes(report) ? decodeSceneCameraReport(report, refuse) : report;
+  const camera = readCameraHeader(document, refuse);
   if (camera === null) return null;
   if (!validViewport(model?.stage)) return refuse('SCENE_CAMERA_VIEW_INVALID', 'the model needs a finite, positive, noncollapsed stage');
   if (model.sha256 !== requireDigest(camera.digest, refuse)) {

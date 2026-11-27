@@ -5,12 +5,14 @@ import { loadModel, type ModelAssets, type ReadDocument } from './loadModel.js';
 import { RigPlayer, type BoneAdjust } from './player.js';
 import { frameOf, frameSource, type PosedClip, type PosedFrame, type PosedRegion, type PosedSlot } from './posedFrame.js';
 import {
-  bindSceneCameraReport, projectSceneCamera, sceneCameraModelDigest, sceneCameraTransform,
+  bindSceneCameraReport, checkSceneCameraReportSize, decodeSceneCameraReport, projectSceneCamera,
+  SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraModelDigest, sceneCameraTransform,
   type BoundSceneCamera, type SceneCameraClock, type SceneCameraFrame, type SceneCameraRefusal,
 } from './scene-camera.js';
 import { discoverTurnDials, normalizedDial, type TurnDial } from './turnDials.js';
 
 export type { CameraMode } from './composed-camera.js';
+export { SCENE_CAMERA_REPORT_MAX_BYTES } from './scene-camera.js';
 export type { BoundSceneCamera, SceneCameraClock, SceneCameraFrame } from './scene-camera.js';
 
 type Point = { readonly x: number; readonly y: number };
@@ -62,7 +64,10 @@ function refuseSceneCamera(code: SceneCameraRefusal, detail: string, cause?: unk
   throw new ComposedTakeError(code, detail, cause);
 }
 
-/** Bind the report to the SHA-256 of the exact model bytes the caller consumed. */
+/**
+ * Bind a UTF-8 Uint8Array or a parsed report to the consumed model's SHA-256.
+ * Callers supplying a parsed report enforce the report byte budget before parsing.
+ */
 export function bindSceneCamera(
   report: unknown,
   model: { sha256: string; stage: CanvasViewport | null; animations: readonly { name: string; duration: number }[] },
@@ -662,8 +667,34 @@ async function fetchSceneReport(url: string): Promise<unknown> {
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
+    if (!response.body) throw new Error('missing response body');
+    const reader = response.body.getReader();
+    let bytes = new Uint8Array(0);
+    let total = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const observed = total + value.byteLength;
+        checkSceneCameraReportSize(observed, refuseSceneCamera);
+        if (observed > bytes.length) {
+          const capacity = Math.min(SCENE_CAMERA_REPORT_MAX_BYTES, Math.max(observed, bytes.length * 2, 4096));
+          const grown = new Uint8Array(capacity);
+          grown.set(bytes.subarray(0, total));
+          bytes = grown;
+        }
+        bytes.set(value, total);
+        total = observed;
+      }
+    } catch (error) {
+      void reader.cancel().catch(() => {});
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+    return decodeSceneCameraReport(bytes.subarray(0, total), refuseSceneCamera);
   } catch (error) {
+    if (error instanceof ComposedTakeError) throw error;
     return refuseSceneCamera('SCENE_CAMERA_REPORT_INVALID', `could not read the scene report at ${url}`, error);
   }
 }

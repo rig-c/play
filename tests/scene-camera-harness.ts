@@ -1,5 +1,5 @@
 import {
-  bindSceneCamera, mountComposedTake, renderSceneCameraFrame, sceneCameraProjection,
+  bindSceneCamera, mountComposedTake, renderSceneCameraFrame, SCENE_CAMERA_REPORT_MAX_BYTES, sceneCameraProjection,
 } from '../src/composed-take.js';
 import { CanvasRenderer, loadModel, RigPlayer, type PosedClip, type PosedFrame, type PosedSlot } from '../src/index.js';
 import { renderFrameOf } from '../src/liveFrameSource.js';
@@ -308,6 +308,87 @@ async function refusals(source: Source, reserializedModel: string, v1Url: string
   } finally { assets.dispose(); }
 }
 
+async function reportByteBudget(modelUrl: string) {
+  const cap = SCENE_CAMERA_REPORT_MAX_BYTES;
+  const encoder = new TextEncoder();
+  const prefix = encoder.encode('{"spec":"spine-parts-scene-report/1","note":"');
+  const suffix = encoder.encode('"}');
+  const multibyte = encoder.encode('é');
+  const padEnd = cap - suffix.length;
+  if (!Number.isSafeInteger(cap) || padEnd - prefix.length < multibyte.length) {
+    throw new Error(`Unexpected scene camera report cap: ${cap}`);
+  }
+  // The cap-sized view is valid UTF-8 JSON. Its next byte is legal JSON whitespace.
+  const bytes = new Uint8Array(cap + 1);
+  bytes.set(prefix);
+  let i = prefix.length;
+  for (; i + multibyte.length <= padEnd; i += multibyte.length) bytes.set(multibyte, i);
+  bytes.fill(0x20, i, padEnd);
+  bytes.set(suffix, padEnd);
+  bytes[cap] = 0x20;
+  const exact = bytes.subarray(0, cap);
+  const malformed = encoder.encode('{"spec":');
+  const model = { sha256: '', stage: null, animations: [] };
+  const direct = {
+    atCap: bindSceneCamera(exact, model) === null,
+    oversized: refusal(() => bindSceneCamera(bytes, model)),
+    malformed: refusal(() => bindSceneCamera(malformed, model)),
+  };
+
+  const sceneReportUrl = new URL('budget.report.json', document.baseURI).href;
+  const fetch = window.fetch;
+  const chunkSize = Math.min(64 * 1024 - 1, Math.floor(cap / 2));
+  async function mount(body: Uint8Array, contentLength?: number) {
+    let delivered = 0;
+    let chunks = 0;
+    let pulledPastLimit = false;
+    const requests: string[] = [];
+    window.fetch = (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), document.baseURI);
+      requests.push(url.pathname);
+      if (url.href !== sceneReportUrl) return fetch.call(window, input, init);
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (delivered === body.length) {
+            if (delivered > cap) {
+              pulledPastLimit = true;
+              controller.error(new Error('Read past the first byte over the scene camera cap'));
+            } else controller.close();
+            return;
+          }
+          const end = delivered === cap ? cap + 1 : Math.min(delivered + chunkSize, cap, body.length);
+          controller.enqueue(body.subarray(delivered, end));
+          delivered = end;
+          chunks++;
+        },
+        // Only a consumer read advances the fixture across the cutoff.
+      }, { highWaterMark: 0 });
+      const headers = new Headers({ 'content-type': 'application/json' });
+      if (contentLength !== undefined) headers.set('content-length', String(contentLength));
+      return Promise.resolve(new Response(stream, { headers }));
+    };
+    try {
+      const take = await openTake({ modelUrl, sceneReportUrl, backend: 'canvas2d', animation: 'idle', loop: true });
+      take.dispose();
+      return { error: null, delivered, chunks, requests, pulledPastLimit };
+    } catch (error) {
+      return { error: refusal(() => { throw error; }), delivered, chunks, requests, pulledPastLimit };
+    } finally { window.fetch = fetch; }
+  }
+
+  const atCap = await mount(exact, cap + 1);
+  const oversized = await mount(bytes);
+  // An invalid first token must still be subject to the observed-byte limit.
+  bytes[0] = 0x21;
+  const directOversizedMalformed = refusal(() => bindSceneCamera(bytes, model));
+  const oversizedMalformed = await mount(bytes, malformed.length);
+  const invalid = await mount(malformed);
+  return {
+    cap, direct: { ...direct, oversizedMalformed: directOversizedMalformed },
+    reportPath: new URL(sceneReportUrl).pathname, atCap, oversized, oversizedMalformed, invalid,
+  };
+}
+
 // Put the existing figure rig's posed geometry in the public example's world units.
 // This is caller-supplied render geometry. The figure rig still poses its authored clip.
 function fitFigure(pose: PosedFrame): PosedFrame {
@@ -400,7 +481,7 @@ async function clipping(cameraSource: Source, figureUrl: string, backend: Backen
   } finally { player.dispose(); figureAssets.dispose(); assets.dispose(); }
 }
 
-export const sceneCameraTest = { mounted, direct, legacy, refusals, clipping };
+export const sceneCameraTest = { mounted, direct, legacy, refusals, clipping, reportByteBudget };
 Object.assign(window, { sceneCameraTest });
 export type SceneCameraWindow = typeof window & { sceneCameraTest: typeof sceneCameraTest };
 export type { Clock, Draw, Point };
